@@ -1,0 +1,3464 @@
+# Professional Cucumber BDD Framework with Playwright and TypeScript
+
+## Table of Contents
+- [1. Framework Architecture](#1-framework-architecture)
+- [2. Project Setup](#2-project-setup)
+- [3. Core Components](#3-core-components)
+- [4. Test Data Management](#4-test-data-management)
+- [5. Database Integrations](#5-database-integrations)
+- [6. Reporting System](#6-reporting-system)
+- [7. SOLID Principles Implementation](#7-solid-principles-implementation)
+- [8. Advanced Configuration](#8-advanced-configuration)
+- [9. CI/CD Integration](#9-cicd-integration)
+- [10. Best Practices](#10-best-practices)
+
+## 1. Framework Architecture
+
+### 1.1 Directory Structure
+```
+cucumber-playwright-framework/
+├── config/
+│   ├── environment.config.ts
+│   ├── playwright.config.ts
+│   ├── cucumber.js
+│   └── reporting.config.ts
+├── src/
+│   ├── core/
+│   │   ├── driver/
+│   │   │   ├── browser.factory.ts
+│   │   │   └── browser.manager.ts
+│   │   ├── api/
+│   │   │   ├── api.client.ts
+│   │   │   └── request.builder.ts
+│   │   ├── reporting/
+│   │   │   ├── report.generator.ts
+│   │   │   ├── screenshot.service.ts
+│   │   │   └── html.reporter.ts
+│   │   ├── utils/
+│   │   │   ├── logger.ts
+│   │   │   ├── wait.utils.ts
+│   │   │   └── string.utils.ts
+│   │   └── data/
+│   │       ├── data.manager.ts
+│   │       ├── parsers/
+│   │       │   ├── json.parser.ts
+│   │       │   ├── csv.parser.ts
+│   │       │   └── excel.parser.ts
+│   │       └── db/
+│   │           ├── db.factory.ts
+│   │           ├── mssql.client.ts
+│   │           ├── mysql.client.ts
+│   │           └── oracle.client.ts
+│   ├── step_definitions/
+│   │   ├── web/
+│   │   │   ├── common.steps.ts
+│   │   │   ├── login.steps.ts
+│   │   │   └── navigation.steps.ts
+│   │   └── api/
+│   │       ├── api.common.steps.ts
+│   │       └── api.validation.steps.ts
+│   ├── pages/
+│   │   ├── base.page.ts
+│   │   ├── login.page.ts
+│   │   └── dashboard.page.ts
+│   ├── components/
+│   │   ├── base.component.ts
+│   │   ├── navigation.component.ts
+│   │   └── table.component.ts
+│   ├── models/
+│   │   ├── user.model.ts
+│   │   └── api.response.model.ts
+│   └── hooks/
+│       ├── web.hooks.ts
+│       └── api.hooks.ts
+├── test_data/
+│   ├── json/
+│   │   └── users.json
+│   ├── csv/
+│   │   └── test_scenarios.csv
+│   └── excel/
+│       └── test_data.xlsx
+├── features/
+│   ├── web/
+│   │   ├── login.feature
+│   │   └── navigation.feature
+│   └── api/
+│       └── api_endpoints.feature
+├── reports/
+│   └── .gitkeep
+├── package.json
+├── tsconfig.json
+├── README.md
+└── .gitignore
+```
+
+### 1.2 Architecture Overview
+
+This framework follows a layered architecture that promotes separation of concerns:
+
+1. **Feature Layer**: Contains Gherkin feature files that describe behaviors in business language
+2. **Step Definition Layer**: Maps Gherkin steps to code implementation
+3. **Page Object Layer**: Encapsulates UI interactions and provides abstraction
+4. **Core Layer**: Contains framework infrastructure, utilities, and common functions
+5. **Data Layer**: Manages test data from multiple sources (JSON, CSV, Excel, databases)
+6. **Reporting Layer**: Custom reporting solution without third-party dependencies
+
+## 2. Project Setup
+
+### 2.1 Installing Dependencies
+
+```bash
+# Initialize project with npm
+npm init -y
+
+# Install core dependencies
+npm install playwright typescript ts-node cucumber @cucumber/cucumber
+
+# Install utility dependencies
+npm install chalk dotenv exceljs csv-parser fast-xml-parser uuid winston
+
+# Install database clients
+npm install mssql mysql2 oracledb
+
+# Install dev dependencies
+npm install --save-dev @types/cucumber @types/node prettier eslint eslint-config-prettier
+```
+
+### 2.2 TypeScript Configuration (tsconfig.json)
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "outDir": "./dist",
+    "strict": true,
+    "sourceMap": true,
+    "paths": {
+      "@core/*": ["src/core/*"],
+      "@pages/*": ["src/pages/*"],
+      "@components/*": ["src/components/*"],
+      "@steps/*": ["src/step_definitions/*"],
+      "@models/*": ["src/models/*"],
+      "@hooks/*": ["src/hooks/*"],
+      "@data/*": ["test_data/*"],
+      "@config/*": ["config/*"]
+    }
+  },
+  "include": ["src/**/*", "config/**/*", "features/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+### 2.3 Cucumber Configuration (config/cucumber.js)
+
+```javascript
+module.exports = {
+  default: {
+    paths: ['features/**/*.feature'],
+    require: ['src/step_definitions/**/*.ts', 'src/hooks/**/*.ts'],
+    requireModule: ['ts-node/register'],
+    format: [
+      'progress-bar',
+      'json:reports/cucumber_report.json'
+    ],
+    formatOptions: { snippetInterface: 'async-await' },
+    publishQuiet: true,
+    worldParameters: {
+      environment: process.env.TEST_ENV || 'development'
+    },
+    parallel: process.env.PARALLEL_TESTS === 'true' ? 5 : 0
+  }
+};
+```
+
+### 2.4 Environment Configuration (config/environment.config.ts)
+
+```typescript
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment-specific .env file
+const env = process.env.TEST_ENV || 'development';
+dotenv.config({ path: path.resolve(process.cwd(), `.env.${env}`) });
+
+// Default environment configuration
+const defaultConfig = {
+  web: {
+    baseUrl: 'https://example.com',
+    timeoutMs: 30000,
+    headless: true,
+    slowMo: 0
+  },
+  api: {
+    baseUrl: 'https://api.example.com',
+    timeoutMs: 30000,
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  },
+  reporting: {
+    screenshotsPath: './reports/screenshots',
+    videosPath: './reports/videos',
+    reportsPath: './reports',
+    recordVideo: false,
+    captureScreenshotOnFailure: true
+  },
+  database: {
+    mssql: {
+      server: process.env.MSSQL_SERVER || 'localhost',
+      database: process.env.MSSQL_DATABASE || 'testdb',
+      user: process.env.MSSQL_USER || 'sa',
+      password: process.env.MSSQL_PASSWORD || 'Password123',
+      port: parseInt(process.env.MSSQL_PORT || '1433')
+    },
+    mysql: {
+      host: process.env.MYSQL_HOST || 'localhost',
+      database: process.env.MYSQL_DATABASE || 'testdb',
+      user: process.env.MYSQL_USER || 'root',
+      password: process.env.MYSQL_PASSWORD || 'password',
+      port: parseInt(process.env.MYSQL_PORT || '3306')
+    },
+    oracle: {
+      connectString: process.env.ORACLE_CONNECT_STRING || 'localhost:1521/XE',
+      user: process.env.ORACLE_USER || 'system',
+      password: process.env.ORACLE_PASSWORD || 'password'
+    }
+  }
+};
+
+// Environment-specific overrides
+const environmentConfigs: Record<string, any> = {
+  development: {
+    web: {
+      baseUrl: 'https://dev.example.com',
+      headless: false
+    },
+    api: {
+      baseUrl: 'https://dev-api.example.com'
+    }
+  },
+  staging: {
+    web: {
+      baseUrl: 'https://staging.example.com'
+    },
+    api: {
+      baseUrl: 'https://staging-api.example.com'
+    }
+  },
+  production: {
+    web: {
+      baseUrl: 'https://example.com',
+      slowMo: 50
+    },
+    api: {
+      baseUrl: 'https://api.example.com'
+    },
+    reporting: {
+      recordVideo: true
+    }
+  }
+};
+
+// Merge default config with environment-specific config
+const envConfig = environmentConfigs[env] || {};
+const config = {
+  ...defaultConfig,
+  ...envConfig,
+  web: { ...defaultConfig.web, ...(envConfig.web || {}) },
+  api: { ...defaultConfig.api, ...(envConfig.api || {}) },
+  reporting: { ...defaultConfig.reporting, ...(envConfig.reporting || {}) },
+  database: { ...defaultConfig.database, ...(envConfig.database || {}) }
+};
+
+export default config;
+```
+
+### 2.5 Playwright Configuration (config/playwright.config.ts)
+
+```typescript
+import { PlaywrightTestConfig } from '@playwright/test';
+import config from './environment.config';
+
+const playwrightConfig: PlaywrightTestConfig = {
+  testDir: '../features',
+  timeout: config.web.timeoutMs,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: [
+    ['list'],
+    ['html', { outputFolder: '../reports/playwright-report' }]
+  ],
+  use: {
+    baseURL: config.web.baseUrl,
+    headless: config.web.headless,
+    viewport: { width: 1280, height: 720 },
+    ignoreHTTPSErrors: true,
+    video: config.reporting.recordVideo ? 'on-first-retry' : 'off',
+    screenshot: 'only-on-failure',
+    trace: 'on-first-retry',
+    launchOptions: {
+      slowMo: config.web.slowMo
+    }
+  },
+  projects: [
+    {
+      name: 'Chromium',
+      use: { browserName: 'chromium' }
+    },
+    {
+      name: 'Firefox',
+      use: { browserName: 'firefox' }
+    },
+    {
+      name: 'WebKit',
+      use: { browserName: 'webkit' }
+    }
+  ]
+};
+
+export default playwrightConfig;
+```
+
+## 3. Core Components
+
+### 3.1 Custom World (src/core/world.ts)
+
+```typescript
+import { setWorldConstructor, World, IWorldOptions } from '@cucumber/cucumber';
+import { BrowserManager } from './driver/browser.manager';
+import { ApiClient } from './api/api.client';
+import { DataManager } from './data/data.manager';
+import { Logger } from './utils/logger';
+
+export interface CustomWorld extends World {
+  browserManager: BrowserManager;
+  apiClient: ApiClient;
+  dataManager: DataManager;
+  logger: Logger;
+  testId: string;
+  scenarioName: string;
+  context: Record<string, any>;
+}
+
+class AutomationWorld extends World implements CustomWorld {
+  public browserManager: BrowserManager;
+  public apiClient: ApiClient;
+  public dataManager: DataManager;
+  public logger: Logger;
+  public testId: string;
+  public scenarioName: string;
+  public context: Record<string, any> = {};
+
+  constructor(options: IWorldOptions) {
+    super(options);
+    this.testId = new Date().getTime().toString();
+    this.scenarioName = '';
+    this.logger = new Logger(this.testId);
+    this.browserManager = new BrowserManager(this.logger);
+    this.apiClient = new ApiClient(this.logger);
+    this.dataManager = new DataManager(this.logger);
+  }
+}
+
+setWorldConstructor(AutomationWorld);
+```
+
+### 3.2 Browser Factory (src/core/driver/browser.factory.ts)
+
+```typescript
+import { Browser, BrowserContext, Page, chromium, firefox, webkit } from 'playwright';
+import config from '@config/environment.config';
+import { Logger } from '../utils/logger';
+
+export type BrowserType = 'chromium' | 'firefox' | 'webkit';
+
+export class BrowserFactory {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async createBrowser(browserType: BrowserType = 'chromium'): Promise<Browser> {
+    this.logger.info(`Creating ${browserType} browser`);
+    
+    switch (browserType) {
+      case 'chromium':
+        return await chromium.launch({
+          headless: config.web.headless,
+          slowMo: config.web.slowMo
+        });
+      case 'firefox':
+        return await firefox.launch({
+          headless: config.web.headless,
+          slowMo: config.web.slowMo
+        });
+      case 'webkit':
+        return await webkit.launch({
+          headless: config.web.headless,
+          slowMo: config.web.slowMo
+        });
+      default:
+        this.logger.error(`Unsupported browser type: ${browserType}`);
+        throw new Error(`Unsupported browser type: ${browserType}`);
+    }
+  }
+
+  async createContext(browser: Browser): Promise<BrowserContext> {
+    this.logger.info('Creating browser context');
+    
+    return await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      ignoreHTTPSErrors: true,
+      recordVideo: config.reporting.recordVideo ? {
+        dir: config.reporting.videosPath,
+        size: { width: 1280, height: 720 }
+      } : undefined
+    });
+  }
+
+  async createPage(context: BrowserContext): Promise<Page> {
+    this.logger.info('Creating new page');
+    
+    const page = await context.newPage();
+    await page.setDefaultTimeout(config.web.timeoutMs);
+    await page.setDefaultNavigationTimeout(config.web.timeoutMs);
+    
+    return page;
+  }
+}
+```
+
+### 3.3 Browser Manager (src/core/driver/browser.manager.ts)
+
+```typescript
+import { Browser, BrowserContext, Page } from 'playwright';
+import { BrowserFactory, BrowserType } from './browser.factory';
+import { Logger } from '../utils/logger';
+import config from '@config/environment.config';
+import path from 'path';
+import fs from 'fs';
+
+export class BrowserManager {
+  private browser: Browser | null = null;
+  private context: BrowserContext | null = null;
+  private page: Page | null = null;
+  private browserFactory: BrowserFactory;
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+    this.browserFactory = new BrowserFactory(logger);
+  }
+
+  async initialize(browserType: BrowserType = 'chromium'): Promise<void> {
+    this.logger.info(`Initializing browser manager with ${browserType}`);
+    
+    if (this.browser) {
+      await this.close();
+    }
+    
+    this.browser = await this.browserFactory.createBrowser(browserType);
+    this.context = await this.browserFactory.createContext(this.browser);
+    this.page = await this.browserFactory.createPage(this.context);
+  }
+
+  async navigate(url: string): Promise<void> {
+    this.logger.info(`Navigating to: ${url}`);
+    
+    if (!this.page) {
+      throw new Error('Page not initialized. Call initialize() first.');
+    }
+    
+    // Handle relative URLs
+    const fullUrl = url.startsWith('http') ? url : `${config.web.baseUrl}${url}`;
+    await this.page.goto(fullUrl, { waitUntil: 'networkidle' });
+  }
+
+  getPage(): Page {
+    if (!this.page) {
+      throw new Error('Page not initialized. Call initialize() first.');
+    }
+    return this.page;
+  }
+
+  async takeScreenshot(name: string): Promise<string> {
+    if (!this.page) {
+      throw new Error('Page not initialized. Call initialize() first.');
+    }
+    
+    const screenshotDir = config.reporting.screenshotsPath;
+    if (!fs.existsSync(screenshotDir)) {
+      fs.mkdirSync(screenshotDir, { recursive: true });
+    }
+    
+    const screenshotPath = path.join(
+      screenshotDir,
+      `${name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.png`
+    );
+    
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    this.logger.info(`Screenshot saved to: ${screenshotPath}`);
+    
+    return screenshotPath;
+  }
+
+  async close(): Promise<void> {
+    this.logger.info('Closing browser');
+    
+    if (this.page) {
+      await this.page.close();
+      this.page = null;
+    }
+    
+    if (this.context) {
+      await this.context.close();
+      this.context = null;
+    }
+    
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+    }
+  }
+}
+```
+
+### 3.4 API Client (src/core/api/api.client.ts)
+
+```typescript
+import { request, APIRequestContext, APIResponse } from 'playwright';
+import config from '@config/environment.config';
+import { Logger } from '../utils/logger';
+
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+
+export interface RequestOptions {
+  headers?: Record<string, string>;
+  params?: Record<string, string>;
+  data?: any;
+  timeout?: number;
+}
+
+export class ApiClient {
+  private apiContext: APIRequestContext | null = null;
+  private baseUrl: string;
+  private logger: Logger;
+  private lastResponse: APIResponse | null = null;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+    this.baseUrl = config.api.baseUrl;
+  }
+
+  async initialize(): Promise<void> {
+    this.logger.info('Initializing API client');
+    
+    this.apiContext = await request.newContext({
+      baseURL: this.baseUrl,
+      extraHTTPHeaders: config.api.headers,
+      ignoreHTTPSErrors: true,
+      timeout: config.api.timeoutMs
+    });
+  }
+
+  async sendRequest(
+    method: HttpMethod,
+    endpoint: string,
+    options: RequestOptions = {}
+  ): Promise<APIResponse> {
+    if (!this.apiContext) {
+      await this.initialize();
+    }
+    
+    const url = endpoint.startsWith('http') ? endpoint : endpoint;
+    const requestOptions: Record<string, any> = {
+      headers: { ...config.api.headers, ...options.headers },
+      timeout: options.timeout || config.api.timeoutMs
+    };
+    
+    // Add query parameters if provided
+    if (options.params) {
+      const queryParams = new URLSearchParams();
+      Object.entries(options.params).forEach(([key, value]) => {
+        queryParams.append(key, value);
+      });
+      url += `?${queryParams.toString()}`;
+    }
+    
+    // Add request body if provided
+    if (options.data) {
+      if (typeof options.data === 'object') {
+        requestOptions.data = JSON.stringify(options.data);
+      } else {
+        requestOptions.data = options.data;
+      }
+    }
+    
+    this.logger.info(`Sending ${method} request to ${url}`);
+    
+    try {
+      this.lastResponse = await this.apiContext!.fetch(url, {
+        method,
+        ...requestOptions
+      });
+      
+      this.logger.info(`Received response with status: ${this.lastResponse.status()}`);
+      return this.lastResponse;
+    } catch (error) {
+      this.logger.error(`API request failed: ${error}`);
+      throw error;
+    }
+  }
+
+  async get(endpoint: string, options: RequestOptions = {}): Promise<APIResponse> {
+    return this.sendRequest('GET', endpoint, options);
+  }
+
+  async post(endpoint: string, options: RequestOptions = {}): Promise<APIResponse> {
+    return this.sendRequest('POST', endpoint, options);
+  }
+
+  async put(endpoint: string, options: RequestOptions = {}): Promise<APIResponse> {
+    return this.sendRequest('PUT', endpoint, options);
+  }
+
+  async delete(endpoint: string, options: RequestOptions = {}): Promise<APIResponse> {
+    return this.sendRequest('DELETE', endpoint, options);
+  }
+
+  async patch(endpoint: string, options: RequestOptions = {}): Promise<APIResponse> {
+    return this.sendRequest('PATCH', endpoint, options);
+  }
+
+  getLastResponse(): APIResponse {
+    if (!this.lastResponse) {
+      throw new Error('No previous response exists');
+    }
+    return this.lastResponse;
+  }
+
+  async close(): Promise<void> {
+    if (this.apiContext) {
+      await this.apiContext.dispose();
+      this.apiContext = null;
+    }
+  }
+}
+```
+
+### 3.5 Request Builder (src/core/api/request.builder.ts)
+
+```typescript
+export class RequestBuilder {
+  private headers: Record<string, string> = {};
+  private params: Record<string, string> = {};
+  private data: any = null;
+  private timeout: number | undefined;
+
+  withHeader(key: string, value: string): RequestBuilder {
+    this.headers[key] = value;
+    return this;
+  }
+
+  withHeaders(headers: Record<string, string>): RequestBuilder {
+    this.headers = { ...this.headers, ...headers };
+    return this;
+  }
+
+  withParam(key: string, value: string): RequestBuilder {
+    this.params[key] = value;
+    return this;
+  }
+
+  withParams(params: Record<string, string>): RequestBuilder {
+    this.params = { ...this.params, ...params };
+    return this;
+  }
+
+  withData(data: any): RequestBuilder {
+    this.data = data;
+    return this;
+  }
+
+  withTimeout(ms: number): RequestBuilder {
+    this.timeout = ms;
+    return this;
+  }
+
+  build() {
+    return {
+      headers: Object.keys(this.headers).length > 0 ? this.headers : undefined,
+      params: Object.keys(this.params).length > 0 ? this.params : undefined,
+      data: this.data,
+      timeout: this.timeout
+    };
+  }
+
+  reset(): void {
+    this.headers = {};
+    this.params = {};
+    this.data = null;
+    this.timeout = undefined;
+  }
+}
+```
+
+### 3.6 Logger (src/core/utils/logger.ts)
+
+```typescript
+import winston from 'winston';
+import path from 'path';
+import fs from 'fs';
+
+export class Logger {
+  private logger: winston.Logger;
+  private testId: string;
+
+  constructor(testId: string) {
+    this.testId = testId;
+    const logsDir = path.join(process.cwd(), 'reports', 'logs');
+    
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    
+    this.logger = winston.createLogger({
+      level: process.env.LOG_LEVEL || 'info',
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf(({ timestamp, level, message }) => {
+          return `[${timestamp}] [${level.toUpperCase()}] [${this.testId}]: ${message}`;
+        })
+      ),
+      transports: [
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple()
+          )
+        }),
+        new winston.transports.File({
+          filename: path.join(logsDir, `test-${this.testId}.log`)
+        })
+      ]
+    });
+  }
+
+  debug(message: string): void {
+    this.logger.debug(message);
+  }
+
+  info(message: string): void {
+    this.logger.info(message);
+  }
+
+  warn(message: string): void {
+    this.logger.warn(message);
+  }
+
+  error(message: string): void {
+    this.logger.error(message);
+  }
+
+  setScenario(scenarioName: string): void {
+    this.info(`Starting scenario: ${scenarioName}`);
+  }
+}
+```
+
+## 4. Test Data Management
+
+### 4.1 Data Manager (src/core/data/data.manager.ts)
+
+```typescript
+import { JsonParser } from './parsers/json.parser';
+import { CsvParser } from './parsers/csv.parser';
+import { ExcelParser } from './parsers/excel.parser';
+import { DbFactory } from './db/db.factory';
+import { Logger } from '../utils/logger';
+
+export class DataManager {
+  private jsonParser: JsonParser;
+  private csvParser: CsvParser;
+  private excelParser: ExcelParser;
+  private dbFactory: DbFactory;
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+    this.jsonParser = new JsonParser(logger);
+    this.csvParser = new CsvParser(logger);
+    this.excelParser = new ExcelParser(logger);
+    this.dbFactory = new DbFactory(logger);
+  }
+
+  async getJsonData<T>(filePath: string, query?: string): Promise<T> {
+    this.logger.info(`Reading JSON data from ${filePath}`);
+    return this.jsonParser.parse<T>(filePath, query);
+  }
+
+  async getCsvData<T>(filePath: string, options?: any): Promise<T[]> {
+    this.logger.info(`Reading CSV data from ${filePath}`);
+    return this.csvParser.parse<T>(filePath, options);
+  }
+
+  async getExcelData<T>(filePath: string, sheet: string | number, options?: any): Promise<T[]> {
+    this.logger.info(`Reading Excel data from ${filePath}, sheet: ${sheet}`);
+    return this.excelParser.parse<T>(filePath, sheet, options);
+  }
+
+  async getDbData<T>(
+    dbType: 'mssql' | 'mysql' | 'oracle',
+    query: string,
+    params?: any[]
+  ): Promise<T[]> {
+    this.logger.info(`Executing ${dbType} query: ${query}`);
+    const dbClient = this.dbFactory.getDbClient(dbType);
+    return dbClient.executeQuery<T>(query, params);
+  }
+
+  async closeAllConnections(): Promise<void> {
+    await this.dbFactory.closeAllConnections();
+  }
+}
+```
+
+### 4.2 JSON Parser (src/core/data/parsers/json.parser.ts)
+
+```typescript
+import fs from 'fs';
+import path from 'path';
+import { Logger } from '../../utils/logger';
+import JSONPath from 'jsonpath';
+
+export class JsonParser {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async parse<T>(filePath: string, query?: string): Promise<T> {
+    try {
+      const absolutePath = filePath.startsWith('/') 
+        ? filePath 
+        : path.join(process.cwd(), 'test_data', 'json', filePath);
+        
+      const fileContent = await fs.promises.readFile(absolutePath, 'utf8');
+      const jsonData = JSON.parse(fileContent);
+      
+      if (query) {
+        this.logger.info(`Applying JSONPath query: ${query}`);
+        return JSONPath.query(jsonData, query) as T;
+      }
+      
+      return jsonData as T;
+    } catch (error) {
+      this.logger.error(`Failed to parse JSON file: ${error}`);
+      throw new Error(`Failed to parse JSON file: ${error}`);
+    }
+  }
+}
+```
+
+### 4.3 CSV Parser (src/core/data/parsers/csv.parser.ts)
+
+```typescript
+import fs from 'fs';
+import path from 'path';
+import { parse } from 'csv-parser';
+import { Logger } from '../../utils/logger';
+
+export class CsvParser {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async parse<T>(filePath: string, options: any = {}): Promise<T[]> {
+    return new Promise((resolve, reject) => {
+      const results: T[] = [];
+      const absolutePath = filePath.startsWith('/') 
+        ? filePath 
+        : path.join(process.cwd(), 'test_data', 'csv', filePath);
+      
+      fs.createReadStream(absolutePath)
+        .pipe(parse(options))
+        .on('data', (data: T) => results.push(data))
+        .on('end', () => {
+          this.logger.info(`Successfully parsed CSV with ${results.length} records`);
+          resolve(results);
+        })
+        .on('error', (error: Error) => {
+          this.logger.error(`Failed to parse CSV file: ${error}`);
+          reject(new Error(`Failed to parse CSV file: ${error}`));
+        });
+    });
+  }
+}
+```
+
+### 4.4 Excel Parser (src/core/data/parsers/excel.parser.ts)
+
+```typescript
+import * as ExcelJS from 'exceljs';
+import path from 'path';
+import { Logger } from '../../utils/logger';
+
+export class ExcelParser {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async parse<T>(filePath: string, sheet: string | number, options: any = {}): Promise<T[]> {
+    try {
+      const absolutePath = filePath.startsWith('/') 
+        ? filePath 
+        : path.join(process.cwd(), 'test_data', 'excel', filePath);
+        
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(absolutePath);
+      
+      const worksheet = typeof sheet === 'string' 
+        ? workbook.getWorksheet(sheet) 
+        : workbook.worksheets[sheet];
+      
+      if (!worksheet) {
+        throw new Error(`Worksheet ${sheet} not found in ${filePath}`);
+      }
+      
+      const headers: string[] = [];
+      const results: T[] = [];
+      
+      worksheet.eachRow((row,
+
+# Professional Cucumber BDD Framework with Playwright and TypeScript
+
+## 4. Test Data Management (continued)
+
+### 4.4 Excel Parser (src/core/data/parsers/excel.parser.ts) (continued)
+
+```typescript
+import * as ExcelJS from 'exceljs';
+import path from 'path';
+import { Logger } from '../../utils/logger';
+
+export class ExcelParser {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async parse<T>(filePath: string, sheet: string | number, options: any = {}): Promise<T[]> {
+    try {
+      const absolutePath = filePath.startsWith('/') 
+        ? filePath 
+        : path.join(process.cwd(), 'test_data', 'excel', filePath);
+        
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(absolutePath);
+      
+      const worksheet = typeof sheet === 'string' 
+        ? workbook.getWorksheet(sheet) 
+        : workbook.worksheets[sheet];
+      
+      if (!worksheet) {
+        throw new Error(`Worksheet ${sheet} not found in ${filePath}`);
+      }
+      
+      const headers: string[] = [];
+      const results: T[] = [];
+      
+      worksheet.eachRow((row, rowIndex) => {
+        // Get headers from the first row
+        if (rowIndex === 1) {
+          row.eachCell((cell) => {
+            headers.push(cell.value?.toString() || '');
+          });
+          return;
+        }
+        
+        // Process data rows
+        const rowData: Record<string, any> = {};
+        row.eachCell((cell, colIndex) => {
+          if (headers[colIndex - 1]) {
+            rowData[headers[colIndex - 1]] = cell.value;
+          }
+        });
+        
+        results.push(rowData as unknown as T);
+      });
+      
+      this.logger.info(`Successfully parsed Excel with ${results.length} records`);
+      return results;
+    } catch (error) {
+      this.logger.error(`Failed to parse Excel file: ${error}`);
+      throw new Error(`Failed to parse Excel file: ${error}`);
+    }
+  }
+}
+```
+
+## 5. Database Integrations
+
+### 5.1 Database Factory (src/core/data/db/db.factory.ts)
+
+```typescript
+import { MsSqlClient } from './mssql.client';
+import { MySqlClient } from './mysql.client';
+import { OracleClient } from './oracle.client';
+import { Logger } from '../../utils/logger';
+
+export class DbFactory {
+  private mssqlClient: MsSqlClient | null = null;
+  private mysqlClient: MySqlClient | null = null;
+  private oracleClient: OracleClient | null = null;
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  getDbClient(
+    dbType: 'mssql' | 'mysql' | 'oracle'
+  ): MsSqlClient | MySqlClient | OracleClient {
+    switch (dbType) {
+      case 'mssql':
+        if (!this.mssqlClient) {
+          this.mssqlClient = new MsSqlClient(this.logger);
+        }
+        return this.mssqlClient;
+      case 'mysql':
+        if (!this.mysqlClient) {
+          this.mysqlClient = new MySqlClient(this.logger);
+        }
+        return this.mysqlClient;
+      case 'oracle':
+        if (!this.oracleClient) {
+          this.oracleClient = new OracleClient(this.logger);
+        }
+        return this.oracleClient;
+      default:
+        throw new Error(`Unsupported database type: ${dbType}`);
+    }
+  }
+
+  async closeAllConnections(): Promise<void> {
+    this.logger.info('Closing all database connections');
+    
+    if (this.mssqlClient) {
+      await this.mssqlClient.close();
+      this.mssqlClient = null;
+    }
+    
+    if (this.mysqlClient) {
+      await this.mysqlClient.close();
+      this.mysqlClient = null;
+    }
+    
+    if (this.oracleClient) {
+      await this.oracleClient.close();
+      this.oracleClient = null;
+    }
+  }
+}
+```
+
+### 5.2 MS SQL Client (src/core/data/db/mssql.client.ts)
+
+```typescript
+import * as sql from 'mssql';
+import config from '@config/environment.config';
+import { Logger } from '../../utils/logger';
+
+export class MsSqlClient {
+  private pool: sql.ConnectionPool | null = null;
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  private async ensureConnection(): Promise<sql.ConnectionPool> {
+    if (!this.pool) {
+      this.logger.info('Creating new MSSQL connection pool');
+      this.pool = await new sql.ConnectionPool({
+        server: config.database.mssql.server,
+        database: config.database.mssql.database,
+        user: config.database.mssql.user,
+        password: config.database.mssql.password,
+        port: config.database.mssql.port,
+        options: {
+          encrypt: true,
+          trustServerCertificate: true,
+          enableArithAbort: true
+        }
+      }).connect();
+    }
+    return this.pool;
+  }
+
+  async executeQuery<T>(query: string, params?: any[]): Promise<T[]> {
+    try {
+      const pool = await this.ensureConnection();
+      const request = pool.request();
+      
+      // Add parameters if provided
+      if (params && params.length > 0) {
+        params.forEach((param, index) => {
+          request.input(`param${index}`, param);
+        });
+      }
+      
+      const result = await request.query(query);
+      this.logger.info(`MSSQL query executed successfully, returned ${result.recordset.length} records`);
+      
+      return result.recordset as T[];
+    } catch (error) {
+      this.logger.error(`MSSQL query execution failed: ${error}`);
+      throw new Error(`MSSQL query execution failed: ${error}`);
+    }
+  }
+
+  async executeStoredProcedure<T>(
+    procedure: string, 
+    params?: Record<string, { type: sql.ISqlTypeFactory; value: any }>
+  ): Promise<T[]> {
+    try {
+      const pool = await this.ensureConnection();
+      const request = pool.request();
+      
+      // Add parameters if provided
+      if (params) {
+        Object.entries(params).forEach(([name, { type, value }]) => {
+          request.input(name, type, value);
+        });
+      }
+      
+      const result = await request.execute(procedure);
+      this.logger.info(`MSSQL stored procedure executed successfully`);
+      
+      return result.recordset as T[];
+    } catch (error) {
+      this.logger.error(`MSSQL stored procedure execution failed: ${error}`);
+      throw new Error(`MSSQL stored procedure execution failed: ${error}`);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.pool) {
+      this.logger.info('Closing MSSQL connection pool');
+      await this.pool.close();
+      this.pool = null;
+    }
+  }
+}
+```
+
+### 5.3 MySQL Client (src/core/data/db/mysql.client.ts)
+
+```typescript
+import mysql from 'mysql2/promise';
+import config from '@config/environment.config';
+import { Logger } from '../../utils/logger';
+
+export class MySqlClient {
+  private pool: mysql.Pool | null = null;
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  private async ensureConnection(): Promise<mysql.Pool> {
+    if (!this.pool) {
+      this.logger.info('Creating new MySQL connection pool');
+      this.pool = mysql.createPool({
+        host: config.database.mysql.host,
+        user: config.database.mysql.user,
+        password: config.database.mysql.password,
+        database: config.database.mysql.database,
+        port: config.database.mysql.port,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0
+      });
+    }
+    return this.pool;
+  }
+
+  async executeQuery<T>(query: string, params?: any[]): Promise<T[]> {
+    try {
+      const pool = await this.ensureConnection();
+      const [rows] = await pool.execute(query, params || []);
+      
+      this.logger.info(`MySQL query executed successfully`);
+      return rows as T[];
+    } catch (error) {
+      this.logger.error(`MySQL query execution failed: ${error}`);
+      throw new Error(`MySQL query execution failed: ${error}`);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.pool) {
+      this.logger.info('Closing MySQL connection pool');
+      await this.pool.end();
+      this.pool = null;
+    }
+  }
+}
+```
+
+### 5.4 Oracle Client (src/core/data/db/oracle.client.ts)
+
+```typescript
+import oracledb from 'oracledb';
+import config from '@config/environment.config';
+import { Logger } from '../../utils/logger';
+
+export class OracleClient {
+  private connection: oracledb.Connection | null = null;
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+    // Set Oracle connection defaults
+    oracledb.autoCommit = true;
+    oracledb.outFormat = oracledb.OUT_FORMAT_OBJECT;
+  }
+
+  private async ensureConnection(): Promise<oracledb.Connection> {
+    if (!this.connection) {
+      this.logger.info('Creating new Oracle connection');
+      this.connection = await oracledb.getConnection({
+        connectString: config.database.oracle.connectString,
+        user: config.database.oracle.user,
+        password: config.database.oracle.password
+      });
+    }
+    return this.connection;
+  }
+
+  async executeQuery<T>(query: string, params?: any[]): Promise<T[]> {
+    try {
+      const connection = await this.ensureConnection();
+      const result = await connection.execute(query, params || [], {
+        outFormat: oracledb.OUT_FORMAT_OBJECT
+      });
+      
+      this.logger.info(`Oracle query executed successfully`);
+      return result.rows as T[];
+    } catch (error) {
+      this.logger.error(`Oracle query execution failed: ${error}`);
+      throw new Error(`Oracle query execution failed: ${error}`);
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.connection) {
+      this.logger.info('Closing Oracle connection');
+      await this.connection.close();
+      this.connection = null;
+    }
+  }
+}
+```
+
+## 6. Reporting System
+
+### 6.1 Report Generator (src/core/reporting/report.generator.ts)
+
+```typescript
+import fs from 'fs';
+import path from 'path';
+import { HtmlReporter } from './html.reporter';
+import { Logger } from '../utils/logger';
+import config from '@config/environment.config';
+
+interface CucumberReport {
+  id: string;
+  name: string;
+  uri: string;
+  features: any[];
+  metadata: {
+    browser: {
+      name: string;
+      version: string;
+    };
+    device: string;
+    platform: {
+      name: string;
+      version: string;
+    };
+  };
+}
+
+export class ReportGenerator {
+  private logger: Logger;
+  private htmlReporter: HtmlReporter;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+    this.htmlReporter = new HtmlReporter(logger);
+  }
+
+  async generateReport(): Promise<string> {
+    try {
+      const cucumberReportPath = path.join(process.cwd(), 'reports', 'cucumber_report.json');
+      
+      if (!fs.existsSync(cucumberReportPath)) {
+        this.logger.error(`Cucumber report not found at ${cucumberReportPath}`);
+        throw new Error(`Cucumber report not found at ${cucumberReportPath}`);
+      }
+      
+      const reportData = JSON.parse(
+        fs.readFileSync(cucumberReportPath, 'utf8')
+      ) as CucumberReport[];
+      
+      const outputPath = path.join(
+        process.cwd(),
+        config.reporting.reportsPath,
+        `test-report-${new Date().toISOString().replace(/:/g, '-')}.html`
+      );
+      
+      // Create reports directory if it doesn't exist
+      const reportsDir = path.dirname(outputPath);
+      if (!fs.existsSync(reportsDir)) {
+        fs.mkdirSync(reportsDir, { recursive: true });
+      }
+      
+      // Process screenshots and generate HTML report
+      await this.htmlReporter.generateReport(reportData, outputPath);
+      
+      this.logger.info(`Report generated at ${outputPath}`);
+      return outputPath;
+    } catch (error) {
+      this.logger.error(`Failed to generate report: ${error}`);
+      throw new Error(`Failed to generate report: ${error}`);
+    }
+  }
+}
+```
+
+### 6.2 HTML Reporter (src/core/reporting/html.reporter.ts)
+
+```typescript
+import fs from 'fs';
+import path from 'path';
+import { Logger } from '../utils/logger';
+import config from '@config/environment.config';
+
+interface TestStep {
+  keyword: string;
+  name: string;
+  line: number;
+  result: {
+    status: string;
+    duration: number;
+    error_message?: string;
+  };
+  embeddings?: Array<{
+    data: string;
+    mime_type: string;
+    name?: string;
+  }>;
+}
+
+interface TestScenario {
+  id: string;
+  name: string;
+  keyword: string;
+  description: string;
+  line: number;
+  type: string;
+  tags: Array<{ name: string }>;
+  steps: TestStep[];
+}
+
+interface TestFeature {
+  id: string;
+  uri: string;
+  name: string;
+  description: string;
+  keyword: string;
+  elements: TestScenario[];
+}
+
+export class HtmlReporter {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async generateReport(data: any, outputPath: string): Promise<void> {
+    this.logger.info(`Generating HTML report at ${outputPath}`);
+    
+    // Extract and analyze test data
+    const features = data;
+    const stats = this.calculateStats(features);
+    
+    // Generate HTML content
+    const html = this.generateHtml(features, stats);
+    
+    // Write HTML file
+    fs.writeFileSync(outputPath, html, 'utf8');
+  }
+
+  private calculateStats(features: TestFeature[]): any {
+    let totalScenarios = 0;
+    let passedScenarios = 0;
+    let failedScenarios = 0;
+    let skippedScenarios = 0;
+    let totalSteps = 0;
+    let passedSteps = 0;
+    let failedSteps = 0;
+    let skippedSteps = 0;
+    let totalDuration = 0;
+    
+    for (const feature of features) {
+      for (const scenario of feature.elements) {
+        totalScenarios++;
+        
+        let scenarioStatus = 'passed';
+        for (const step of scenario.steps) {
+          totalSteps++;
+          totalDuration += step.result.duration || 0;
+          
+          if (step.result.status === 'passed') {
+            passedSteps++;
+          } else if (step.result.status === 'failed') {
+            failedSteps++;
+            scenarioStatus = 'failed';
+          } else {
+            skippedSteps++;
+            if (scenarioStatus === 'passed') {
+              scenarioStatus = 'skipped';
+            }
+          }
+        }
+        
+        if (scenarioStatus === 'passed') {
+          passedScenarios++;
+        } else if (scenarioStatus === 'failed') {
+          failedScenarios++;
+        } else {
+          skippedScenarios++;
+        }
+      }
+    }
+    
+    return {
+      totalFeatures: features.length,
+      totalScenarios,
+      passedScenarios,
+      failedScenarios,
+      skippedScenarios,
+      totalSteps,
+      passedSteps,
+      failedSteps,
+      skippedSteps,
+      totalDuration,
+      passRate: totalScenarios > 0 ? (passedScenarios / totalScenarios) * 100 : 0
+    };
+  }
+
+  private generateHtml(features: TestFeature[], stats: any): string {
+    // This is a simplified example. In a real implementation, this would be much more detailed.
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cucumber BDD Test Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            width: 95%;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        header {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-bottom: 1px solid #ddd;
+        }
+        h1, h2, h3 {
+            color: #444;
+        }
+        .summary {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        .summary-box {
+            text-align: center;
+            padding: 10px;
+            border-radius: 5px;
+            min-width: 120px;
+        }
+        .summary-box.passed {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .summary-box.failed {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .summary-box.skipped {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .summary-box.total {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+        .feature {
+            margin-bottom: 30px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .feature-header {
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #ddd;
+        }
+        .scenarios {
+            padding: 0 15px;
+        }
+        .scenario {
+            margin: 15px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .scenario.passed {
+            border-left: 5px solid #28a745;
+        }
+        .scenario.failed {
+            border-left: 5px solid #dc3545;
+        }
+        .scenario.skipped {
+            border-left: 5px solid #ffc107;
+        }
+        .steps {
+            margin-left: 20px;
+        }
+        .step {
+            padding: 8px 15px;
+            margin: 5px 0;
+            border-radius: 5px;
+        }
+        .step.passed {
+            background-color: #d4edda;
+        }
+        .step.failed {
+            background-color: #f8d7da;
+        }
+        .step.skipped {
+            background-color: #fff3cd;
+        }
+        .error-message {
+            padding: 10px;
+            background-color: #f8d7da;
+            color: #721c24;
+            border-radius: 5px;
+            margin: 10px 0;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        .duration {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+        .screenshot {
+            max-width: 100%;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Cucumber BDD Test Report</h1>
+            <p>Generated on ${new Date().toLocaleString()}</p>
+        </header>
+        
+        <div class="summary">
+            <div class="summary-box total">
+                <h3>Total Scenarios</h3>
+                <p>${stats.totalScenarios}</p>
+            </div>
+            <div class="summary-box passed">
+                <h3>Passed</h3>
+                <p>${stats.passedScenarios}</p>
+            </div>
+            <div class="summary-box failed">
+                <h3>Failed</h3>
+                <p>${stats.failedScenarios}</p>
+            </div>
+            <div class="summary-box skipped">
+                <h3>Skipped</h3>
+                <p>${stats.skippedScenarios}</p>
+            </div>
+            <div class="summary-box total">
+                <h3>Pass Rate</h3>
+                <p>${stats.passRate.toFixed(2)}%</p>
+            </div>
+            <div class="summary-box total">
+                <h3>Total Duration</h3>
+                <p>${this.formatDuration(stats.totalDuration)}</p>
+            </div>
+        </div>
+        
+        ${features.map(feature => this.renderFeature(feature)).join('')}
+    </div>
+</body>
+</html>
+    `;
+  }
+
+  private renderFeature(feature: TestFeature): string {
+    return `
+<div class="feature">
+    <div class="feature-header">
+        <h2>${feature.name}</h2>
+        <p>${feature.description || ''}</p>
+    </div>
+    <div class="scenarios">
+        ${feature.elements.map(scenario => this.renderScenario(scenario)).join('')}
+    </div>
+</div>
+    `;
+  }
+
+  private renderScenario(scenario: TestScenario): string {
+    const scenarioStatus = this.getScenarioStatus(scenario);
+    
+    return `
+<div class="scenario ${scenarioStatus}">
+    <h3>${scenario.name}</h3>
+    ${scenario.tags.length > 0 ? `<p>Tags: ${scenario.tags.map(tag => tag.name).join(', ')}</p>` : ''}
+    <div class="steps">
+        ${scenario.steps.map(step => this.renderStep(step)).join('')}
+    </div>
+</div>
+    `;
+  }
+
+  private renderStep(step: TestStep): string {
+    return `
+<div class="step ${step.result.status}">
+    <p>${step.keyword} ${step.name}</p>
+    <span class="duration">${this.formatDuration(step.result.duration)}</span>
+    ${step.result.error_message ? `<div class="error-message">${step.result.error_message}</div>` : ''}
+    ${this.renderEmbeddings(step.embeddings || [])}
+</div>
+    `;
+  }
+
+  private renderEmbeddings(embeddings: Array<{ data: string; mime_type: string; name?: string }>): string {
+    return embeddings.map(embedding => {
+      if (embedding.mime_type.startsWith('image/')) {
+        return `<img src="data:${embedding.mime_type};base64,${embedding.data}" alt="${embedding.name || 'Screenshot'}" class="screenshot">`;
+      }
+      return '';
+    }).join('');
+  }
+
+  private getScenarioStatus(scenario: TestScenario): string {
+    let status = 'passed';
+    
+    for (const step of scenario.steps) {
+      if (step.result.status === 'failed') {
+        return 'failed';
+      } else if (step.result.status !== 'passed') {
+        status = 'skipped';
+      }
+    }
+    
+    return status;
+  }
+
+  private formatDuration(nanoseconds?: number): string {
+    if (!nanoseconds) return '0ms';
+    
+    const milliseconds = nanoseconds / 1000000;
+    if (milliseconds < 1000) {
+      return `${Math.round(milliseconds)}ms`;
+    }
+    const seconds = milliseconds / 1000;
+    if (seconds < 60) {
+      return `${seconds.toFixed(2)}s`;
+    }
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}m ${remainingSeconds.toFixed(0)}s`;
+  }
+}
+```
+
+### 6.3 Screenshot Service (src/core/reporting/screenshot.service.ts)
+
+```typescript
+import fs from 'fs';
+import path from 'path';
+import { Page } from 'playwright';
+import { Logger } from '../utils/logger';
+import config from '@config/environment.config';
+
+export class ScreenshotService {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async captureScreenshot(page: Page, scenarioName: string, stepName: string): Promise<string> {
+    try {
+      // Create directory if it doesn't exist
+      const screenshotDir = config.reporting.screenshotsPath;
+      if (!fs.existsSync(screenshotDir)) {
+        fs.mkdirSync(screenshotDir, { recursive: true });
+      }
+      
+      // Generate screenshot filename
+      const timestamp = new Date().toISOString().replace(/:/g, '-');
+      const sanitizedScenario = this.sanitizeFileName(scenarioName);
+      const sanitizedStep = this.sanitizeFileName(stepName);
+      
+      const screenshotPath = path.join(
+        screenshotDir,
+        `${sanitizedScenario}_${sanitizedStep}_${timestamp}.png`
+      );
+      
+      // Take screenshot
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      
+      this.logger.info(`Screenshot captured: ${screenshotPath}`);
+      return screenshotPath;
+    } catch (error) {
+      this.logger.error(`Failed to capture screenshot: ${error}`);
+      return '';
+    }
+  }
+
+  encodeScreenshot(screenshotPath: string): string {
+    try {
+      const imageBuffer = fs.readFileSync(screenshotPath);
+      return imageBuffer.toString('base64');
+    } catch (error) {
+      this.logger.error(`Failed to encode screenshot: ${error}`);
+      return '';
+    }
+  }
+
+  private sanitizeFileName(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, '') // Remove special characters
+      .replace(/\s+/g, '_') // Replace spaces with underscores
+      .substring(0, 100); // Limit filename length
+  }
+}
+```
+
+## 7. SOLID Principles Implementation
+
+### 7.1 Base Page (src/pages/base.page.ts)
+
+```typescript
+import { Page, Locator, ElementHandle } from 'playwright';
+import { Logger } from '../core/utils/logger';
+import { WaitUtils } from '../core/utils/wait.utils';
+
+// Single Responsibility Principle: BasePages handle only UI operations
+export abstract class BasePage {
+  protected page: Page;
+  protected logger: Logger;
+  protected waitUtils: WaitUtils;
+  protected url: string;
+
+  constructor(page: Page, logger: Logger, url: string = '') {
+    this.page = page;
+    this.logger = logger;
+    this.waitUtils = new WaitUtils(page, logger);
+    this.url = url;
+  }
+
+  // Open-Closed Principle: Method can be extended but not modified
+  async navigate(): Promise<void> {
+    this.logger.info(`Navigating to ${this.url}`);
+    await this.page.goto(this.url);
+    await this.waitForPageLoad();
+  }
+
+  // Template method pattern allowing subclasses to customize behavior
+  protected async waitForPageLoad(): Promise<void> {
+    await this.page.waitForLoadState('networkidle');
+  }
+
+  async getTitle(): Promise<string> {
+    return await this.page.title();
+  }
+
+  async getUrl(): Promise<string> {
+    return this.page.url();
+  }
+
+  protected async click(selector: string, options: { timeout?: number } = {}): Promise<void> {
+    this.logger.info(`Clicking on ${selector}`);
+    await this.waitUtils.waitForElementToBeVisible(selector, options.timeout);
+    await this.page.click(selector);
+  }
+
+  protected async fill(selector: string, value: string, options: { timeout?: number } = {}): Promise<void> {
+    this.logger.info(`Filling ${selector} with text`);
+    await this.waitUtils.waitForElementToBeVisible(selector, options.timeout);
+    await this.page.fill(selector, value);
+  }
+
+  protected async getText(selector: string, options: { timeout?: number } = {}): Promise<string> {
+    this.logger.info(`Getting text from ${selector}`);
+    await this.waitUtils.waitForElementToBeVisible(selector, options.timeout);
+    return (await this.page.textContent(selector)) || '';
+  }
+
+  protected async isVisible(selector: string, options: { timeout?: number } = {}): Promise<boolean> {
+    try {
+      await this.waitUtils.waitForElementToBeVisible(selector, options.timeout);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  protected async selectOption(
+    selector: string,
+    option: string | string[] | { value?: string; label?: string; index?: number },
+    options: { timeout?: number } = {}
+  ): Promise<void> {
+    this.logger.info(`Selecting option in ${selector}`);
+    await this.waitUtils.waitForElementToBeVisible(selector, options.timeout);
+    await this.page.selectOption(selector, option);
+  }
+
+  protected async getLocator(selector: string): Promise<Locator> {
+    return this.page.locator(selector);
+  }
+
+  async screenshot(name: string): Promise<string> {
+    const screenshotPath = `./reports/screenshots/${name}.png`;
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    return screenshotPath;
+  }
+}
+```
+
+### 7.2 Login Page (src/pages/login.page.ts)
+
+```typescript
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Interface Segregation Principle: Define only the methods needed
+export interface ILoginPage {
+  navigate(): Promise<void>;
+  login(username: string, password: string): Promise<void>;
+  isLoggedIn(): Promise<boolean>;
+  getErrorMessage(): Promise<string>;
+}
+
+// Liskov Substitution Principle: LoginPage can be substituted for BasePage
+export class LoginPage extends BasePage implements ILoginPage {
+  // Selectors
+
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Interface Segregation Principle: Define only the methods needed
+export interface ILoginPage {
+  navigate(): Promise<void>;
+  login(username: string, password: string): Promise<void>;
+  isLoggedIn(): Promise<boolean>;
+  getErrorMessage(): Promise<string>;
+}
+
+// Liskov Substitution Principle: LoginPage can be substituted for BasePage
+export class LoginPage extends BasePage implements ILoginPage {
+  // Selectors
+  private readonly usernameInput = '#username';
+  private readonly passwordInput = '#password';
+  private readonly loginButton = 'button[type="submit"]';
+  private readonly errorMessage = '.error-message';
+  private readonly successMessage = '.success-message';
+
+  constructor(page: Page) {
+    super(page);
+    this.url = `${config.baseUrl}/login`;
+    this.logger = new Logger('LoginPage');
+  }
+
+  /**
+   * Navigates to the login page
+   */
+  async navigate(): Promise<void> {
+    this.logger.info('Navigating to login page');
+    await this.page.goto(this.url);
+    await this.page.waitForLoadState('networkidle');
+  }
+
+  /**
+   * Enters username in the username field
+   * @param username - The username to enter
+   */
+  async enterUsername(username: string): Promise<void> {
+    this.logger.info(`Entering username: ${username}`);
+    await this.page.fill(this.usernameInput, username);
+  }
+
+  /**
+   * Enters password in the password field
+   * @param password - The password to enter
+   */
+  async enterPassword(password: string): Promise<void> {
+    this.logger.info('Entering password');
+    await this.page.fill(this.passwordInput, password);
+  }
+
+  /**
+   * Clicks the login button
+   */
+  async clickLoginButton(): Promise<void> {
+    this.logger.info('Clicking login button');
+    await this.page.click(this.loginButton);
+    await this.page.waitForLoadState('networkidle');
+  }
+
+  /**
+   * Performs login with provided credentials
+   * @param username - The username to use
+   * @param password - The password to use
+   */
+  async login(username: string, password: string): Promise<void> {
+    await this.enterUsername(username);
+    await this.enterPassword(password);
+    await this.clickLoginButton();
+  }
+
+  /**
+   * Checks if user is logged in
+   * @returns boolean indicating if user is logged in
+   */
+  async isLoggedIn(): Promise<boolean> {
+    this.logger.info('Checking if user is logged in');
+    return await this.page.isVisible(this.successMessage);
+  }
+
+  /**
+   * Gets the error message text
+   * @returns The error message text
+   */
+  async getErrorMessage(): Promise<string> {
+    this.logger.info('Getting error message');
+    if (await this.page.isVisible(this.errorMessage)) {
+      return await this.page.textContent(this.errorMessage) || '';
+    }
+    return '';
+  }
+}
+
+Let me continue providing the code for the rest of the framework implementation, focusing on SOLID principles.
+
+### 7.3 Home Page (src/pages/home.page.ts)
+
+```typescript
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Interface Segregation Principle: Define a focused interface
+export interface IHomePage {
+  navigate(): Promise<void>;
+  isLoggedIn(): Promise<boolean>;
+  getUserInfo(): Promise<{ name: string; email: string }>;
+  logout(): Promise<void>;
+}
+
+export class HomePage extends BasePage implements IHomePage {
+  // Selectors
+  private readonly userInfoSection = '.user-info';
+  private readonly userNameElement = '.user-info .name';
+  private readonly userEmailElement = '.user-info .email';
+  private readonly logoutButton = '.logout-button';
+  private readonly loginLink = '.login-link';
+
+  constructor(page: Page) {
+    super(page);
+    this.url = `${config.baseUrl}/home`;
+    this.logger = new Logger('HomePage');
+  }
+
+  /**
+   * Navigates to the home page
+   */
+  async navigate(): Promise<void> {
+    this.logger.info('Navigating to home page');
+    await this.page.goto(this.url);
+    await this.page.waitForLoadState('networkidle');
+  }
+
+  /**
+   * Checks if the user is logged in
+   * @returns boolean indicating if user is logged in
+   */
+  async isLoggedIn(): Promise<boolean> {
+    this.logger.info('Checking if user is logged in');
+    return await this.page.isVisible(this.userInfoSection);
+  }
+
+  /**
+   * Gets the user information from the page
+   * @returns Object containing user name and email
+   */
+  async getUserInfo(): Promise<{ name: string; email: string }> {
+    this.logger.info('Getting user information');
+    if (!(await this.isLoggedIn())) {
+      throw new Error('User is not logged in');
+    }
+
+    const name = await this.page.textContent(this.userNameElement) || '';
+    const email = await this.page.textContent(this.userEmailElement) || '';
+
+    return { name, email };
+  }
+
+  /**
+   * Performs logout action
+   */
+  async logout(): Promise<void> {
+    this.logger.info('Logging out');
+    if (await this.isLoggedIn()) {
+      await this.page.click(this.logoutButton);
+      await this.page.waitForLoadState('networkidle');
+    } else {
+      this.logger.warn('Cannot logout: User is not logged in');
+    }
+  }
+}
+```
+
+### 7.4 Generic Table Component (src/components/table.component.ts)
+
+```typescript
+import { Page } from 'playwright';
+import { BaseComponent } from './base.component';
+import { Logger } from '../core/utils/logger';
+
+// Interface Segregation Principle: Focused interface for table operations
+export interface ITableComponent {
+  getRowCount(): Promise<number>;
+  getCellText(row: number, column: number | string): Promise<string>;
+  clickCell(row: number, column: number | string): Promise<void>;
+  getRowData(row: number): Promise<Record<string, string>>;
+  searchTable(text: string): Promise<void>;
+  sortBy(columnName: string, order: 'asc' | 'desc'): Promise<void>;
+}
+
+export class TableComponent extends BaseComponent implements ITableComponent {
+  private readonly tableSelector: string;
+  private readonly searchInputSelector: string;
+  private readonly rowSelector: string;
+  private readonly cellSelector: string;
+  private readonly headerSelector: string;
+  private readonly paginationSelector?: string;
+
+  constructor(
+    page: Page,
+    tableSelector: string,
+    options: {
+      searchInputSelector?: string;
+      rowSelector?: string;
+      cellSelector?: string;
+      headerSelector?: string;
+      paginationSelector?: string;
+    } = {}
+  ) {
+    super(page);
+    this.tableSelector = tableSelector;
+    this.searchInputSelector = options.searchInputSelector || `${tableSelector} .search-input`;
+    this.rowSelector = options.rowSelector || `${tableSelector} tbody tr`;
+    this.cellSelector = options.cellSelector || 'td';
+    this.headerSelector = options.headerSelector || `${tableSelector} thead th`;
+    this.paginationSelector = options.paginationSelector;
+    this.logger = new Logger('TableComponent');
+  }
+
+  /**
+   * Gets the number of rows in the table
+   * @returns Number of rows
+   */
+  async getRowCount(): Promise<number> {
+    this.logger.debug('Getting row count');
+    return await this.page.locator(this.rowSelector).count();
+  }
+
+  /**
+   * Gets column index from column name
+   * @param columnName - Name of the column
+   * @returns Column index
+   */
+  private async getColumnIndex(columnName: string): Promise<number> {
+    const headers = await this.page.locator(this.headerSelector).allTextContents();
+    const index = headers.findIndex(header => header.trim() === columnName);
+    
+    if (index === -1) {
+      throw new Error(`Column "${columnName}" not found in table`);
+    }
+    
+    return index;
+  }
+
+  /**
+   * Gets cell text by row and column
+   * @param row - Row index (0-based)
+   * @param column - Column index (0-based) or column name
+   * @returns Cell text
+   */
+  async getCellText(row: number, column: number | string): Promise<string> {
+    let columnIndex: number;
+    
+    if (typeof column === 'string') {
+      columnIndex = await this.getColumnIndex(column);
+    } else {
+      columnIndex = column;
+    }
+    
+    const rows = await this.page.locator(this.rowSelector).all();
+    if (row >= rows.length) {
+      throw new Error(`Row index ${row} out of bounds. Table has ${rows.length} rows.`);
+    }
+    
+    const cells = await rows[row].locator(this.cellSelector).all();
+    if (columnIndex >= cells.length) {
+      throw new Error(`Column index ${columnIndex} out of bounds. Row has ${cells.length} columns.`);
+    }
+    
+    return await cells[columnIndex].textContent() || '';
+  }
+
+  /**
+   * Clicks on a cell in the table
+   * @param row - Row index (0-based)
+   * @param column - Column index (0-based) or column name
+   */
+  async clickCell(row: number, column: number | string): Promise<void> {
+    let columnIndex: number;
+    
+    if (typeof column === 'string') {
+      columnIndex = await this.getColumnIndex(column);
+    } else {
+      columnIndex = column;
+    }
+    
+    const rows = await this.page.locator(this.rowSelector).all();
+    if (row >= rows.length) {
+      throw new Error(`Row index ${row} out of bounds. Table has ${rows.length} rows.`);
+    }
+    
+    const cells = await rows[row].locator(this.cellSelector).all();
+    if (columnIndex >= cells.length) {
+      throw new Error(`Column index ${columnIndex} out of bounds. Row has ${cells.length} columns.`);
+    }
+    
+    await cells[columnIndex].click();
+  }
+
+  /**
+   * Gets all data from a specific row
+   * @param row - Row index (0-based)
+   * @returns Object with column names as keys and cell values as values
+   */
+  async getRowData(row: number): Promise<Record<string, string>> {
+    const headers = await this.page.locator(this.headerSelector).allTextContents();
+    const rows = await this.page.locator(this.rowSelector).all();
+    
+    if (row >= rows.length) {
+      throw new Error(`Row index ${row} out of bounds. Table has ${rows.length} rows.`);
+    }
+    
+    const cells = await rows[row].locator(this.cellSelector).all();
+    const result: Record<string, string> = {};
+    
+    for (let i = 0; i < Math.min(headers.length, cells.length); i++) {
+      const headerText = headers[i].trim();
+      const cellText = await cells[i].textContent() || '';
+      result[headerText] = cellText.trim();
+    }
+    
+    return result;
+  }
+
+  /**
+   * Searches the table for specific text
+   * @param text - Text to search for
+   */
+  async searchTable(text: string): Promise<void> {
+    this.logger.debug(`Searching table for "${text}"`);
+    const searchInput = this.page.locator(this.searchInputSelector);
+    
+    if (await searchInput.count() > 0) {
+      await searchInput.fill(text);
+      // Press Enter to trigger search
+      await searchInput.press('Enter');
+      // Wait for table to update
+      await this.page.waitForLoadState('networkidle');
+    } else {
+      throw new Error('Search input not found');
+    }
+  }
+
+  /**
+   * Sorts the table by a specific column
+   * @param columnName - Name of the column to sort by
+   * @param order - Sort order (asc or desc)
+   */
+  async sortBy(columnName: string, order: 'asc' | 'desc'): Promise<void> {
+    this.logger.debug(`Sorting table by "${columnName}" in ${order} order`);
+    const columnIndex = await this.getColumnIndex(columnName);
+    const headerElements = await this.page.locator(this.headerSelector).all();
+    
+    if (columnIndex >= headerElements.length) {
+      throw new Error(`Column "${columnName}" not found in table headers`);
+    }
+    
+    // Click once for ascending, twice for descending
+    await headerElements[columnIndex].click();
+    
+    if (order === 'desc') {
+      await headerElements[columnIndex].click();
+    }
+    
+    // Wait for table to update
+    await this.page.waitForLoadState('networkidle');
+  }
+}
+```
+
+### 7.5 API Service (src/services/api.service.ts)
+
+```typescript
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Dependency Inversion Principle: Define abstraction
+export interface IApiService {
+  get<T>(url: string, params?: Record<string, any>): Promise<T>;
+  post<T>(url: string, data: any, params?: Record<string, any>): Promise<T>;
+  put<T>(url: string, data: any, params?: Record<string, any>): Promise<T>;
+  delete<T>(url: string, params?: Record<string, any>): Promise<T>;
+}
+
+// Open/Closed Principle: Base class for API communication
+export class ApiService implements IApiService {
+  protected client: AxiosInstance;
+  protected logger: Logger;
+
+  constructor(baseURL?: string, headers?: Record<string, string>) {
+    this.logger = new Logger('ApiService');
+    
+    const apiConfig: AxiosRequestConfig = {
+      baseURL: baseURL || config.apiBaseUrl,
+      timeout: config.apiTimeout || 10000,
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      }
+    };
+    
+    this.client = axios.create(apiConfig);
+    
+    // Add request interceptor for logging
+    this.client.interceptors.request.use(request => {
+      this.logger.debug(`Sending ${request.method?.toUpperCase()} request to ${request.url}`);
+      return request;
+    });
+    
+    // Add response interceptor for logging
+    this.client.interceptors.response.use(
+      response => {
+        this.logger.debug(`Received response from ${response.config.url} with status ${response.status}`);
+        return response;
+      },
+      error => {
+        if (error.response) {
+          this.logger.error(`API Error: ${error.response.status} - ${error.response.statusText}`);
+        } else if (error.request) {
+          this.logger.error('API Error: No response received');
+        } else {
+          this.logger.error(`API Error: ${error.message}`);
+        }
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  /**
+   * Performs a GET request
+   * @param url - API endpoint
+   * @param params - Query parameters
+   * @returns Response data
+   */
+  async get<T>(url: string, params?: Record<string, any>): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.get(url, { params });
+    return response.data;
+  }
+
+  /**
+   * Performs a POST request
+   * @param url - API endpoint
+   * @param data - Request body
+   * @param params - Query parameters
+   * @returns Response data
+   */
+  async post<T>(url: string, data: any, params?: Record<string, any>): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.post(url, data, { params });
+    return response.data;
+  }
+
+  /**
+   * Performs a PUT request
+   * @param url - API endpoint
+   * @param data - Request body
+   * @param params - Query parameters
+   * @returns Response data
+   */
+  async put<T>(url: string, data: any, params?: Record<string, any>): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.put(url, data, { params });
+    return response.data;
+  }
+
+  /**
+   * Performs a DELETE request
+   * @param url - API endpoint
+   * @param params - Query parameters
+   * @returns Response data
+   */
+  async delete<T>(url: string, params?: Record<string, any>): Promise<T> {
+    const response: AxiosResponse<T> = await this.client.delete(url, { params });
+    return response.data;
+  }
+}
+```
+
+### 7.6 User Service (src/services/user.service.ts)
+
+```typescript
+import { ApiService, IApiService } from './api.service';
+import { Logger } from '../core/utils/logger';
+
+// Types for User data
+export interface User {
+  id: number;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+}
+
+export interface UserCredentials {
+  username: string;
+  password: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: User;
+}
+
+// Dependency Inversion Principle: High-level component depends on abstraction
+export class UserService {
+  private logger: Logger;
+  
+  // Dependency injection
+  constructor(private apiService: IApiService) {
+    this.logger = new Logger('UserService');
+  }
+
+  /**
+   * Authenticates a user and returns token and user info
+   * @param credentials - User credentials
+   * @returns Authentication response
+   */
+  async login(credentials: UserCredentials): Promise<AuthResponse> {
+    this.logger.info(`Attempting to login user: ${credentials.username}`);
+    return await this.apiService.post<AuthResponse>('/auth/login', credentials);
+  }
+
+  /**
+   * Gets current user information
+   * @returns User information
+   */
+  async getCurrentUser(): Promise<User> {
+    this.logger.info('Fetching current user information');
+    return await this.apiService.get<User>('/users/me');
+  }
+
+  /**
+   * Gets a user by ID
+   * @param id - User ID
+   * @returns User information
+   */
+  async getUserById(id: number): Promise<User> {
+    this.logger.info(`Fetching user with ID: ${id}`);
+    return await this.apiService.get<User>(`/users/${id}`);
+  }
+
+  /**
+   * Updates user information
+   * @param id - User ID
+   * @param userData - User data to update
+   * @returns Updated user information
+   */
+  async updateUser(id: number, userData: Partial<User>): Promise<User> {
+    this.logger.info(`Updating user with ID: ${id}`);
+    return await this.apiService.put<User>(`/users/${id}`, userData);
+  }
+
+  /**
+   * Registers a new user
+   * @param userData - New user data
+   * @returns Created user information
+   */
+  async registerUser(userData: Omit<User, 'id'> & { password: string }): Promise<User> {
+    this.logger.info(`Registering new user: ${userData.username}`);
+    return await this.apiService.post<User>('/users/register', userData);
+  }
+}
+```
+
+### 7.7 World Context (src/support/world.ts)
+
+```typescript
+import { World, setWorldConstructor, IWorldOptions } from '@cucumber/cucumber';
+import { Browser, BrowserContext, Page, chromium, firefox, webkit } from 'playwright';
+import { ApiService, IApiService } from '../services/api.service';
+import { UserService } from '../services/user.service';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Define custom world options
+export interface CustomWorldOptions extends IWorldOptions {
+  parameters: {
+    browser?: string;
+    headless?: boolean;
+    viewport?: { width: number; height: number };
+    slowMo?: number;
+  };
+}
+
+// Custom world for Cucumber
+export class CustomWorld extends World<CustomWorldOptions> {
+  private browser?: Browser;
+  public context?: BrowserContext;
+  public page?: Page;
+  
+  // Services
+  public apiService!: IApiService;
+  public userService!: UserService;
+  
+  // Logger
+  public logger: Logger;
+
+  constructor(options: CustomWorldOptions) {
+    super(options);
+    this.logger = new Logger('World');
+  }
+
+  /**
+   * Initialize the world
+   */
+  async init(): Promise<void> {
+    await this.initBrowser();
+    await this.initServices();
+  }
+
+  /**
+   * Initialize browser and page
+   */
+  private async initBrowser(): Promise<void> {
+    const params = this.parameters;
+    const browserType = params.browser || config.browser || 'chromium';
+    const headless = params.headless !== undefined ? params.headless : config.headless;
+    const slowMo = params.slowMo || config.slowMo || 0;
+    
+    this.logger.info(`Initializing ${browserType} browser (headless: ${headless})`);
+    
+    switch (browserType.toLowerCase()) {
+      case 'chromium':
+        this.browser = await chromium.launch({ headless, slowMo });
+        break;
+      case 'firefox':
+        this.browser = await firefox.launch({ headless, slowMo });
+        break;
+      case 'webkit':
+        this.browser = await webkit.launch({ headless, slowMo });
+        break;
+      default:
+        this.browser = await chromium.launch({ headless, slowMo });
+    }
+    
+    const viewport = params.viewport || config.viewport || { width: 1280, height: 720 };
+    this.context = await this.browser.newContext({
+      viewport,
+      recordVideo: config.recordVideo ? { dir: 'reports/videos/' } : undefined,
+      ignoreHTTPSErrors: true
+    });
+    
+    this.page = await this.context.newPage();
+  }
+
+  /**
+   * Initialize services
+   */
+  private async initServices(): Promise<void> {
+    this.logger.info('Initializing services');
+    this.apiService = new ApiService();
+    this.userService = new UserService(this.apiService);
+  }
+
+  /**
+   * Clean up resources
+   */
+  async teardown(): Promise<void> {
+    this.logger.info('Tearing down world');
+    
+    if (this.page) {
+      await this.page.close();
+    }
+    
+    if (this.context) {
+      await this.context.close();
+    }
+    
+    if (this.browser) {
+      await this.browser.close();
+    }
+  }
+
+  /**
+   * Get world parameters
+   */
+  get parameters() {
+    return this.options.parameters;
+  }
+}
+
+// Register world with Cucumber
+setWorldConstructor(CustomWorld);
+```
+
+### 7.8 Hooks (src/support/hooks.ts)
+
+```typescript
+import { Before, After, BeforeAll, AfterAll, Status } from '@cucumber/cucumber';
+import { CustomWorld } from './world';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Logger } from '../core/utils/logger';
+
+const logger = new Logger('Hooks');
+
+// Create necessary directories before running tests
+BeforeAll(async function() {
+  logger.info('Setting up test environment');
+  
+  const dirs = [
+    'reports',
+    'reports/screenshots',
+    'reports/videos',
+    'reports/html'
+  ];
+  
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      logger.debug(`Creating directory: ${dir}`);
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+});
+
+// Clean up after all tests
+AfterAll(async function() {
+  logger.info('Test run completed');
+});
+
+// Before each scenario
+Before(async function(this: CustomWorld) {
+  logger.info(`Starting scenario: ${this.pickle.name}`);
+  await this.init();
+});
+
+// After each scenario
+After(async function(this: CustomWorld, scenario) {
+  // Take screenshot on failure
+  if (scenario.result?.status === Status.FAILED && this.page) {
+    logger.info('Scenario failed, taking screenshot');
+    
+    const screenshotFileName = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}.png`;
+    const screenshotPath = path.join('reports/screenshots', screenshotFileName);
+    
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    logger.info(`Screenshot saved to: ${screenshotPath}`);
+    
+    // Attach screenshot to report
+    const screenshot = fs.readFileSync(screenshotPath);
+    this.attach(screenshot, 'image/png');
+  }
+  
+  // Log scenario result
+  logger.info(`Scenario completed with status: ${scenario.result?.status}`);
+  
+  // Clean up
+  await this.teardown();
+});
+```
+
+### 7.9 Step Definition Example with SOLID (src/step-definitions/login.steps.ts)
+
+```typescript
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { CustomWorld } from '../support/world';
+import { LoginPage } from '../pages/login.page';
+import { HomePage } from '../pages/home.page';
+
+// Given steps
+Given('I am on the login page', async function(this: CustomWorld) {
+  const loginPage = new LoginPage(this.page!);
+  await loginPage.navigate();
+});
+
+Given('I am logged in as {string} with password {string}', async function(this: CustomWorld, username: string, password: string) {
+  const loginPage = new LoginPage(this.page!);
+  await loginPage.navigate();
+  await loginPage.login(username, password);
+  
+  // Verify login was successful
+  const homePage = new HomePage(this.page!);
+  expect(await homePage.isLoggedIn()).toBeTruthy();
+});
+
+// When steps
+When('I enter username {string} and password {string}', async function(this: CustomWorld, username: string, password: string) {
+  const loginPage = new LoginPage(this.page!);
+  await loginPage.enterUsername(username);
+  await loginPage.enterPassword(password);
+});
+
+When('I click the login button', async function(this: CustomWorld) {
+  const loginPage = new LoginPage(this.page!);
+  await loginPage.clickLoginButton();
+});
+
+When('I login with username {string} and password {string}', async function(this: CustomWorld, username: string, password: string) {
+  const loginPage = new LoginPage(this.page!);
+  await loginPage.login(username, password);
+});
+
+// Then steps
+Then('I should be logged in successfully', async function(this: CustomWorld) {
+  const homePage = new HomePage(this.page!);
+  expect(await homePage.isLoggedIn()).toBeTruthy();
+});
+
+Then('I should see an error message {string}', async function(this: CustomWorld, expectedMessage: string) {
+  const loginPage = new LoginPage(this.page!);
+  const actualMessage = await loginPage.getErrorMessage();
+  expect(actualMessage).toContain(expectedMessage);
+});
+
+Then('I should see my username {string} in the header', async function(this: CustomWorld, expectedUsername: string) {
+  const homePage = new HomePage(this.page!);
+  const userInfo = await homePage.getUserInfo();
+  expect(userInfo.name).toContain(expectedUsername);
+});
+```
+
+### 7.10 Factory Pattern Example (src/core/factory/page.factory.ts)
+
+```typescript
+import { Page } from 'playwright';
+import { BasePage } from '../../pages/base.page';
+import { LoginPage } from '../../pages/login.page';
+import { HomePage } from '../../pages/home.page';
+import { Logger } from '../utils/logger';
+
+// Open/Closed Principle: Factory can be extended for new page types
+export class PageFactory {
+  private static logger = new Logger('PageFactory');
+  
+  /**
+   * Creates a page object based on type
+   * @param page - Playwright page
+   * @param pageType - Type of page to create
+   * @returns Page object
+   */
+  static createPage(page: Page, pageType: string): BasePage {
+    PageFactory.logger.debug(`Creating page of type: ${pageType}`);
+    
+    switch (pageType.toLowerCase()) {
+      case 'login':
+        return new LoginPage(page);
+      case 'home':
+        return new HomePage(page);
+      // Add more page types as needed
+      default:
+        throw new Error(`Page type not supported: ${pageType}`);
+    }
+  }
+}
+```
+
+This code completes the section for SOLID principles implementation in our framework. The code demonstrates all five SOLID principles:
+
+1. **Single Responsibility Principle** - Each class has a single responsibility (e.g., LoginPage handles login functionality)
+2. **Open/Closed Principle** - Classes like PageFactory and ApiService are open for extension but closed for modification
+3. **Liskov Substitution Principle** - Subtypes like LoginPage can be used in place of their parent type (BasePage)
+4. **Interface Segregation Principle** - Interfaces like ILoginPage, IHomePage, and ITableComponent are focused and specific
+5. **Dependency Inversion Principle** - High-level components depend on abstractions (e.g., UserService depends on IApiService)
+
+The framework is now structured with clear responsibilities, proper abstractions, and a strong foundation that follows software engineering best practices.
+
+# 8. Advanced Configuration
+
+## 8.1 Environment-Specific Configuration
+
+```javascript
+// config.js
+const config = {
+  development: {
+    apiUrl: 'http://localhost:3000/api',
+    logLevel: 'debug',
+    featureFlags: {
+      newUserFlow: true,
+      betaFeatures: true
+    }
+  },
+  staging: {
+    apiUrl: 'https://staging-api.example.com',
+    logLevel: 'info',
+    featureFlags: {
+      newUserFlow: true,
+      betaFeatures: true
+    }
+  },
+  production: {
+    apiUrl: 'https://api.example.com',
+    logLevel: 'error',
+    featureFlags: {
+      newUserFlow: true,
+      betaFeatures: false
+    }
+  }
+};
+
+// Load configuration based on environment
+const env = process.env.NODE_ENV || 'development';
+module.exports = config[env];
+```
+
+## 8.2 Feature Flags Implementation
+
+```javascript
+// featureFlags.js
+const config = require('./config');
+
+class FeatureFlags {
+  constructor(flags = {}) {
+    this.flags = flags;
+  }
+
+  isEnabled(flagName) {
+    return Boolean(this.flags[flagName]);
+  }
+
+  getFlags() {
+    return { ...this.flags };
+  }
+}
+
+module.exports = new FeatureFlags(config.featureFlags);
+
+// Usage in application
+const featureFlags = require('./featureFlags');
+
+if (featureFlags.isEnabled('newUserFlow')) {
+  // Show new user onboarding experience
+} else {
+  // Show legacy flow
+}
+```
+
+## 8.3 Performance Optimization
+
+```javascript
+// webpack.config.js
+const path = require('path');
+const TerserPlugin = require('terser-webpack-plugin');
+const CompressionPlugin = require('compression-webpack-plugin');
+const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
+
+module.exports = {
+  mode: process.env.NODE_ENV,
+  entry: './src/index.js',
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: '[name].[contenthash].js',
+    chunkFilename: '[name].[contenthash].chunk.js',
+  },
+  optimization: {
+    minimize: true,
+    minimizer: [new TerserPlugin({
+      terserOptions: {
+        compress: {
+          drop_console: process.env.NODE_ENV === 'production',
+        },
+      },
+    })],
+    splitChunks: {
+      chunks: 'all',
+      maxInitialRequests: Infinity,
+      minSize: 0,
+      cacheGroups: {
+        vendor: {
+          test: /[\\/]node_modules[\\/]/,
+          name(module) {
+            const packageName = module.context.match(/[\\/]node_modules[\\/](.*?)([\\/]|$)/)[1];
+            return `vendor.${packageName.replace('@', '')}`;
+          },
+        },
+      },
+    },
+  },
+  plugins: [
+    new CompressionPlugin({
+      filename: '[path][base].gz',
+      algorithm: 'gzip',
+      test: /\.(js|css|html|svg)$/,
+      threshold: 10240,
+      minRatio: 0.8,
+    }),
+    process.env.ANALYZE && new BundleAnalyzerPlugin(),
+  ].filter(Boolean),
+};
+```
+
+## 8.4 Advanced Logging and Monitoring
+
+```javascript
+// logger.js
+const winston = require('winston');
+const Sentry = require('@sentry/node');
+const config = require('./config');
+
+// Initialize Sentry for error tracking
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV,
+});
+
+// Configure Winston logger
+const logger = winston.createLogger({
+  level: config.logLevel,
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  defaultMeta: { service: 'my-service' },
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' }),
+  ],
+});
+
+// Add console transport in non-production environments
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple()
+    ),
+  }));
+}
+
+// Custom logger that also sends errors to Sentry
+module.exports = {
+  debug: (message, meta = {}) => logger.debug(message, meta),
+  info: (message, meta = {}) => logger.info(message, meta),
+  warn: (message, meta = {}) => logger.warn(message, meta),
+  error: (message, error, meta = {}) => {
+    logger.error(message, { ...meta, error });
+    if (error instanceof Error) {
+      Sentry.captureException(error);
+    } else {
+      Sentry.captureMessage(message, Sentry.Severity.Error);
+    }
+  }
+};
+```
+
+# 9. CI/CD Integration
+
+## 9.1 GitHub Actions Workflow
+
+```yaml
+# .github/workflows/ci-cd.yml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run linting
+        run: npm run lint
+      - name: Run tests
+        run: npm test
+      - name: Build project
+        run: npm run build
+
+  build-and-deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Deploy to staging
+        run: |
+          echo "${{ secrets.DEPLOY_KEY }}" > deploy_key
+          chmod 600 deploy_key
+          rsync -avz -e "ssh -i deploy_key -o StrictHostKeyChecking=no" \
+            ./dist/ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PATH }}
+```
+
+## 9.2 Docker Configuration
+
+```dockerfile
+# Dockerfile
+FROM node:18-alpine as build
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+```
+# nginx.conf
+server {
+    listen 80;
+    server_name _;
+    
+    root /usr/share/nginx/html;
+    index index.html;
+    
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    
+    # Cache static assets
+    location ~* \.(jpg|jpeg|png|gif|ico|css|js)$ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000";
+    }
+}
+```
+
+## 9.3 Automated Testing in CI
+
+```javascript
+// jest.config.js
+module.exports = {
+  collectCoverage: true,
+  coverageReporters: ['text', 'lcov'],
+  coverageThreshold: {
+    global: {
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
+  },
+  testEnvironment: 'jsdom',
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  testPathIgnorePatterns: ['/node_modules/', '/dist/'],
+};
+```
+
+```javascript
+// jest.setup.js
+import '@testing-library/jest-dom';
+```
+
+```bash
+# Add to package.json scripts
+"scripts": {
+  "test": "jest",
+  "test:watch": "jest --watch",
+  "test:ci": "jest --ci --coverage",
+  "lint": "eslint 'src/**/*.{js,jsx}'",
+  "lint:fix": "eslint 'src/**/*.{js,jsx}' --fix"
+}
+```
+
+## 9.4 Deployment Strategy
+
+```javascript
+// deploy.js - Progressive deployment script
+const { execSync } = require('child_process');
+const axios = require('axios');
+
+// Configuration
+const DEPLOYMENT_STAGES = [
+  { name: 'canary', percentage: 10, monitorDuration: 15 * 60 * 1000 }, // 15 minutes
+  { name: 'rolling', percentage: 50, monitorDuration: 30 * 60 * 1000 }, // 30 minutes
+  { name: 'complete', percentage: 100, monitorDuration: 0 }
+];
+
+async function deploy() {
+  for (const stage of DEPLOYMENT_STAGES) {
+    console.log(`Starting ${stage.name} deployment (${stage.percentage}%)`);
+    
+    // Deploy to specified percentage of servers
+    execSync(`kubectl set image deployment/app container=app:${process.env.VERSION} --record`);
+    execSync(`kubectl scale deployment/app --replicas=${calculateReplicas(stage.percentage)}`);
+    
+    if (stage.monitorDuration > 0) {
+      console.log(`Monitoring for ${stage.monitorDuration / 60000} minutes...`);
+      
+      // Wait for specified duration
+      await new Promise(resolve => setTimeout(resolve, stage.monitorDuration));
+      
+      // Check metrics to ensure deployment is healthy
+      const isHealthy = await checkHealthMetrics();
+      
+      if (!isHealthy) {
+        console.error('Health check failed! Rolling back deployment...');
+        execSync('kubectl rollout undo deployment/app');
+        process.exit(1);
+      }
+    }
+    
+    console.log(`${stage.name} deployment complete.`);
+  }
+  
+  console.log('Deployment completed successfully!');
+}
+
+function calculateReplicas(percentage) {
+  const totalReplicas = 10; // Total number of replicas for 100% deployment
+  return Math.max(1, Math.floor((percentage / 100) * totalReplicas));
+}
+
+async function checkHealthMetrics() {
+  try {
+    // Check application health endpoints
+    const healthResponse = await axios.get('https://api.example.com/health');
+    
+    // Check error rates from monitoring system
+    const metricsResponse = await axios.get('https://metrics.example.com/api/error-rate', {
+      headers: { 'Authorization': `Bearer ${process.env.METRICS_API_KEY}` }
+    });
+    
+    const errorRate = metricsResponse.data.rate;
+    return healthResponse.status === 200 && errorRate < 0.01; // Less than 1% error rate
+  } catch (error) {
+    console.error('Error checking health metrics:', error);
+    return false;
+  }
+}
+
+deploy().catch(error => {
+  console.error('Deployment failed:', error);
+  process.exit(1);
+});
+```
+
+# 10. Best Practices
+
+## 10.1 Code Style and Conventions
+
+```javascript
+// .eslintrc.js
+module.exports = {
+  root: true,
+  env: {
+    browser: true,
+    node: true,
+    jest: true,
+  },
+  extends: [
+    'eslint:recommended',
+    'plugin:react/recommended',
+    'plugin:react-hooks/recommended',
+    'plugin:jsx-a11y/recommended',
+    'plugin:import/errors',
+    'plugin:import/warnings',
+    'prettier',
+  ],
+  parserOptions: {
+    ecmaVersion: 2021,
+    sourceType: 'module',
+    ecmaFeatures: {
+      jsx: true,
+    },
+  },
+  settings: {
+    react: {
+      version: 'detect',
+    },
+  },
+  rules: {
+    // Core rules
+    'no-console': process.env.NODE_ENV === 'production' ? 'error' : 'warn',
+    'no-debugger': process.env.NODE_ENV === 'production' ? 'error' : 'warn',
+    'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    
+    // React rules
+    'react/prop-types': 'error',
+    'react-hooks/rules-of-hooks': 'error',
+    'react-hooks/exhaustive-deps': 'warn',
+    
+    // Import rules
+    'import/order': [
+      'error',
+      {
+        groups: ['builtin', 'external', 'internal', 'parent', 'sibling', 'index'],
+        'newlines-between': 'always',
+        alphabetize: { order: 'asc', caseInsensitive: true },
+      },
+    ],
+  },
+};
+```
+
+```json
+// .prettierrc
+{
+  "singleQuote": true,
+  "trailingComma": "es5",
+  "printWidth": 80,
+  "tabWidth": 2,
+  "semi": true,
+  "bracketSpacing": true,
+  "jsxBracketSameLine": false,
+  "arrowParens": "avoid"
+}
+```
+
+## 10.2 Security Practices
+
+```javascript
+// securityMiddleware.js
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
+
+// Export security middleware
+module.exports = {
+  setupSecurity: app => {
+    // Set security headers with Helmet
+    app.use(helmet());
+    
+    // Configure CORS
+    app.use(cors({
+      origin: process.env.NODE_ENV === 'production' 
+        ? ['https://example.com', 'https://www.example.com'] 
+        : '*',
+      methods: ['GET', 'POST', 'PUT', 'DELETE'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+      credentials: true,
+      maxAge: 86400, // 24 hours
+    }));
+    
+    // Rate limiting
+    app.use(rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 100, // Limit each IP to 100 requests per windowMs
+      message: 'Too many requests from this IP, please try again later',
+      standardHeaders: true,
+      legacyHeaders: false,
+    }));
+    
+    // API routes get stricter rate limits
+    app.use('/api/', rateLimit({
+      windowMs: 5 * 60 * 1000, // 5 minutes
+      max: 50, // Limit each IP to 50 requests per windowMs
+    }));
+    
+    // Content Security Policy
+    app.use((req, res, next) => {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' https://cdn.example.com; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://images.example.com; connect-src 'self' https://api.example.com;"
+      );
+      next();
+    });
+  },
+  
+  // Input validation middleware
+  validateUserInput: [
+    body('email').isEmail().normalizeEmail(),
+    body('password').isLength({ min: 8 }).matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/),
+    (req, res, next) => {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      next();
+    }
+  ],
+  
+  // JWT Authentication middleware
+  authenticate: (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    
+    try {
+      const jwt = require('jsonwebtoken');
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = decoded;
+      next();
+    } catch (error) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  }
+};
+```
+
+## 10.3 Code Documentation
+
+```javascript
+/**
+ * @fileoverview User authentication service for handling login, registration, and token management.
+ * @module services/authService
+ */
+
+/**
+ * UserAuthService handles all authentication operations
+ * @class
+ */
+class UserAuthService {
+  /**
+   * Create a new user in the system
+   * 
+   * @async
+   * @param {Object} userData - The user data
+   * @param {string} userData.email - User's email address
+   * @param {string} userData.password - User's password (will be hashed)
+   * @param {string} userData.fullName - User's full name
+   * @returns {Promise<Object>} Created user object (without password)
+   * @throws {Error} If email already exists or validation fails
+   * 
+   * @example
+   * // Register a new user
+   * const newUser = await authService.registerUser({
+   *   email: 'user@example.com',
+   *   password: 'SecurePassword123!',
+   *   fullName: 'Jane Doe'
+   * });
+   */
+  async registerUser({ email, password, fullName }) {
+    // Implementation...
+  }
+
+  /**
+   * Authenticate a user and generate JWT token
+   * 
+   * @async
+   * @param {string} email - User's email address
+   * @param {string} password - User's password
+   * @returns {Promise<Object>} Authentication result with token and user info
+   * @throws {Error} If credentials are invalid
+   */
+  async loginUser(email, password) {
+    // Implementation...
+  }
+
+  /**
+   * Verify a JWT token and return the decoded user data
+   * 
+   * @param {string} token - JWT token to verify
+   * @returns {Object|null} Decoded user data or null if invalid
+   */
+  verifyToken(token) {
+    // Implementation...
+  }
+}
+
+module.exports = new UserAuthService();
+```
+
+## 10.4 Performance Best Practices
+
+```javascript
+// performance.js - React component performance optimization examples
+
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+
+// Use React.memo to prevent unnecessary re-renders
+const ExpensiveComponent = React.memo(({ data }) => {
+  // Component implementation
+  return <div>{/* Render data */}</div>;
+});
+
+const PerformanceExample = ({ items, filter }) => {
+  const [selectedId, setSelectedId] = useState(null);
+  
+  // Use useCallback for functions passed as props
+  const handleItemClick = useCallback((id) => {
+    setSelectedId(id);
+    // Other logic...
+  }, []);
+  
+  // Use useMemo for expensive calculations
+  const filteredItems = useMemo(() => {
+    console.log('Filtering items...');
+    return items.filter(item => item.name.includes(filter));
+  }, [items, filter]);
+  
+  // Optimize list rendering with proper keys
+  return (
+    <div>
+      {filteredItems.map(item => (
+        <ExpensiveComponent
+          key={item.id} // Proper key for efficient reconciliation
+          data={item}
+          onClick={() => handleItemClick(item.id)}
+        />
+      ))}
+    </div>
+  );
+};
+
+// Custom hook for efficient data fetching with caching
+function useDataFetching(url) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  useEffect(() => {
+    // Use AbortController for cleanup on unmount
+    const controller = new AbortController();
+    const signal = controller.signal;
+    
+    async function fetchData() {
+      try {
+        setLoading(true);
+        
+        // Cache results in sessionStorage
+        const cachedData = sessionStorage.getItem(url);
+        
+        if (cachedData) {
+          setData(JSON.parse(cachedData));
+          setLoading(false);
+          return;
+        }
+        
+        const response = await fetch(url, { signal });
+        const result = await response.json();
+        
+        // Store in cache
+        sessionStorage.setItem(url, JSON.stringify(result));
+        
+        setData(result);
+        setError(null);
+      } catch (err) {
+        if (!signal.aborted) {
+          setError(err);
+        }
+      } finally {
+        if (!signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+    
+    fetchData();
+    
+    return () => {
+      controller.abort();
+    };
+  }, [url]);
+  
+  return { data, loading, error };
+}
+
+export { PerformanceExample, useDataFetching };
+```
