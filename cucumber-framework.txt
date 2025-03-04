@@ -1,0 +1,1552 @@
+// Let's start with completing the Excel Parser which was cut off
+
+// src/core/data/parsers/excel.parser.ts
+import * as ExcelJS from 'exceljs';
+import path from 'path';
+import { Logger } from '../../utils/logger';
+
+export class ExcelParser {
+  private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
+  }
+
+  async parse<T>(filePath: string, sheet: string | number, options: any = {}): Promise<T[]> {
+    try {
+      const absolutePath = filePath.startsWith('/') 
+        ? filePath 
+        : path.join(process.cwd(), 'test_data', 'excel', filePath);
+        
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(absolutePath);
+      
+      const worksheet = typeof sheet === 'string' 
+        ? workbook.getWorksheet(sheet) 
+        : workbook.worksheets[sheet];
+      
+      if (!worksheet) {
+        throw new Error(`Worksheet ${sheet} not found in ${filePath}`);
+      }
+      
+      const headers: string[] = [];
+      const results: T[] = [];
+      
+      worksheet.eachRow((row, rowIndex) => {
+        // Get headers from the first row
+        if (rowIndex === 1) {
+          row.eachCell((cell) => {
+            headers.push(cell.value?.toString() || '');
+          });
+          return;
+        }
+        
+        // Process data rows
+        const rowData: Record<string, any> = {};
+        row.eachCell((cell, colIndex) => {
+          if (headers[colIndex - 1]) {
+            rowData[headers[colIndex - 1]] = cell.value;
+          }
+        });
+        
+        results.push(rowData as unknown as T);
+      });
+      
+      this.logger.info(`Successfully parsed Excel with ${results.length} records`);
+      return results;
+    } catch (error) {
+      this.logger.error(`Failed to parse Excel file: ${error}`);
+      throw new Error(`Failed to parse Excel file: ${error}`);
+    }
+  }
+}
+
+// Now let's complete the LoginPage implementation which appeared to be duplicated
+
+// src/pages/login.page.ts
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Interface Segregation Principle: Define only the methods needed
+export interface ILoginPage {
+  navigate(): Promise<void>;
+  login(username: string, password: string): Promise<void>;
+  isLoggedIn(): Promise<boolean>;
+  getErrorMessage(): Promise<string>;
+}
+
+// Liskov Substitution Principle: LoginPage can be substituted for BasePage
+export class LoginPage extends BasePage implements ILoginPage {
+  // Selectors
+  private readonly usernameInput = '#username';
+  private readonly passwordInput = '#password';
+  private readonly loginButton = 'button[type="submit"]';
+  private readonly errorMessage = '.error-message';
+  private readonly successMessage = '.success-message';
+
+  constructor(page: Page, logger: Logger) {
+    const url = `${config.web.baseUrl}/login`;
+    super(page, logger, url);
+  }
+
+  /**
+   * Navigates to the login page
+   */
+  async navigate(): Promise<void> {
+    this.logger.info('Navigating to login page');
+    await super.navigate();
+  }
+
+  /**
+   * Enters username in the username field
+   * @param username - The username to enter
+   */
+  async enterUsername(username: string): Promise<void> {
+    this.logger.info(`Entering username: ${username}`);
+    await this.fill(this.usernameInput, username);
+  }
+
+  /**
+   * Enters password in the password field
+   * @param password - The password to enter
+   */
+  async enterPassword(password: string): Promise<void> {
+    this.logger.info('Entering password');
+    await this.fill(this.passwordInput, password);
+  }
+
+  /**
+   * Clicks the login button
+   */
+  async clickLoginButton(): Promise<void> {
+    this.logger.info('Clicking login button');
+    await this.click(this.loginButton);
+    await this.page.waitForLoadState('networkidle');
+  }
+
+  /**
+   * Performs login with provided credentials
+   * @param username - The username to use
+   * @param password - The password to use
+   */
+  async login(username: string, password: string): Promise<void> {
+    await this.enterUsername(username);
+    await this.enterPassword(password);
+    await this.clickLoginButton();
+  }
+
+  /**
+   * Checks if user is logged in
+   * @returns boolean indicating if user is logged in
+   */
+  async isLoggedIn(): Promise<boolean> {
+    this.logger.info('Checking if user is logged in');
+    return await this.isVisible(this.successMessage);
+  }
+
+  /**
+   * Gets the error message text
+   * @returns The error message text
+   */
+  async getErrorMessage(): Promise<string> {
+    this.logger.info('Getting error message');
+    if (await this.isVisible(this.errorMessage)) {
+      return await this.getText(this.errorMessage);
+    }
+    return '';
+  }
+}
+
+// Let's improve the World Context implementation
+
+// src/support/world.ts
+import { World, setWorldConstructor, IWorldOptions } from '@cucumber/cucumber';
+import { Browser, BrowserContext, Page, chromium, firefox, webkit } from 'playwright';
+import { ApiService, IApiService } from '../services/api.service';
+import { UserService } from '../services/user.service';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Define custom world options
+export interface CustomWorldOptions extends IWorldOptions {
+  parameters: {
+    browser?: string;
+    headless?: boolean;
+    viewport?: { width: number; height: number };
+    slowMo?: number;
+  };
+}
+
+// Custom world for Cucumber
+export class CustomWorld extends World<CustomWorldOptions> {
+  private browser?: Browser;
+  public context?: BrowserContext;
+  public page?: Page;
+  
+  // Services
+  public apiService!: IApiService;
+  public userService!: UserService;
+  
+  // Logger
+  public logger: Logger;
+  public testId: string;
+  public scenarioName: string;
+  public context: Record<string, any> = {};
+
+  constructor(options: CustomWorldOptions) {
+    super(options);
+    this.testId = new Date().getTime().toString();
+    this.scenarioName = '';
+    this.logger = new Logger(this.testId);
+  }
+
+  /**
+   * Initialize the world
+   */
+  async init(): Promise<void> {
+    await this.initBrowser();
+    await this.initServices();
+  }
+
+  /**
+   * Initialize browser and page
+   */
+  private async initBrowser(): Promise<void> {
+    const params = this.parameters;
+    const browserType = params.browser || config.web.browserType || 'chromium';
+    const headless = params.headless !== undefined ? params.headless : config.web.headless;
+    const slowMo = params.slowMo || config.web.slowMo || 0;
+    
+    this.logger.info(`Initializing ${browserType} browser (headless: ${headless})`);
+    
+    switch (browserType.toLowerCase()) {
+      case 'chromium':
+        this.browser = await chromium.launch({ headless, slowMo });
+        break;
+      case 'firefox':
+        this.browser = await firefox.launch({ headless, slowMo });
+        break;
+      case 'webkit':
+        this.browser = await webkit.launch({ headless, slowMo });
+        break;
+      default:
+        this.browser = await chromium.launch({ headless, slowMo });
+    }
+    
+    const viewport = params.viewport || { width: 1280, height: 720 };
+    this.context = await this.browser.newContext({
+      viewport,
+      recordVideo: config.reporting.recordVideo ? { 
+        dir: config.reporting.videosPath,
+        size: { width: 1280, height: 720 }
+      } : undefined,
+      ignoreHTTPSErrors: true
+    });
+    
+    this.page = await this.context.newPage();
+    await this.page.setDefaultTimeout(config.web.timeoutMs);
+    await this.page.setDefaultNavigationTimeout(config.web.timeoutMs);
+  }
+
+  /**
+   * Initialize services
+   */
+  private async initServices(): Promise<void> {
+    this.logger.info('Initializing services');
+    this.apiService = new ApiService();
+    this.userService = new UserService(this.apiService);
+  }
+
+  /**
+   * Clean up resources
+   */
+  async teardown(): Promise<void> {
+    this.logger.info('Tearing down world');
+    
+    if (this.page) {
+      await this.page.close();
+    }
+    
+    if (this.context) {
+      await this.context.close();
+    }
+    
+    if (this.browser) {
+      await this.browser.close();
+    }
+  }
+
+  /**
+   * Get world parameters
+   */
+  get parameters() {
+    return this.options.parameters;
+  }
+}
+
+// Register world with Cucumber
+setWorldConstructor(CustomWorld);
+
+// Let's fix the step definitions to use the correct constructors and parameters
+
+// src/step-definitions/login.steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { CustomWorld } from '../support/world';
+import { LoginPage } from '../pages/login.page';
+import { HomePage } from '../pages/home.page';
+
+// Given steps
+Given('I am on the login page', async function(this: CustomWorld) {
+  const loginPage = new LoginPage(this.page!, this.logger);
+  await loginPage.navigate();
+});
+
+Given('I am logged in as {string} with password {string}', async function(this: CustomWorld, username: string, password: string) {
+  const loginPage = new LoginPage(this.page!, this.logger);
+  await loginPage.navigate();
+  await loginPage.login(username, password);
+  
+  // Verify login was successful
+  const homePage = new HomePage(this.page!, this.logger);
+  expect(await homePage.isLoggedIn()).toBeTruthy();
+});
+
+// When steps
+When('I enter username {string} and password {string}', async function(this: CustomWorld, username: string, password: string) {
+  const loginPage = new LoginPage(this.page!, this.logger);
+  await loginPage.enterUsername(username);
+  await loginPage.enterPassword(password);
+});
+
+When('I click the login button', async function(this: CustomWorld) {
+  const loginPage = new LoginPage(this.page!, this.logger);
+  await loginPage.clickLoginButton();
+});
+
+When('I login with username {string} and password {string}', async function(this: CustomWorld, username: string, password: string) {
+  const loginPage = new LoginPage(this.page!, this.logger);
+  await loginPage.login(username, password);
+});
+
+// Then steps
+Then('I should be logged in successfully', async function(this: CustomWorld) {
+  const homePage = new HomePage(this.page!, this.logger);
+  expect(await homePage.isLoggedIn()).toBeTruthy();
+});
+
+Then('I should see an error message {string}', async function(this: CustomWorld, expectedMessage: string) {
+  const loginPage = new LoginPage(this.page!, this.logger);
+  const actualMessage = await loginPage.getErrorMessage();
+  expect(actualMessage).toContain(expectedMessage);
+});
+
+Then('I should see my username {string} in the header', async function(this: CustomWorld, expectedUsername: string) {
+  const homePage = new HomePage(this.page!, this.logger);
+  const userInfo = await homePage.getUserInfo();
+  expect(userInfo.name).toContain(expectedUsername);
+});
+
+// Fix the HomePage implementation
+
+// src/pages/home.page.ts
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+// Interface Segregation Principle: Define a focused interface
+export interface IHomePage {
+  navigate(): Promise<void>;
+  isLoggedIn(): Promise<boolean>;
+  getUserInfo(): Promise<{ name: string; email: string }>;
+  logout(): Promise<void>;
+}
+
+export class HomePage extends BasePage implements IHomePage {
+  // Selectors
+  private readonly userInfoSection = '.user-info';
+  private readonly userNameElement = '.user-info .name';
+  private readonly userEmailElement = '.user-info .email';
+  private readonly logoutButton = '.logout-button';
+  private readonly loginLink = '.login-link';
+
+  constructor(page: Page, logger: Logger) {
+    const url = `${config.web.baseUrl}/home`;
+    super(page, logger, url);
+  }
+
+  /**
+   * Navigates to the home page
+   */
+  async navigate(): Promise<void> {
+    this.logger.info('Navigating to home page');
+    await super.navigate();
+  }
+
+  /**
+   * Checks if the user is logged in
+   * @returns boolean indicating if user is logged in
+   */
+  async isLoggedIn(): Promise<boolean> {
+    this.logger.info('Checking if user is logged in');
+    return await this.isVisible(this.userInfoSection);
+  }
+
+  /**
+   * Gets the user information from the page
+   * @returns Object containing user name and email
+   */
+  async getUserInfo(): Promise<{ name: string; email: string }> {
+    this.logger.info('Getting user information');
+    if (!(await this.isLoggedIn())) {
+      throw new Error('User is not logged in');
+    }
+
+    const name = await this.getText(this.userNameElement);
+    const email = await this.getText(this.userEmailElement);
+
+    return { name, email };
+  }
+
+  /**
+   * Performs logout action
+   */
+  async logout(): Promise<void> {
+    this.logger.info('Logging out');
+    if (await this.isLoggedIn()) {
+      await this.click(this.logoutButton);
+      await this.page.waitForLoadState('networkidle');
+    } else {
+      this.logger.warn('Cannot logout: User is not logged in');
+    }
+  }
+}
+
+// Let's create a feature file example
+
+// features/web/login.feature
+/**
+Feature: User Authentication
+  As a user of the application
+  I want to be able to login with my credentials
+  So that I can access my account
+
+  Background:
+    Given I am on the login page
+
+  Scenario: Successful login with valid credentials
+    When I enter username "valid_user" and password "valid_password"
+    And I click the login button
+    Then I should be logged in successfully
+    And I should see my username "valid_user" in the header
+
+  Scenario: Failed login with invalid credentials
+    When I enter username "invalid_user" and password "invalid_password"
+    And I click the login button
+    Then I should see an error message "Invalid username or password"
+
+  Scenario Outline: Multiple login attempts with different credentials
+    When I login with username "<username>" and password "<password>"
+    Then I should <result>
+
+    Examples:
+      | username    | password        | result                                     |
+      | valid_user  | valid_password  | be logged in successfully                  |
+      | invalid     | invalid         | see an error message "Invalid credentials" |
+      | valid_user  | wrong_password  | see an error message "Invalid credentials" |
+      | locked_user | valid_password  | see an error message "Account is locked"   |
+**/
+
+// Let's fix the BaseComponent class that was referenced but not defined
+
+// src/components/base.component.ts
+import { Page, Locator } from 'playwright';
+import { Logger } from '../core/utils/logger';
+
+export abstract class BaseComponent {
+  protected page: Page;
+  protected logger: Logger;
+
+  constructor(page: Page, logger?: Logger) {
+    this.page = page;
+    this.logger = logger || new Logger('BaseComponent');
+  }
+
+  /**
+   * Waits for an element to be visible
+   * @param selector - Element selector
+   * @param timeout - Wait timeout in milliseconds
+   */
+  protected async waitForVisible(selector: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for ${selector} to be visible`);
+    await this.page.waitForSelector(selector, { state: 'visible', timeout });
+  }
+
+  /**
+   * Checks if element is visible
+   * @param selector - Element selector
+   * @param timeout - Wait timeout in milliseconds
+   */
+  protected async isVisible(selector: string, timeout?: number): Promise<boolean> {
+    try {
+      await this.waitForVisible(selector, timeout || 1000);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Clicks on an element
+   * @param selector - Element selector
+   */
+  protected async click(selector: string): Promise<void> {
+    this.logger.debug(`Clicking on ${selector}`);
+    await this.waitForVisible(selector);
+    await this.page.click(selector);
+  }
+
+  /**
+   * Gets text from an element
+   * @param selector - Element selector
+   */
+  protected async getText(selector: string): Promise<string> {
+    this.logger.debug(`Getting text from ${selector}`);
+    await this.waitForVisible(selector);
+    return (await this.page.textContent(selector)) || '';
+  }
+
+  /**
+   * Gets a Playwright locator for the selector
+   * @param selector - Element selector
+   */
+  protected getLocator(selector: string): Locator {
+    return this.page.locator(selector);
+  }
+}
+
+// Let's add a complete example of a wait utils class
+
+// src/core/utils/wait.utils.ts
+import { Page } from 'playwright';
+import { Logger } from './logger';
+import config from '@config/environment.config';
+
+export class WaitUtils {
+  private page: Page;
+  private logger: Logger;
+  private defaultTimeout: number;
+
+  constructor(page: Page, logger: Logger) {
+    this.page = page;
+    this.logger = logger;
+    this.defaultTimeout = config.web.timeoutMs;
+  }
+
+  /**
+   * Waits for element to be visible
+   * @param selector - Element selector
+   * @param timeout - Custom timeout in milliseconds
+   */
+  async waitForElementToBeVisible(selector: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element ${selector} to be visible`);
+    await this.page.waitForSelector(selector, {
+      state: 'visible',
+      timeout: timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Waits for element to be hidden
+   * @param selector - Element selector
+   * @param timeout - Custom timeout in milliseconds
+   */
+  async waitForElementToBeHidden(selector: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element ${selector} to be hidden`);
+    await this.page.waitForSelector(selector, {
+      state: 'hidden',
+      timeout: timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Waits for element to be enabled
+   * @param selector - Element selector
+   * @param timeout - Custom timeout in milliseconds
+   */
+  async waitForElementToBeEnabled(selector: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element ${selector} to be enabled`);
+    await this.page.waitForSelector(selector, {
+      state: 'visible',
+      timeout: timeout || this.defaultTimeout
+    });
+    
+    // Check if element is disabled
+    const isDisabled = await this.page.locator(selector).isDisabled();
+    if (isDisabled) {
+      throw new Error(`Element ${selector} is disabled`);
+    }
+  }
+
+  /**
+   * Waits for network to be idle
+   * @param timeout - Custom timeout in milliseconds
+   */
+  async waitForNetworkIdle(timeout?: number): Promise<void> {
+    this.logger.debug('Waiting for network to be idle');
+    await this.page.waitForLoadState('networkidle', {
+      timeout: timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Waits for page to be fully loaded
+   * @param timeout - Custom timeout in milliseconds
+   */
+  async waitForPageLoad(timeout?: number): Promise<void> {
+    this.logger.debug('Waiting for page to load');
+    await this.page.waitForLoadState('load', {
+      timeout: timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Waits for a specific number of milliseconds
+   * @param ms - Milliseconds to wait
+   */
+  async wait(ms: number): Promise<void> {
+    this.logger.debug(`Waiting for ${ms}ms`);
+    await this.page.waitForTimeout(ms);
+  }
+
+  /**
+   * Waits for a condition to be true
+   * @param condition - Function that returns a promise resolving to a boolean
+   * @param options - Options for the wait
+   */
+  async waitForCondition(
+    condition: () => Promise<boolean>,
+    options: { timeout?: number; pollingInterval?: number; message?: string } = {}
+  ): Promise<void> {
+    const timeout = options.timeout || this.defaultTimeout;
+    const pollingInterval = options.pollingInterval || 100;
+    const message = options.message || 'Condition not met';
+    
+    this.logger.debug(`Waiting for condition: ${message}`);
+    
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeout) {
+      if (await condition()) {
+        return;
+      }
+      
+      await this.wait(pollingInterval);
+    }
+    
+    throw new Error(`Timeout: ${message}`);
+  }
+}
+
+// Let's add a string utils class that's referenced in the framework
+
+// src/core/utils/string.utils.ts
+export class StringUtils {
+  /**
+   * Generates a random string of specified length
+   * @param length - Length of the string to generate
+   * @param chars - Characters to use (defaults to alphanumeric)
+   * @returns Random string
+   */
+  static generateRandomString(length: number, chars: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'): string {
+    let result = '';
+    const charsLength = chars.length;
+    
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * charsLength));
+    }
+    
+    return result;
+  }
+
+  /**
+   * Converts a string to camel case
+   * @param str - String to convert
+   * @returns Camel cased string
+   */
+  static toCamelCase(str: string): string {
+    return str
+      .replace(/(?:^\w|[A-Z]|\b\w)/g, (word, index) => {
+        return index === 0 ? word.toLowerCase() : word.toUpperCase();
+      })
+      .replace(/\s+/g, '');
+  }
+
+  /**
+   * Converts a string to pascal case
+   * @param str - String to convert
+   * @returns Pascal cased string
+   */
+  static toPascalCase(str: string): string {
+    return str
+      .replace(/(?:^\w|[A-Z]|\b\w)/g, (word) => word.toUpperCase())
+      .replace(/\s+/g, '');
+  }
+
+  /**
+   * Converts a string to kebab case
+   * @param str - String to convert
+   * @returns Kebab cased string
+   */
+  static toKebabCase(str: string): string {
+    return str
+      .replace(/([a-z])([A-Z])/g, '$1-$2')
+      .replace(/\s+/g, '-')
+      .toLowerCase();
+  }
+
+  /**
+   * Truncates a string to a specified length
+   * @param str - String to truncate
+   * @param length - Maximum length
+   * @param suffix - Suffix to add if truncated (default: '...')
+   * @returns Truncated string
+   */
+  static truncate(str: string, length: number, suffix: string = '...'): string {
+    if (str.length <= length) {
+      return str;
+    }
+    
+    return str.substring(0, length - suffix.length) + suffix;
+  }
+
+  /**
+   * Sanitizes a string for use in file paths
+   * @param str - String to sanitize
+   * @returns Sanitized string
+   */
+  static sanitizeForFilePath(str: string): string {
+    return str
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, '') // Remove special characters
+      .replace(/\s+/g, '_') // Replace spaces with underscores
+      .replace(/-+/g, '-'); // Replace multiple hyphens with a single hyphen
+  }
+}
+
+// Let's also add a complete example feature file for API testing
+
+// features/api/users-api.feature
+/**
+Feature: User API Endpoints
+  As an API consumer
+  I want to access user data via RESTful endpoints
+  So that I can integrate with the user service
+
+  Background:
+    Given I am authenticated to the API with valid credentials
+
+  Scenario: Get a list of all users
+    When I send a GET request to "/api/users"
+    Then the response status code should be 200
+    And the response should have a "data" array with at least 1 item
+    And each item in the "data" array should have the fields:
+      | field     | type   |
+      | id        | number |
+      | username  | string |
+      | email     | string |
+      | firstName | string |
+      | lastName  | string |
+
+  Scenario: Get a specific user by ID
+    When I send a GET request to "/api/users/1"
+    Then the response status code should be 200
+    And the response should have field "id" with value 1
+
+  Scenario: Attempt to get a non-existent user
+    When I send a GET request to "/api/users/999"
+    Then the response status code should be 404
+    And the response should have field "error" with value "User not found"
+
+  Scenario: Create a new user
+    Given I have the following user data:
+      | field     | value            |
+      | username  | newuser123       |
+      | email     | new@example.com  |
+      | firstName | New              |
+      | lastName  | User             |
+      | password  | SecurePassword1! |
+    When I send a POST request to "/api/users" with the user data
+    Then the response status code should be 201
+    And the response should have field "username" with value "newuser123"
+    And the response should have field "email" with value "new@example.com"
+    And the response should not have field "password"
+
+  Scenario: Update an existing user
+    Given I have the following user data:
+      | field     | value           |
+      | firstName | Updated         |
+      | lastName  | Name            |
+    When I send a PUT request to "/api/users/1" with the user data
+    Then the response status code should be 200
+    And the response should have field "firstName" with value "Updated"
+    And the response should have field "lastName" with value "Name"
+
+  Scenario: Delete a user
+    When I send a DELETE request to "/api/users/2"
+    Then the response status code should be 204
+    When I send a GET request to "/api/users/2"
+    Then the response status code should be 404
+**/
+
+// Let's add the step definitions for API testing
+
+// src/step-definitions/api/api.steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { CustomWorld } from '../../support/world';
+
+// Store API test data
+let requestData: any = {};
+let responseData: any = {};
+
+Given('I am authenticated to the API with valid credentials', async function(this: CustomWorld) {
+  // Login and get authentication token
+  const credentials = {
+    username: 'api_user',
+    password: 'api_password'
+  };
+  
+  try {
+    const authResponse = await this.apiService.post('/auth/login', credentials);
+    const token = authResponse.token;
+    
+    // Store token for future requests
+    this.context.authToken = token;
+    
+    // Set default headers for all future requests
+    this.apiService.setDefaultHeader('Authorization', `Bearer ${token}`);
+  } catch (error) {
+    this.logger.error(`Authentication failed: ${error}`);
+    throw error;
+  }
+});
+
+Given('I have the following user data:', function(this: CustomWorld, dataTable) {
+  // Convert data table to object
+  requestData = {};
+  
+  const rows = dataTable.hashes();
+  for (const row of rows) {
+    requestData[row.field] = row.value;
+  }
+  
+  this.logger.info(`Request data prepared: ${JSON.stringify(requestData)}`);
+});
+
+When('I send a GET request to {string}', async function(this: CustomWorld, endpoint) {
+  try {
+    this.logger.info(`Sending GET request to ${endpoint}`);
+    const response = await this.apiService.get(endpoint);
+    responseData = response;
+    this.logger.info(`Received response: ${JSON.stringify(responseData)}`);
+  } catch (error) {
+    this.logger.error(`API request failed: ${error}`);
+    responseData = error.response?.data || { error: error.message };
+    this.context.statusCode = error.response?.status || 500;
+  }
+});
+
+When('I send a POST request to {string} with the user data', async function(this: CustomWorld, endpoint) {
+  try {
+    this.logger.info(`Sending POST request to ${endpoint} with data: ${JSON.stringify(requestData)}`);
+    const response = await this.apiService.post(endpoint, requestData);
+    responseData = response;
+    this.logger.info(`Received response: ${JSON.stringify(responseData)}`);
+  } catch (error) {
+    this.logger.error(`API request failed: ${error}`);
+    responseData = error.response?.data || { error: error.message };
+    this.context.statusCode = error.response?.status || 500;
+  }
+});
+
+When('I send a PUT request to {string} with the user data', async function(this: CustomWorld, endpoint) {
+  try {
+    this.logger.info(`Sending PUT request to ${endpoint} with data: ${JSON.stringify(requestData)}`);
+    const response = await this.apiService.put(endpoint, requestData);
+    responseData = response;
+    this.logger.info(`Received response: ${JSON.stringify(responseData)}`);
+  } catch (error) {
+    this.logger.error(`API request failed: ${error}`);
+    responseData = error.response?.data || { error: error.message };
+    this.context.statusCode = error.response?.status || 500;
+  }
+});
+
+When('I send a DELETE request to {string}', async function(this: CustomWorld, endpoint) {
+  try {
+    this.logger.info(`Sending DELETE request to ${endpoint}`);
+    const response = await this.apiService.delete(endpoint);
+    responseData = response;
+    this.logger.info(`Received response: ${JSON.stringify(responseData)}`);
+  } catch (error) {
+    this.logger.error(`API request failed: ${error}`);
+    responseData = error.response?.data || { error: error.message };
+    this.context.statusCode = error.response?.status || 500;
+  }
+});
+
+Then('the response status code should be {int}', function(this: CustomWorld, statusCode) {
+  const actualStatusCode = this.context.statusCode || responseData.statusCode;
+  expect(actualStatusCode).toBe(statusCode);
+});
+
+Then('the response should have field {string} with value {string}', function(this: CustomWorld, field, expectedValue) {
+  expect(responseData).toHaveProperty(field);
+  expect(responseData[field].toString()).toBe(expectedValue);
+});
+
+Then('the response should have field {string} with value {int}', function(this: CustomWorld, field, expectedValue) {
+  expect(responseData).toHaveProperty(field);
+  expect(responseData[field]).toBe(expectedValue);
+});
+
+Then('the response should not have field {string}', function(this: CustomWorld, field) {
+  expect(responseData).not.toHaveProperty(field);
+});
+
+Then('the response should have a {string} array with at least {int} item', function(this: CustomWorld, field, minItems) {
+  expect(responseData).toHaveProperty(field);
+  expect(Array.isArray(responseData[field])).toBeTruthy();
+  expect(responseData[field].length).toBeGreaterThanOrEqual(minItems);
+});
+
+Then('each item in the {string} array should have the fields:', function(this: CustomWorld, arrayField, dataTable) {
+  const expectedFields = dataTable.hashes();
+  const items = responseData[arrayField];
+  
+  expect(Array.isArray(items)).toBeTruthy();
+  
+  for (const item of items) {
+    for (const expectedField of expectedFields) {
+      const { field, type } = expectedField;
+      
+      expect(item).toHaveProperty(field);
+      
+      // Verify the type
+      if (type === 'number') {
+        expect(typeof item[field]).toBe('number');
+      } else if (type === 'string') {
+        expect(typeof item[field]).toBe('string');
+      } else if (type === 'boolean') {
+        expect(typeof item[field]).toBe('boolean');
+      } else if (type === 'object') {
+        expect(typeof item[field]).toBe('object');
+      } else if (type === 'array') {
+        expect(Array.isArray(item[field])).toBeTruthy();
+      }
+    }
+  }
+});
+
+// Let's also complete the package.json file that was mentioned in the framework
+
+// package.json
+/**
+{
+  "name": "cucumber-playwright-framework",
+  "version": "1.0.0",
+  "description": "Professional BDD framework with Cucumber, Playwright and TypeScript",
+  "main": "index.js",
+  "scripts": {
+    "test": "cucumber-js",
+    "test:web": "cucumber-js -p web",
+    "test:api": "cucumber-js -p api",
+    "test:parallel": "cucumber-js -p parallel",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "report": "node src/core/reporting/generate-report.js",
+    "build": "tsc"
+  },
+  "keywords": [
+    "cucumber",
+    "playwright",
+    "bdd",
+    "typescript",
+    "automation",
+    "testing"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@cucumber/cucumber": "^9.0.0",
+    "axios": "^1.4.0",
+    "chalk": "^4.1.2",
+    "csv-parser": "^3.0.0",
+    "dotenv": "^16.0.3",
+    "exceljs": "^4.3.0",
+    "fast-xml-parser": "^4.2.2",
+    "jsonpath": "^1.1.1",
+    "mssql": "^9.1.1",
+    "mysql2": "^3.3.3",
+    "oracledb": "^6.0.1",
+    "playwright": "^1.35.0",
+    "uuid": "^9.0.0",
+    "winston": "^3.9.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.35.0",
+    "@types/jsonpath": "^0.2.0",
+    "@types/node": "^20.2.5",
+    "@types/uuid": "^9.0.1",
+    "@typescript-eslint/eslint-plugin": "^5.59.9",
+    "@typescript-eslint/parser": "^5.59.9",
+    "eslint": "^8.42.0",
+    "eslint-config-prettier": "^8.8.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "^2.8.8",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.3"
+  }
+}
+**/
+
+// Let's add a .env file example for environment configuration
+
+// .env.development
+/**
+# Web Configuration
+BASE_URL=https://dev.example.com
+BROWSER_TYPE=chromium
+HEADLESS=false
+TIMEOUT_MS=30000
+SLOW_MO=50
+
+# API Configuration
+API_BASE_URL=https://dev-api.example.com
+API_TIMEOUT_MS=30000
+
+# Database Configuration
+MSSQL_SERVER=localhost
+MSSQL_DATABASE=devdb
+MSSQL_USER=sa
+MSSQL_PASSWORD=Password123
+MSSQL_PORT=1433
+
+MYSQL_HOST=localhost
+MYSQL_DATABASE=devdb
+MYSQL_USER=root
+MYSQL_PASSWORD=password
+MYSQL_PORT=3306
+
+ORACLE_CONNECT_STRING=localhost:1521/XE
+ORACLE_USER=system
+ORACLE_PASSWORD=password
+
+# Reporting Configuration
+SCREENSHOTS_PATH=./reports/screenshots
+VIDEOS_PATH=./reports/videos
+REPORTS_PATH=./reports
+RECORD_VIDEO=false
+CAPTURE_SCREENSHOT_ON_FAILURE=true
+
+# Logging
+LOG_LEVEL=debug
+**/
+
+// Now let's add a real example of a Gherkin feature file for navigation
+
+// features/web/navigation.feature
+/**
+Feature: Website Navigation
+  As a user of the website
+  I want to navigate through different sections
+  So that I can access the information I need
+
+  Background:
+    Given I am logged in as "standard_user" with password "secret_sauce"
+
+  Scenario: Navigate to product categories
+    When I click on the "Categories" menu item
+    Then I should see the following categories:
+      | Electronics |
+      | Clothing    |
+      | Home        |
+      | Books       |
+      | Sports      |
+
+  Scenario: Search for products
+    When I enter "laptop" in the search box
+    And I click the search button
+    Then I should see product search results
+    And the page title should contain "Search Results for: laptop"
+    And there should be at least 3 products in the results
+
+  Scenario: Use the breadcrumb navigation
+    Given I navigate to the "Electronics" category
+    When I click on the "Computers" subcategory
+    And I click on the "Laptops" product group
+    Then the breadcrumb should show "Home > Electronics > Computers > Laptops"
+    
+  Scenario: Navigate using the sitemap
+    When I scroll to the bottom of the page
+    And I click on the "Sitemap" link
+    Then I should be taken to the sitemap page
+    And the sitemap should contain links to all main sections
+**/
+
+// Let's add the navigation step definitions
+
+// src/step-definitions/web/navigation.steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { CustomWorld } from '../../support/world';
+import { HomePage } from '../../pages/home.page';
+import { NavigationComponent } from '../../components/navigation.component';
+import { SearchResultsPage } from '../../pages/search-results.page';
+import { CategoryPage } from '../../pages/category.page';
+import { SitemapPage } from '../../pages/sitemap.page';
+
+When('I click on the {string} menu item', async function(this: CustomWorld, menuItem) {
+  const navigationComponent = new NavigationComponent(this.page!, this.logger);
+  await navigationComponent.clickMenuItem(menuItem);
+});
+
+Then('I should see the following categories:', async function(this: CustomWorld, dataTable) {
+  const categories = dataTable.raw().map(row => row[0]);
+  const navigationComponent = new NavigationComponent(this.page!, this.logger);
+  
+  for (const category of categories) {
+    expect(await navigationComponent.isCategoryVisible(category)).toBeTruthy();
+  }
+});
+
+When('I enter {string} in the search box', async function(this: CustomWorld, searchTerm) {
+  const navigationComponent = new NavigationComponent(this.page!, this.logger);
+  await navigationComponent.enterSearchTerm(searchTerm);
+});
+
+When('I click the search button', async function(this: CustomWorld) {
+  const navigationComponent = new NavigationComponent(this.page!, this.logger);
+  await navigationComponent.submitSearch();
+});
+
+Then('I should see product search results', async function(this: CustomWorld) {
+  const searchResultsPage = new SearchResultsPage(this.page!, this.logger);
+  expect(await searchResultsPage.isLoaded()).toBeTruthy();
+});
+
+Then('the page title should contain {string}', async function(this: CustomWorld, expectedTitle) {
+  const title = await this.page!.title();
+  expect(title).toContain(expectedTitle);
+});
+
+Then('there should be at least {int} products in the results', async function(this: CustomWorld, minCount) {
+  const searchResultsPage = new SearchResultsPage(this.page!, this.logger);
+  const count = await searchResultsPage.getProductCount();
+  expect(count).toBeGreaterThanOrEqual(minCount);
+});
+
+Given('I navigate to the {string} category', async function(this: CustomWorld, category) {
+  const navigationComponent = new NavigationComponent(this.page!, this.logger);
+  await navigationComponent.navigateToCategory(category);
+});
+
+When('I click on the {string} subcategory', async function(this: CustomWorld, subcategory) {
+  const categoryPage = new CategoryPage(this.page!, this.logger);
+  await categoryPage.clickSubcategory(subcategory);
+});
+
+When('I click on the {string} product group', async function(this: CustomWorld, productGroup) {
+  const categoryPage = new CategoryPage(this.page!, this.logger);
+  await categoryPage.clickProductGroup(productGroup);
+});
+
+Then('the breadcrumb should show {string}', async function(this: CustomWorld, expectedBreadcrumb) {
+  const navigationComponent = new NavigationComponent(this.page!, this.logger);
+  const breadcrumb = await navigationComponent.getBreadcrumbText();
+  expect(breadcrumb).toBe(expectedBreadcrumb);
+});
+
+When('I scroll to the bottom of the page', async function(this: CustomWorld) {
+  await this.page!.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+});
+
+When('I click on the {string} link', async function(this: CustomWorld, linkText) {
+  await this.page!.click(`text="${linkText}"`);
+});
+
+Then('I should be taken to the sitemap page', async function(this: CustomWorld) {
+  const sitemapPage = new SitemapPage(this.page!, this.logger);
+  expect(await sitemapPage.isLoaded()).toBeTruthy();
+});
+
+Then('the sitemap should contain links to all main sections', async function(this: CustomWorld) {
+  const sitemapPage = new SitemapPage(this.page!, this.logger);
+  const mainSections = await sitemapPage.getMainSections();
+  
+  const expectedSections = [
+    'Home', 'Products', 'Categories', 'Account', 'Contact Us', 'About Us'
+  ];
+  
+  for (const section of expectedSections) {
+    expect(mainSections).toContain(section);
+  }
+});
+
+// Let's create the navigation component that was referenced
+
+// src/components/navigation.component.ts
+import { Page } from 'playwright';
+import { BaseComponent } from './base.component';
+import { Logger } from '../core/utils/logger';
+
+export class NavigationComponent extends BaseComponent {
+  // Selectors
+  private readonly menuItemSelector = (name: string) => `nav .menu-item:has-text("${name}")`;
+  private readonly categorySelector = (name: string) => `.categories-menu .category:has-text("${name}")`;
+  private readonly searchInputSelector = '#search-input';
+  private readonly searchButtonSelector = '#search-submit';
+  private readonly breadcrumbSelector = '.breadcrumb';
+  
+  constructor(page: Page, logger: Logger) {
+    super(page, logger);
+  }
+  
+  /**
+   * Clicks on a menu item by name
+   * @param menuItem - Menu item name
+   */
+  async clickMenuItem(menuItem: string): Promise<void> {
+    this.logger.info(`Clicking on menu item: ${menuItem}`);
+    await this.click(this.menuItemSelector(menuItem));
+    await this.page.waitForLoadState('networkidle');
+  }
+  
+  /**
+   * Checks if a category is visible in the menu
+   * @param category - Category name
+   * @returns True if category is visible
+   */
+  async isCategoryVisible(category: string): Promise<boolean> {
+    this.logger.info(`Checking if category is visible: ${category}`);
+    return await this.isVisible(this.categorySelector(category));
+  }
+  
+  /**
+   * Enters a search term in the search input
+   * @param searchTerm - Term to search for
+   */
+  async enterSearchTerm(searchTerm: string): Promise<void> {
+    this.logger.info(`Entering search term: ${searchTerm}`);
+    await this.page.fill(this.searchInputSelector, searchTerm);
+  }
+  
+  /**
+   * Submits the search form
+   */
+  async submitSearch(): Promise<void> {
+    this.logger.info('Submitting search');
+    await this.click(this.searchButtonSelector);
+    await this.page.waitForLoadState('networkidle');
+  }
+  
+  /**
+   * Navigates to a specific category
+   * @param category - Category name
+   */
+  async navigateToCategory(category: string): Promise<void> {
+    this.logger.info(`Navigating to category: ${category}`);
+    await this.click(this.categorySelector(category));
+    await this.page.waitForLoadState('networkidle');
+  }
+  
+  /**
+   * Gets the breadcrumb text
+   * @returns Breadcrumb text
+   */
+  async getBreadcrumbText(): Promise<string> {
+    this.logger.info('Getting breadcrumb text');
+    return await this.getText(this.breadcrumbSelector);
+  }
+}
+
+// Now, let's implement the missing page objects referenced in the navigation steps
+
+// src/pages/search-results.page.ts
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+export class SearchResultsPage extends BasePage {
+  // Selectors
+  private readonly searchResultsContainer = '.search-results';
+  private readonly productItems = '.product-item';
+  private readonly noResultsMessage = '.no-results-message';
+  
+  constructor(page: Page, logger: Logger) {
+    // URL could be dynamic based on search parameters
+    super(page, logger, `${config.web.baseUrl}/search`);
+  }
+  
+  /**
+   * Checks if the search results page is loaded
+   * @returns True if page is loaded
+   */
+  async isLoaded(): Promise<boolean> {
+    return await this.isVisible(this.searchResultsContainer);
+  }
+  
+  /**
+   * Gets the number of products in search results
+   * @returns Product count
+   */
+  async getProductCount(): Promise<number> {
+    this.logger.info('Getting product count');
+    return await this.page.locator(this.productItems).count();
+  }
+  
+  /**
+   * Checks if there are no search results
+   * @returns True if no results found
+   */
+  async hasNoResults(): Promise<boolean> {
+    return await this.isVisible(this.noResultsMessage);
+  }
+  
+  /**
+   * Gets all product names from search results
+   * @returns Array of product names
+   */
+  async getProductNames(): Promise<string[]> {
+    this.logger.info('Getting product names');
+    return await this.page.locator(`${this.productItems} .product-name`).allTextContents();
+  }
+  
+  /**
+   * Gets all product prices from search results
+   * @returns Array of product prices
+   */
+  async getProductPrices(): Promise<string[]> {
+    this.logger.info('Getting product prices');
+    return await this.page.locator(`${this.productItems} .product-price`).allTextContents();
+  }
+  
+  /**
+   * Clicks on a product by name
+   * @param productName - Name of product to click
+   */
+  async clickProduct(productName: string): Promise<void> {
+    this.logger.info(`Clicking on product: ${productName}`);
+    await this.click(`.product-item:has-text("${productName}")`);
+    await this.page.waitForLoadState('networkidle');
+  }
+}
+
+// src/pages/category.page.ts
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+export class CategoryPage extends BasePage {
+  // Selectors
+  private readonly subcategorySelector = (name: string) => `.subcategories .subcategory:has-text("${name}")`;
+  private readonly productGroupSelector = (name: string) => `.product-groups .product-group:has-text("${name}")`;
+  private readonly productItems = '.product-item';
+  private readonly categoryTitle = '.category-title';
+  
+  constructor(page: Page, logger: Logger, categoryPath?: string) {
+    const url = categoryPath ? `${config.web.baseUrl}/${categoryPath}` : '';
+    super(page, logger, url);
+  }
+  
+  /**
+   * Gets the category title
+   * @returns Category title text
+   */
+  async getCategoryTitle(): Promise<string> {
+    return await this.getText(this.categoryTitle);
+  }
+  
+  /**
+   * Clicks on a subcategory
+   * @param subcategory - Subcategory name
+   */
+  async clickSubcategory(subcategory: string): Promise<void> {
+    this.logger.info(`Clicking on subcategory: ${subcategory}`);
+    await this.click(this.subcategorySelector(subcategory));
+    await this.page.waitForLoadState('networkidle');
+  }
+  
+  /**
+   * Clicks on a product group
+   * @param productGroup - Product group name
+   */
+  async clickProductGroup(productGroup: string): Promise<void> {
+    this.logger.info(`Clicking on product group: ${productGroup}`);
+    await this.click(this.productGroupSelector(productGroup));
+    await this.page.waitForLoadState('networkidle');
+  }
+  
+  /**
+   * Gets the number of products in the category
+   * @returns Product count
+   */
+  async getProductCount(): Promise<number> {
+    return await this.page.locator(this.productItems).count();
+  }
+  
+  /**
+   * Checks if subcategories are visible
+   * @returns True if subcategories are visible
+   */
+  async hasSubcategories(): Promise<boolean> {
+    return await this.isVisible('.subcategories');
+  }
+  
+  /**
+   * Gets all subcategory names
+   * @returns Array of subcategory names
+   */
+  async getSubcategoryNames(): Promise<string[]> {
+    return await this.page.locator('.subcategories .subcategory').allTextContents();
+  }
+}
+
+// src/pages/sitemap.page.ts
+import { Page } from 'playwright';
+import { BasePage } from './base.page';
+import { Logger } from '../core/utils/logger';
+import config from '@config/environment.config';
+
+export class SitemapPage extends BasePage {
+  // Selectors
+  private readonly sitemapContainer = '.sitemap-container';
+  private readonly mainSectionLinks = '.sitemap-section.main a';
+  
+  constructor(page: Page, logger: Logger) {
+    super(page, logger, `${config.web.baseUrl}/sitemap`);
+  }
+  
+  /**
+   * Checks if the sitemap page is loaded
+   * @returns True if page is loaded
+   */
+  async isLoaded(): Promise<boolean> {
+    return await this.isVisible(this.sitemapContainer);
+  }
+  
+  /**
+   * Gets all main section names from the sitemap
+   * @returns Array of main section names
+   */
+  async getMainSections(): Promise<string[]> {
+    this.logger.info('Getting main sitemap sections');
+    return await this.page.locator(this.mainSectionLinks).allTextContents();
+  }
+  
+  /**
+   * Gets all section links from the sitemap
+   * @returns Array of all link texts
+   */
+  async getAllLinks(): Promise<string[]> {
+    this.logger.info('Getting all sitemap links');
+    return await this.page.locator('.sitemap-container a').allTextContents();
+  }
+  
+  /**
+   * Navigates to a section from the sitemap
+   * @param sectionName - Name of the section to navigate to
+   */
+  async navigateToSection(sectionName: string): Promise<void> {
+    this.logger.info(`Navigating to section: ${sectionName}`);
+    await this.click(`a:has-text("${sectionName}")`);
+    await this.page.waitForLoadState('networkidle');
+  }
+}
+
+// Let's add a sample model file to demonstrate data modeling
+
+// src/models/user.model.ts
+export interface User {
+  id?: number;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  isActive: boolean;
+  lastLoginDate?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface UserCredentials {
+  username: string;
+  password: string;
+}
+
+export class UserModel implements User {
+  id?: number;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  isActive: boolean;
+  lastLoginDate?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+  
+  constructor(data: User) {
+    this.id = data.id;
+    this.username = data.username;
+    this.email = data.email;
+    this.firstName = data.firstName;
+    this.lastName = data.lastName;
+    this.role = data.role;
+    this.isActive = data.isActive;
+    this.lastLoginDate = data.lastLoginDate;
+    this.createdAt = data.createdAt;
+    this.updatedAt = data.updatedAt;
+  }
+  
+  getFullName(): string {
+    return `${this.firstName} ${this.lastName}`;
+  }
+  
+  toJSON(): User {
+    return {
+      id: this.id,
+      username: this.username,
+      email: this.email,
+      firstName: this.firstName,
+      lastName: this.lastName,
+      role: this.role,
+      isActive: this.isActive,
+      lastLoginDate: this.lastLoginDate,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt
+    };
+  }
+  
+  static fromJSON(json: any): UserModel {
+    return new UserModel({
+      id: json.id,
+      username: json.username,
+      email: json.email,
+      firstName: json.firstName,
+      lastName: json.lastName,
+      role: json.role,
+      isActive: json.isActive,
+      lastLoginDate: json.lastLoginDate ? new Date(json.lastLoginDate) : undefined,
+      createdAt: json.createdAt ? new Date(json.createdAt) : undefined,
+      updatedAt: json.updatedAt ? new Date(json.updatedAt) : undefined
+    });
+  }
+}
