@@ -1,0 +1,592 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Define types for our conversion process
+interface ConversionMapping {
+  pattern: RegExp;
+  replacement: string | ((match: string, ...groups: string[]) => string);
+}
+
+// Interface for locator processing
+interface ParsedLocator {
+  type: string;
+  value: string;
+  desc?: string;
+}
+
+class QafToPlaywrightConverter {
+  private javaToTypeScriptMappings: ConversionMapping[] = [
+    // Java imports to TypeScript imports
+    {
+      pattern: /import\s+com\.qmetry\.qaf\.automation\.ui\.WebDriverTestCase;/g,
+      replacement: "import { test, expect } from '@playwright/test';"
+    },
+    {
+      pattern: /import\s+org\.openqa\.selenium\..+;/g,
+      replacement: "// Playwright import already included"
+    },
+    {
+      pattern: /import\s+com\.qmetry\.qaf\.automation\.step\.QAFTestStep;/g, 
+      replacement: "// Playwright uses test.step() instead of annotations"
+    },
+    {
+      pattern: /import\s+com\.qmetry\.qaf\.automation\.ui\.(QAFWebElement|WebDriverBaseTestPage|QAFBaseTestPage);/g,
+      replacement: "// Playwright page object model import"
+    },
+    {
+      pattern: /import\s+org\.openqa\.selenium\.support\.FindBy;/g,
+      replacement: "// Playwright uses locators instead of FindBy annotations"
+    },
+    {
+      pattern: /import\s+.*CSWebElement;/g,
+      replacement: "// Custom CSWebElement will be converted to Playwright Locator"
+    },
+    
+    // QAF annotations to Playwright test structure
+    {
+      pattern: /@QAFTestStep\(description\s*=\s*"(.+?)"\)/g,
+      replacement: "// @step: $1"
+    },
+    {
+      pattern: /public\s+class\s+(\w+)\s+extends\s+WebDriverTestCase\s*\{/g,
+      replacement: "// Test file for $1\n"
+    },
+    {
+      pattern: /public\s+class\s+(\w+)\s+extends\s+(QAFBaseTestPage|WebDriverBaseTestPage)\s*\{/g,
+      replacement: "// Page Object for $1\nexport class $1 {\n  constructor(private page: Page) {}\n"
+    },
+    {
+      pattern: /@FindBy\(locator\s*=\s*"(\{.*?\})"\)\s*public\s+(CSWebElement|QAFWebElement)\s+(\w+);/g,
+      replacement: (match, locatorJson, elementType, propertyName) => {
+        try {
+          // Parse the locator JSON from the FindBy annotation
+          const locatorObj = parseLocatorJson(locatorJson);
+          return `  // ${locatorObj.desc || 'Element'}\n  ${propertyName}() {\n    return this.page.locator('${convertLocatorToPlaywright(locatorObj)}');\n  }`;
+        } catch (e) {
+          console.error(`Error parsing locator: ${locatorJson}`, e);
+          return `  // Could not parse locator\n  ${propertyName}() {\n    return this.page.locator('${locatorJson}');\n  }`;
+        }
+      }
+    },
+    
+    // Method declarations to Playwright steps
+    {
+      pattern: /public\s+void\s+(\w+)\s*\(([^)]*)\)\s*\{/g,
+      replacement: (match, methodName, params) => {
+        const parsedParams = params.split(',').map(param => {
+          const parts = param.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            return `${parts[parts.length - 1]}: ${convertJavaTypeToTypeScript(parts[0])}`;
+          }
+          return '';
+        }).filter(Boolean).join(', ');
+        
+        return `async function ${methodName}(${parsedParams}) {`;
+      }
+    },
+    
+    // Selenium WebDriver commands to Playwright commands
+    {
+      pattern: /driver\.get\(([^)]+)\);/g,
+      replacement: "await page.goto($1);"
+    },
+    {
+      pattern: /driver\.findElement\(By\.id\("([^"]+)"\)\)\.click\(\);/g,
+      replacement: "await page.click('#$1');"
+    },
+    {
+      pattern: /driver\.findElement\(By\.xpath\("([^"]+)"\)\)\.click\(\);/g,
+      replacement: "await page.click('xpath=$1');"
+    },
+    {
+      pattern: /driver\.findElement\(By\.cssSelector\("([^"]+)"\)\)\.click\(\);/g,
+      replacement: "await page.click('$1');"
+    },
+    {
+      pattern: /driver\.findElement\(By\.id\("([^"]+)"\)\)\.sendKeys\(([^)]+)\);/g,
+      replacement: "await page.fill('#$1', $2);"
+    },
+    {
+      pattern: /driver\.findElement\(By\.xpath\("([^"]+)"\)\)\.sendKeys\(([^)]+)\);/g,
+      replacement: "await page.fill('xpath=$1', $2);"
+    },
+    {
+      pattern: /driver\.findElement\(By\.cssSelector\("([^"]+)"\)\)\.sendKeys\(([^)]+)\);/g,
+      replacement: "await page.fill('$1', $2);"
+    },
+    
+    // Custom CSWebElement method calls
+    {
+      pattern: /(\w+)\.click\(\);/g,
+      replacement: "await $1().click();"
+    },
+    {
+      pattern: /(\w+)\.sendKeys\(([^)]+)\);/g,
+      replacement: "await $1().fill($2);"
+    },
+    {
+      pattern: /(\w+)\.waitForVisible\((\d+)\);/g,
+      replacement: "await $1().waitFor({ state: 'visible', timeout: $2 });"
+    },
+    {
+      pattern: /(\w+)\.waitForPresent\((\d+)\);/g,
+      replacement: "await $1().waitFor({ timeout: $2 });"
+    },
+    {
+      pattern: /(\w+)\.isDisplayed\(\)/g,
+      replacement: "await $1().isVisible()"
+    },
+    {
+      pattern: /(\w+)\.isEnabled\(\)/g,
+      replacement: "await $1().isEnabled()"
+    },
+    {
+      pattern: /(\w+)\.getText\(\)/g,
+      replacement: "await $1().textContent()"
+    },
+    {
+      pattern: /new CSWebElement\("(\{.*?\})"\)/g,
+      replacement: (match, locatorJson) => {
+        try {
+          const locatorObj = parseLocatorJson(locatorJson);
+          return `page.locator('${convertLocatorToPlaywright(locatorObj)}')`;
+        } catch (e) {
+          console.error(`Error parsing CSWebElement locator: ${locatorJson}`, e);
+          return `page.locator('${locatorJson}')`;
+        }
+      }
+    },
+    
+    // Wait commands
+    {
+      pattern: /new WebDriverWait\(driver,\s*(\d+)\)\.until\(ExpectedConditions\.visibilityOfElementLocated\(By\.(id|xpath|cssSelector)\("([^"]+)"\)\)\);/g,
+      replacement: (match, timeout, locatorType, selector) => {
+        let playwrightSelector;
+        if (locatorType === 'id') {
+          playwrightSelector = `#${selector}`;
+        } else if (locatorType === 'xpath') {
+          playwrightSelector = `xpath=${selector}`;
+        } else {
+          playwrightSelector = selector;
+        }
+        return `await page.waitForSelector('${playwrightSelector}', { timeout: ${timeout} * 1000 });`;
+      }
+    },
+    
+    // Assertions
+    {
+      pattern: /Assert\.assertEquals\(([^,]+),\s*([^)]+)\);/g,
+      replacement: "expect($1).toBe($2);"
+    },
+    {
+      pattern: /Assert\.assertTrue\(([^)]+)\);/g,
+      replacement: "expect($1).toBeTruthy();"
+    },
+    {
+      pattern: /Assert\.assertFalse\(([^)]+)\);/g,
+      replacement: "expect($1).toBeFalsy();"
+    },
+    
+    // Convert BDD scenario methods to Playwright test structure
+    {
+      pattern: /@Test\s*\([\s\S]*?\)\s*public\s+void\s+(\w+)\s*\(\)\s*\{/g,
+      replacement: "test('$1', async ({ page }) => {"
+    },
+    
+    // Convert BDD Given/When/Then annotations
+    {
+      pattern: /@Given\("(.+?)"\)/g,
+      replacement: "// Given: $1\nawait test.step('Given $1', async () => {"
+    },
+    {
+      pattern: /@When\("(.+?)"\)/g,
+      replacement: "// When: $1\nawait test.step('When $1', async () => {"
+    },
+    {
+      pattern: /@Then\("(.+?)"\)/g,
+      replacement: "// Then: $1\nawait test.step('Then $1', async () => {"
+    },
+    
+    // Close curly braces and semicolons
+    {
+      pattern: /\}\s*;/g,
+      replacement: "});"
+    },
+    
+    // Java variable declarations to TypeScript
+    {
+      pattern: /(String|int|boolean|double)\s+(\w+)\s*=\s*(.+?);/g,
+      replacement: (match, type, name, value) => {
+        const tsType = convertJavaTypeToTypeScript(type);
+        return `const ${name}: ${tsType} = ${value};`;
+      }
+    }
+  ];
+
+  /**
+   * Convert a Java test file to a Playwright TypeScript test file
+   * @param inputPath Path to the Java BDD file
+   * @param outputPath Path to save the converted TypeScript file
+   */
+  public convertFile(inputPath: string, outputPath: string): void {
+    try {
+      // Read the Java file
+      const javaCode = fs.readFileSync(inputPath, 'utf8');
+      
+      // Apply all conversions
+      let typescriptCode = this.convertJavaToTypeScript(javaCode);
+      
+      // Add Playwright test structure if not present
+      if (!typescriptCode.includes("import { test, expect }") && !typescriptCode.includes("import { Page, Locator }")) {
+        typescriptCode = "import { test, expect } from '@playwright/test';\n\n" + typescriptCode;
+      }
+      
+      // Handle Page Object classes - update class to extend BasePage if needed
+      if (typescriptCode.includes("export class") && typescriptCode.includes("constructor(private page: Page)")) {
+        const className = typescriptCode.match(/export\s+class\s+(\w+)/)?.[1];
+        if (className) {
+          typescriptCode = typescriptCode.replace(
+            `export class ${className} {`,
+            `import { BasePage } from './BasePage';\n\nexport class ${className} extends BasePage {`
+          );
+          typescriptCode = typescriptCode.replace(
+            `constructor(private page: Page) {}`,
+            `constructor(page: Page) {\n    super(page);\n  }`
+          );
+        }
+      }
+      
+      // Wrap loose methods in a test if needed
+      if (!typescriptCode.includes("test(") && !typescriptCode.includes("export class")) {
+        const fileName = path.basename(inputPath, path.extname(inputPath));
+        typescriptCode = `test('${fileName}', async ({ page }) => {\n${typescriptCode}\n});`;
+      }
+      
+      // Add Playwright configuration template if it's the first file
+      if (!fs.existsSync(path.dirname(outputPath) + '/playwright.config.ts')) {
+        this.createPlaywrightConfig(path.dirname(outputPath));
+      }
+      
+      // Save the TypeScript file
+      fs.writeFileSync(outputPath, typescriptCode);
+      console.log(`Successfully converted ${inputPath} to ${outputPath}`);
+    } catch (error) {
+      console.error(`Error converting file ${inputPath}: ${error}`);
+    }
+  }
+
+  /**
+   * Convert a directory of Java test files to Playwright TypeScript
+   * @param inputDir Directory containing Java test files
+   * @param outputDir Directory to save converted TypeScript files
+   */
+  public convertDirectory(inputDir: string, outputDir: string): void {
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    const files = fs.readdirSync(inputDir);
+    
+    for (const file of files) {
+      const inputPath = path.join(inputDir, file);
+      const stats = fs.statSync(inputPath);
+      
+      if (stats.isDirectory()) {
+        const newOutputDir = path.join(outputDir, file);
+        this.convertDirectory(inputPath, newOutputDir);
+      } else if (file.endsWith('.java') || file.endsWith('.feature')) {
+        const outputFileName = file.replace(/\.(java|feature)$/, '.spec.ts');
+        const outputPath = path.join(outputDir, outputFileName);
+        this.convertFile(inputPath, outputPath);
+      }
+    }
+  }
+
+  /**
+   * Apply all Java to TypeScript conversions to a string of code
+   * @param javaCode Java code to convert
+   * @returns Converted TypeScript code
+   */
+  private convertJavaToTypeScript(javaCode: string): string {
+    let typescriptCode = javaCode;
+    
+    // Apply each replacement
+    for (const mapping of this.javaToTypeScriptMappings) {
+      typescriptCode = typescriptCode.replace(mapping.pattern, mapping.replacement as any);
+    }
+    
+    // Add closing bracket for any open test.step calls
+    const stepCount = (typescriptCode.match(/await test\.step\(/g) || []).length;
+    const closingBraceCount = (typescriptCode.match(/\}\);/g) || []).length;
+    
+    if (stepCount > closingBraceCount) {
+      const diff = stepCount - closingBraceCount;
+      typescriptCode += '\n' + '});'.repeat(diff);
+    }
+    
+    // Add Playwright Page import for page objects
+    if (typescriptCode.includes('constructor(private page: Page)')) {
+      typescriptCode = "import { Page, Locator } from '@playwright/test';\n\n" + typescriptCode;
+    }
+    
+    return typescriptCode;
+  }
+
+  /**
+   * Create a basic Playwright configuration file
+   * @param outputDir Directory to save the config file
+   */
+  private createPlaywrightConfig(outputDir: string): void {
+    const configContent = `
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  testDir: './tests',
+  timeout: 30 * 1000,
+  expect: {
+    timeout: 5000
+  },
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: 'html',
+  use: {
+    actionTimeout: 0,
+    baseURL: 'http://localhost:3000',
+    trace: 'on-first-retry',
+    headless: true,
+    screenshot: 'only-on-failure',
+    video: 'on-first-retry'
+  },
+});
+`;
+
+    // Also create a base page object class to replicate QAFBaseTestPage functionality
+    const basePageContent = `
+import { Page, Locator } from '@playwright/test';
+
+/**
+ * BasePage class to provide common functionality across all page objects
+ * Similar to QAFBaseTestPage in the QAF framework
+ */
+export class BasePage {
+  constructor(protected page: Page) {}
+  
+  /**
+   * Navigate to a specific URL
+   * @param url URL to navigate to
+   */
+  async navigate(url: string): Promise<void> {
+    await this.page.goto(url);
+  }
+  
+  /**
+   * Wait for page to load
+   */
+  async waitForPageLoad(timeout = 30000): Promise<void> {
+    await this.page.waitForLoadState('networkidle', { timeout });
+  }
+  
+  /**
+   * Create a locator from a selector string
+   * @param selector Selector string (CSS, XPath, etc.)
+   * @param description Optional description for the element
+   */
+  getLocator(selector: string, description?: string): Locator {
+    return this.page.locator(selector);
+  }
+  
+  /**
+   * Get text content of an element
+   * @param locator Element locator
+   */
+  async getText(locator: Locator): Promise<string | null> {
+    return await locator.textContent();
+  }
+  
+  /**
+   * Check if an element is visible
+   * @param locator Element locator
+   */
+  async isVisible(locator: Locator): Promise<boolean> {
+    return await locator.isVisible();
+  }
+  
+  /**
+   * Wait for an element to be visible
+   * @param locator Element locator
+   * @param timeout Timeout in milliseconds
+   */
+  async waitForVisible(locator: Locator, timeout = 10000): Promise<void> {
+    await locator.waitFor({ state: 'visible', timeout });
+  }
+  
+  /**
+   * Fill a form field
+   * @param locator Element locator
+   * @param value Value to fill
+   */
+  async fill(locator: Locator, value: string): Promise<void> {
+    await locator.fill(value);
+  }
+  
+  /**
+   * Click an element
+   * @param locator Element locator
+   */
+  async click(locator: Locator): Promise<void> {
+    await locator.click();
+  }
+}
+`;
+    fs.writeFileSync(path.join(outputDir, 'playwright.config.ts'), configContent);
+    console.log(`Created Playwright configuration file at ${path.join(outputDir, 'playwright.config.ts')}`);
+    
+    // Create the BasePage class
+    const pagesDir = path.join(outputDir, 'pages');
+    if (!fs.existsSync(pagesDir)) {
+      fs.mkdirSync(pagesDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(path.join(pagesDir, 'BasePage.ts'), basePageContent);
+    console.log(`Created BasePage class at ${path.join(pagesDir, 'BasePage.ts')}`);
+  }
+}
+
+/**
+ * Parse a QAF locator JSON string to extract locator info
+ * @param locatorJson JSON string from FindBy annotation or CSWebElement constructor
+ * @returns Parsed locator object with type, value and description
+ */
+function parseLocatorJson(locatorJson: string): ParsedLocator {
+  try {
+    // Clean up the JSON string if needed (sometimes it might have escaped quotes)
+    const cleanJson = locatorJson.replace(/\\"/g, '"');
+    
+    // Parse the JSON
+    const locatorObj = JSON.parse(cleanJson);
+    
+    // Extract locator type and value
+    if (locatorObj.locator) {
+      // Handle patterns like {locator:"xpath=//div", "desc":"Some description"}
+      const locatorParts = locatorObj.locator.split('=');
+      if (locatorParts.length >= 2) {
+        return {
+          type: locatorParts[0],
+          value: locatorParts.slice(1).join('='), // Rejoin in case the value contains = characters
+          desc: locatorObj.desc
+        };
+      }
+    }
+    
+    // Handle case where the object itself is the locator
+    for (const key of ['id', 'xpath', 'css', 'name', 'linkText', 'partialLinkText', 'tagName']) {
+      if (locatorObj[key]) {
+        return {
+          type: key,
+          value: locatorObj[key],
+          desc: locatorObj.desc
+        };
+      }
+    }
+    
+    // Fallback
+    return { type: 'unknown', value: JSON.stringify(locatorObj) };
+  } catch (e) {
+    console.error(`Error parsing locator JSON: ${locatorJson}`, e);
+    throw e;
+  }
+}
+
+/**
+ * Convert a QAF locator to Playwright format
+ * @param locator Parsed locator object
+ * @returns Playwright locator string
+ */
+function convertLocatorToPlaywright(locator: ParsedLocator): string {
+  switch (locator.type.toLowerCase()) {
+    case 'id':
+      return `#${locator.value}`;
+    case 'css':
+      return locator.value;
+    case 'xpath':
+      return `xpath=${locator.value}`;
+    case 'name':
+      return `[name="${locator.value}"]`;
+    case 'linktext':
+      return `text=${locator.value}`;
+    case 'partiallinktext':
+      return `text=${locator.value}`;
+    case 'tagname':
+      return locator.value;
+    default:
+      return locator.value;
+  }
+}
+
+/**
+ * Convert Java types to TypeScript types
+ * @param javaType Java type to convert
+ * @returns Equivalent TypeScript type
+ */
+function convertJavaTypeToTypeScript(javaType: string): string {
+  const typeMap: Record<string, string> = {
+    'String': 'string',
+    'int': 'number',
+    'Integer': 'number',
+    'double': 'number',
+    'Double': 'number',
+    'float': 'number',
+    'Float': 'number',
+    'boolean': 'boolean',
+    'Boolean': 'boolean',
+    'long': 'number',
+    'Long': 'number',
+    'Object': 'any',
+    'List': 'Array<any>',
+    'Map': 'Record<string, any>',
+    'void': 'void',
+    'CSWebElement': 'Locator',
+    'QAFWebElement': 'Locator'
+  };
+  
+  // Handle generic types
+  if (javaType.includes('<')) {
+    const match = javaType.match(/(\w+)<(.+)>/);
+    if (match) {
+      const container = match[1];
+      const innerType = match[2];
+      
+      if (container === 'List' || container === 'ArrayList' || container === 'LinkedList') {
+        return `Array<${convertJavaTypeToTypeScript(innerType)}>`;
+      } else if (container === 'Map' || container === 'HashMap') {
+        const [keyType, valueType] = innerType.split(',').map(t => t.trim());
+        return `Record<${convertJavaTypeToTypeScript(keyType)}, ${convertJavaTypeToTypeScript(valueType)}>`;
+      }
+    }
+  }
+  
+  return typeMap[javaType] || 'any';
+}
+
+// CLI implementation
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  
+  if (args.length < 2) {
+    console.log('Usage: ts-node qaf-to-playwright-converter.ts <inputPath> <outputPath>');
+    process.exit(1);
+  }
+  
+  const [inputPath, outputPath] = args;
+  const converter = new QafToPlaywrightConverter();
+  
+  if (fs.statSync(inputPath).isDirectory()) {
+    converter.convertDirectory(inputPath, outputPath);
+  } else {
+    converter.convertFile(inputPath, outputPath);
+  }
+}
+
+export { QafToPlaywrightConverter };
