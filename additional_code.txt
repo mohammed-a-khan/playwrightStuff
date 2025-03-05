@@ -107,6 +107,8 @@ private convertElementToLocator(element: any): string {
   } else {
     // Default to passing the locator directly
     result += `    return this.page.locator(\`${element.locator.replace(/`/g, '\\`')}\`);\n`;
+
+const multilineRegex = /@FindBy\s*\(\s*locator\s*=\s*"([^"]*?)(?:"\s*,\s*"desc"\s*=\s*"([^"]*?)")?\"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement|QAFWebElement)\s+(\w+)(?:\s*;)?/g;
   }
   
   result += '  }\n\n';
