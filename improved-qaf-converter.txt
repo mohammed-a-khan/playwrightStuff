@@ -1,0 +1,521 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+const DEBUG = true; // Set to true to see debugging information
+
+interface ImportMapping {
+    [key: string]: string | null; // null means skip this import
+}
+
+// Map of Java imports to TypeScript/Playwright equivalents
+const importMappings: ImportMapping = {
+    'java.util.List': 'import { Locator } from \'@playwright/test\';',
+    'java.util.Map': null,
+    'java.util.HashMap': null,
+    'java.util.ArrayList': null,
+    'java.lang.String': null,
+    'java.lang.Thread': null,
+    'org.openqa.selenium.WebElement': 'import { Locator } from \'@playwright/test\';',
+    'org.openqa.selenium.support.FindBy': null,
+    'org.openqa.selenium.support.ui.WebDriverWait': null,
+    'org.openqa.selenium.By': null,
+    'org.openqa.selenium.Keys': null,
+    'com.qmetry.qaf.automation.ui.WebDriverTestBase': 'import { Page } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.ui.webdriver.QAFWebElement': 'import { Locator } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.ui.annotations.FindBy': null,
+    'com.qmetry.qaf.automation.core.ConfigurationManager': null,
+    'com.example.exe.utils.CSWebElement': 'import { Locator } from \'@playwright/test\';',
+    // Add more mappings as needed
+};
+
+// Classes that should be converted to Playwright Locator
+const elementClasses = [
+    'CSWebElement',
+    'QAFWebElement',
+    'WebElement',
+    'Element',
+    'PageElement'
+];
+
+function convertQafToPlaywright(inputFilePath: string, outputFilePath: string): void {
+    try {
+        // Read the input file
+        const fileContent = fs.readFileSync(inputFilePath, 'utf8');
+        
+        // Create debug file with line numbers
+        if (DEBUG) {
+            const debugLines = fileContent.split('\n').map((line, index) => `${index + 1}: ${line}`);
+            fs.writeFileSync(outputFilePath + '.debug.txt', debugLines.join('\n'), 'utf8');
+            console.log(`Created debug file: ${outputFilePath}.debug.txt`);
+        }
+        
+        const lines = fileContent.split('\n');
+
+        // Process the file content
+        const { tsContent, skippedLines } = processContent(lines);
+
+        // Create the output directory if it doesn't exist
+        const outputDir = path.dirname(outputFilePath);
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        // Write the output file
+        fs.writeFileSync(outputFilePath, tsContent, 'utf8');
+        console.log(`Converted ${inputFilePath} to ${outputFilePath}`);
+        
+        // Create a log of skipped lines for debugging
+        if (DEBUG) {
+            fs.writeFileSync(outputFilePath + '.skipped.txt', skippedLines.join('\n'), 'utf8');
+            console.log(`Created skipped lines log: ${outputFilePath}.skipped.txt`);
+        }
+    } catch (error) {
+        console.error(`Error converting ${inputFilePath}: ${error}`);
+    }
+}
+
+function processContent(lines: string[]): { tsContent: string, skippedLines: string[] } {
+    const tsLines: string[] = [];
+    const skippedLines: string[] = [];
+    let className = '';
+    let inMethod = false;
+    let braceCount = 0; // Track open braces to ensure proper closing
+    let hasAddedPageField = false;
+    let foundImports = new Set<string>();
+
+    // Add base TypeScript imports
+    foundImports.add('import { Page, Locator, expect } from \'@playwright/test\';');
+
+    // For debugging output
+    const debugLine = (index: number, line: string, reason: string) => {
+        if (DEBUG) {
+            skippedLines.push(`Line ${index + 1}: ${line} - ${reason}`);
+        }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const originalLine = lines[i];
+        const line = originalLine.trim();
+
+        // Skip empty lines
+        if (line === '') continue;
+
+        // Skip package declarations
+        if (line.startsWith('package ')) {
+            debugLine(i, line, "Skipped package declaration");
+            continue;
+        }
+
+        // Handle imports - convert Java imports to TypeScript equivalents
+        if (line.startsWith('import ')) {
+            const importPath = line.substring(7, line.endsWith(';') ? line.length - 1 : line.length).trim();
+            
+            // Check for direct matches first
+            if (importMappings[importPath] !== undefined) {
+                if (importMappings[importPath] !== null && !foundImports.has(importMappings[importPath]!)) {
+                    foundImports.add(importMappings[importPath]!);
+                }
+                debugLine(i, line, `Mapped import to: ${importMappings[importPath]}`);
+                continue;
+            }
+            
+            // If no match, skip the import but log it
+            debugLine(i, line, "No mapping found for import");
+            continue;
+        }
+
+        // Extract class name
+        const classMatch = line.match(/public\s+class\s+(\w+)/);
+        if (classMatch) {
+            className = classMatch[1];
+            tsLines.push(`export class ${className} {`);
+            braceCount++;
+            
+            // Add page field if not added already
+            if (!hasAddedPageField) {
+                tsLines.push('  private page: Page;');
+                tsLines.push('');
+                tsLines.push('  constructor(page: Page) {');
+                braceCount++;
+                tsLines.push('    this.page = page;');
+                tsLines.push('  }');
+                braceCount--; // Close constructor
+                tsLines.push('');
+                hasAddedPageField = true;
+            }
+            continue;
+        }
+
+        // Try multiple FindBy patterns to be more flexible
+        const findByPatterns = [
+            /@FindBy\(locator="([^"]+)"\)\s*public\s+(\w+)\s+(\w+)\s*;/,
+            /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*public\s+(\w+)\s+(\w+)\s*;/,
+            /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*private\s+(\w+)\s+(\w+)\s*;/,
+            /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*protected\s+(\w+)\s+(\w+)\s*;/
+        ];
+        
+        let findByMatch = null;
+        for (const pattern of findByPatterns) {
+            const match = line.match(pattern);
+            if (match) {
+                findByMatch = match;
+                break;
+            }
+        }
+        
+        if (findByMatch) {
+            const locator = findByMatch[1];
+            const elementType = findByMatch[2];
+            const elementName = findByMatch[3];
+            
+            // Generate getter method for this element
+            tsLines.push(`  async ${elementName}() {`);
+            braceCount++;
+            
+            // Handle different locator types
+            processLocator(tsLines, locator);
+            
+            tsLines.push('  }');
+            braceCount--;
+            tsLines.push('');
+            continue;
+        }
+        
+        // Check for multi-line FindBy
+        if (line.includes('@FindBy') && !line.includes(';')) {
+            let combinedLine = line;
+            let j = i + 1;
+            let foundEnd = false;
+            
+            // Collect the entire FindBy statement across multiple lines
+            while (j < lines.length && !lines[j].trim().includes(';')) {
+                combinedLine += ' ' + lines[j].trim();
+                j++;
+            }
+            
+            if (j < lines.length) {
+                combinedLine += ' ' + lines[j].trim();
+                
+                // Try to match the combined line with our patterns
+                for (const pattern of findByPatterns) {
+                    const match = combinedLine.match(pattern);
+                    if (match) {
+                        const locator = match[1];
+                        const elementType = match[2];
+                        const elementName = match[3];
+                        
+                        tsLines.push(`  async ${elementName}() {`);
+                        braceCount++;
+                        processLocator(tsLines, locator);
+                        tsLines.push('  }');
+                        braceCount--;
+                        tsLines.push('');
+                        
+                        i = j; // Skip processed lines
+                        foundEnd = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (foundEnd) continue;
+            
+            // If we couldn't match the multi-line FindBy, log it as skipped
+            debugLine(i, line, "Skipped unmatched multi-line FindBy annotation");
+            continue;
+        }
+
+        // Handle CSWebElement or similar element return methods
+        // This matches patterns like: public CSWebElement methodName(String someArgs) { return new CSWebElement(...); }
+        const elementReturnMethodPattern = new RegExp(`public\\s+(${elementClasses.join('|')})\\s+(\\w+)\\s*\\((.*?)\\)\\s*\\{`);
+        const elementReturnMatch = line.match(elementReturnMethodPattern);
+        
+        if (elementReturnMatch) {
+            const returnType = elementReturnMatch[1];
+            const methodName = elementReturnMatch[2];
+            let params = elementReturnMatch[3].trim();
+            
+            // Convert Java parameter types to TypeScript
+            params = params.replace(/String/g, 'string')
+                          .replace(/int/g, 'number')
+                          .replace(/boolean/g, 'boolean')
+                          .replace(/Map<[^>]+>/g, 'Record<string, any>')
+                          .replace(/List<[^>]+>/g, 'any[]');
+            
+            tsLines.push(`  async ${methodName}(${params}) {`);
+            braceCount++;
+            
+            // Now we need to find the return statement with the locator information
+            let foundReturn = false;
+            let k = i + 1;
+            while (k < lines.length && !lines[k].trim().match(/^\}/)) {
+                const returnLine = lines[k].trim();
+                
+                // Look for return new CSWebElement(...) pattern
+                if (returnLine.startsWith('return new') && elementClasses.some(cls => returnLine.includes(cls))) {
+                    // Extract the locator string from complex patterns
+                    // This handles: return new CSWebElement("{"locator":"xpath=//somexpath", "desc":"'"+someArgs+"' some text "}");
+                    try {
+                        // Match the locator content
+                        const locatorMatch = returnLine.match(/return\s+new\s+\w+\s*\(\s*"({[^}]+})"\s*\)/);
+                        if (locatorMatch) {
+                            // Extract and clean up the JSON-like string
+                            let locatorStr = locatorMatch[1]
+                                .replace(/\\"/g, '"') // Handle escaped quotes
+                                .replace(/"\s*\+\s*(\w+)\s*\+\s*"/g, `' + $1 + '`); // Handle string concatenation
+                            
+                            // Try to parse the JSON-like content to extract locator
+                            try {
+                                // Clean up the string to make it valid JSON - this is tricky as the format might vary
+                                locatorStr = locatorStr.replace(/'/g, "\\'"); // Escape single quotes
+                                
+                                // Try to manually extract locator information
+                                const locatorExtract = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
+                                if (locatorExtract) {
+                                    const locatorValue = locatorExtract[1];
+                                    
+                                    // Extract parameter references if any
+                                    const paramNames = params.split(',').map(p => {
+                                        const parts = p.trim().split(' ');
+                                        return parts[parts.length - 1];
+                                    });
+                                    
+                                    // Generate locator with parameter substitution if necessary
+                                    if (paramNames.length > 0 && paramNames[0] !== '') {
+                                        tsLines.push(`    // Original locator: ${locatorValue}`);
+                                        tsLines.push(`    return this.page.locator(\`xpath=${locatorValue.replace(/'/g, "\\'")}${paramNames.some(p => returnLine.includes(p)) ? ' with parameter substitution' : ''}\`);`);
+                                    } else {
+                                        tsLines.push(`    return this.page.locator(\`xpath=${locatorValue.replace(/'/g, "\\'")}\`);`);
+                                    }
+                                    
+                                    foundReturn = true;
+                                }
+                            } catch (e) {
+                                // If parsing fails, use a more generic approach
+                                tsLines.push(`    // TODO: Couldn't parse locator - using generic template`);
+                                tsLines.push(`    return this.page.locator(\`xpath=//[contains(@id, '\${${params ? params.split(' ').pop() : ''}}']\`);`);
+                                foundReturn = true;
+                            }
+                        }
+                    } catch (e) {
+                        tsLines.push(`    // TODO: Couldn't parse return statement: ${returnLine}`);
+                        tsLines.push(`    return this.page.locator('xpath=//TODO');`);
+                        foundReturn = true;
+                    }
+                    
+                    if (!foundReturn) {
+                        // Generic fallback
+                        tsLines.push(`    // TODO: Convert: ${returnLine}`);
+                        tsLines.push(`    return this.page.locator('xpath=//TODO');`);
+                    }
+                    
+                    foundReturn = true;
+                    break;
+                }
+                k++;
+            }
+            
+            if (foundReturn) {
+                i = k; // Skip to the line we processed
+                tsLines.push('  }');
+                braceCount--;
+                tsLines.push('');
+                continue;
+            } else {
+                // If we couldn't find the return statement, add a generic method
+                tsLines.push(`    // TODO: Couldn't find return statement`);
+                tsLines.push(`    return this.page.locator('xpath=//TODO');`);
+                tsLines.push('  }');
+                braceCount--;
+                tsLines.push('');
+                continue;
+            }
+        }
+
+        // Try to match regular method patterns with more flexibility
+        const methodPatterns = [
+            /public\s+void\s+(\w+)\s*\(\s*\)\s*\{/,
+            /public\s+void\s+(\w+)\s*\(\s*\)\s*throws\s+.*?\{/,
+            /public\s+(\w+)\s+(\w+)\s*\(\s*\)\s*\{/
+        ];
+        
+        let methodMatch = null;
+        for (const pattern of methodPatterns) {
+            const match = line.match(pattern);
+            if (match) {
+                methodMatch = match;
+                break;
+            }
+        }
+        
+        if (methodMatch) {
+            const methodName = methodMatch[1];
+            tsLines.push(`  async ${methodName}() {`);
+            braceCount++;
+            inMethod = true;
+            continue;
+        }
+
+        // Handle method with parameters
+        const methodWithParamsPatterns = [
+            /public\s+void\s+(\w+)\s*\((.*?)\)\s*\{/,
+            /public\s+void\s+(\w+)\s*\((.*?)\)\s*throws\s+.*?\{/,
+            /public\s+(\w+)\s+(\w+)\s*\((.*?)\)\s*\{/
+        ];
+        
+        let methodWithParamsMatch = null;
+        for (const pattern of methodWithParamsPatterns) {
+            const match = line.match(pattern);
+            if (match && !methodMatch) {
+                methodWithParamsMatch = match;
+                break;
+            }
+        }
+        
+        if (methodWithParamsMatch) {
+            let methodName;
+            let params;
+            
+            if (methodWithParamsMatch[2] && methodWithParamsMatch.length > 3 && typeof methodWithParamsMatch[3] === 'string') {
+                // This is the third pattern with return type
+                methodName = methodWithParamsMatch[2];
+                params = methodWithParamsMatch[3]?.trim() || '';
+            } else {
+                // This is the first or second pattern
+                methodName = methodWithParamsMatch[1];
+                params = methodWithParamsMatch[2]?.trim() || '';
+            }
+            
+            // Convert Java parameter types to TypeScript
+            params = params.replace(/String/g, 'string')
+                          .replace(/int/g, 'number')
+                          .replace(/boolean/g, 'boolean')
+                          .replace(/Map<[^>]+>/g, 'Record<string, any>')
+                          .replace(/List<[^>]+>/g, 'any[]');
+            
+            tsLines.push(`  async ${methodName}(${params}) {`);
+            braceCount++;
+            inMethod = true;
+            continue;
+        }
+
+        // Handle method end and track brace count
+        if (line === '}') {
+            if (inMethod) {
+                tsLines.push('  }');
+                inMethod = false;
+                braceCount--;
+                tsLines.push('');
+            } else if (braceCount > 0) {
+                tsLines.push('}');
+                braceCount--;
+            } else {
+                // Skip extra closing braces
+                debugLine(i, line, "Skipped extra closing brace");
+            }
+            continue;
+        }
+
+        // Handle element actions inside methods
+        if (inMethod) {
+            // Try to match common Selenium/QAF actions
+            const actionPatterns = [
+                { pattern: /(\w+)\.click\(\);/, handler: (elementName: string) => `    await (await this.${elementName}()).click();` },
+                { pattern: /(\w+)\.sendKeys\("([^"]*)"\);/, handler: (elementName: string, text: string) => `    await (await this.${elementName}()).fill("${text}");` },
+                { pattern: /(\w+)\.clear\(\);/, handler: (elementName: string) => `    await (await this.${elementName}()).clear();` },
+                { pattern: /(\w+)\.isDisplayed\(\)/, handler: (elementName: string) => 
+                    line.includes('assert') || line.includes('verify') 
+                        ? `    await expect(await this.${elementName}()).toBeVisible();`
+                        : `    const isVisible = await (await this.${elementName}()).isVisible();`
+                },
+                { pattern: /(\w+)\.isEnabled\(\)/, handler: (elementName: string) => 
+                    line.includes('assert') || line.includes('verify')
+                        ? `    await expect(await this.${elementName}()).toBeEnabled();`
+                        : `    const isEnabled = await (await this.${elementName}()).isEnabled();`
+                },
+                { pattern: /(\w+)\.getText\(\)/, handler: (elementName: string) => `    const text = await (await this.${elementName}()).textContent();` },
+                { pattern: /Thread\.sleep\((\d+)\)/, handler: (sleepTime: string) => {
+                    const timeInMs = parseInt(sleepTime) <= 1000 ? parseInt(sleepTime) : parseInt(sleepTime) / 1000;
+                    return `    await this.page.waitForTimeout(${timeInMs});`;
+                }}
+            ];
+            
+            let matched = false;
+            for (const { pattern, handler } of actionPatterns) {
+                const match = line.match(pattern);
+                if (match) {
+                    // @ts-ignore - we know this is okay
+                    tsLines.push(handler(...match.slice(1)));
+                    matched = true;
+                    break;
+                }
+            }
+            
+            if (matched) continue;
+            
+            // If we're in a method but couldn't match the line, add as comment
+            tsLines.push(`    // TODO: ${line}`);
+            continue;
+        }
+        
+        // Log any lines that don't match our patterns
+        debugLine(i, line, "No pattern match found");
+    }
+
+    // Ensure we close any remaining open braces
+    while (braceCount > 0) {
+        tsLines.push('}');
+        braceCount--;
+    }
+
+    // Now add all unique imports at the top
+    let finalContent = Array.from(foundImports).join('\n') + '\n\n';
+    finalContent += tsLines.join('\n');
+    
+    return { tsContent: finalContent, skippedLines };
+}
+
+function processLocator(tsLines: string[], locator: string): void {
+    // Handle different locator types with proper quoting
+    if (locator.startsWith('xpath=')) {
+        const xpathValue = locator.substring(6);
+        // Use template literals to avoid quote escaping issues
+        tsLines.push(`    return this.page.locator(\`xpath=${xpathValue.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('css=')) {
+        const cssValue = locator.substring(4);
+        tsLines.push(`    return this.page.locator(\`${cssValue.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('id=')) {
+        tsLines.push(`    return this.page.locator('#${locator.substring(3)}');`);
+    } else if (locator.startsWith('name=')) {
+        tsLines.push(`    return this.page.locator('[name="${locator.substring(5)}"]');`);
+    } else if (locator.startsWith('linkText=')) {
+        const linkText = locator.substring(9);
+        tsLines.push(`    return this.page.getByText(\`${linkText.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('partialLinkText=')) {
+        const partialText = locator.substring(16);
+        tsLines.push(`    return this.page.getByText(\`${partialText.replace(/`/g, '\\`')}\`, { exact: false });`);
+    } else if (locator.startsWith('className=')) {
+        tsLines.push(`    return this.page.locator('.${locator.substring(10)}');`);
+    } else if (locator.startsWith('tagName=')) {
+        tsLines.push(`    return this.page.locator('${locator.substring(8)}');`);
+    } else {
+        // Generic fallback using template literals
+        tsLines.push(`    return this.page.locator(\`${locator.replace(/`/g, '\\`')}\`);`);
+    }
+}
+
+// Example usage
+const inputFile = process.argv[2];
+const outputFile = process.argv[3] || inputFile.replace('.java', '.spec.ts');
+
+if (!inputFile) {
+    console.error('Please provide an input file path');
+    process.exit(1);
+}
+
+try {
+    convertQafToPlaywright(inputFile, outputFile);
+} catch (error) {
+    console.error('Error executing conversion:', error);
+    process.exit(1);
+}
