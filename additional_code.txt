@@ -1,0 +1,114 @@
+/**
+ * Extract @FindBy elements from Java code
+ */
+private extractElements(javaCode: string): any[] {
+  const elements: any[] = [];
+  const lines = javaCode.split('\n');
+  
+  let inFindBy = false;
+  let findByContent = '';
+  let currentElement = { locator: '', name: '', type: '' };
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    
+    // Handle multi-line @FindBy
+    if (line.startsWith('@FindBy') && !line.includes(';')) {
+      inFindBy = true;
+      findByContent = line;
+      continue;
+    }
+    
+    if (inFindBy) {
+      findByContent += ' ' + line;
+      
+      // Check if the FindBy declaration is complete
+      if (line.includes(';')) {
+        inFindBy = false;
+        
+        // Extract locator
+        const locatorMatch = findByContent.match(/locator\s*=\s*"([^"]+)"/);
+        if (locatorMatch) {
+          currentElement.locator = locatorMatch[1];
+        }
+        
+        // Extract element type and name
+        const elementMatch = findByContent.match(/\s+(\w+)\s+(\w+)\s*;/);
+        if (elementMatch) {
+          currentElement.type = elementMatch[1];
+          currentElement.name = elementMatch[2];
+          
+          elements.push({ ...currentElement });
+          findByContent = '';
+          currentElement = { locator: '', name: '', type: '' };
+        }
+      }
+      continue;
+    }
+    
+    // Handle single-line @FindBy
+    if (line.startsWith('@FindBy') && line.includes(';')) {
+      const locatorMatch = line.match(/locator\s*=\s*"([^"]+)"/);
+      if (locatorMatch) {
+        currentElement.locator = locatorMatch[1];
+      }
+      
+      // The element declaration should be in the next line
+      if (i + 1 < lines.length) {
+        const nextLine = lines[i + 1].trim();
+        const elementMatch = nextLine.match(/(?:public|private|protected)\s+(\w+)\s+(\w+)\s*;/);
+        if (elementMatch) {
+          currentElement.type = elementMatch[1];
+          currentElement.name = elementMatch[2];
+          
+          elements.push({ ...currentElement });
+          i++; // Skip the next line since we processed it
+          currentElement = { locator: '', name: '', type: '' };
+        }
+      }
+    }
+  }
+  
+  return elements;
+}
+
+/**
+ * Convert Java element to Playwright locator method
+ */
+private convertElementToLocator(element: any): string {
+  let result = `  async ${element.name}() {\n`;
+  
+  // Handle different locator types
+  if (element.locator.startsWith('xpath=')) {
+    const xpath = element.locator.substring(6);
+    // Use template literals to avoid quote escaping issues
+    result += `    return this.page.locator(\`xpath=${xpath.replace(/`/g, '\\`')}\`);\n`;
+  } else if (element.locator.startsWith('css=')) {
+    const css = element.locator.substring(4);
+    result += `    return this.page.locator(\`${css.replace(/`/g, '\\`')}\`);\n`;
+  } else if (element.locator.startsWith('id=')) {
+    const id = element.locator.substring(3);
+    result += `    return this.page.locator('#${id}');\n`;
+  } else if (element.locator.startsWith('name=')) {
+    const name = element.locator.substring(5);
+    result += `    return this.page.locator('[name="${name}"]');\n`;
+  } else if (element.locator.startsWith('linkText=')) {
+    const linkText = element.locator.substring(9);
+    result += `    return this.page.getByText(\`${linkText.replace(/`/g, '\\`')}\`);\n`;
+  } else if (element.locator.startsWith('partialLinkText=')) {
+    const partialText = element.locator.substring(16);
+    result += `    return this.page.getByText(\`${partialText.replace(/`/g, '\\`')}\`, { exact: false });\n`;
+  } else if (element.locator.startsWith('className=')) {
+    const className = element.locator.substring(10);
+    result += `    return this.page.locator('.${className}');\n`;
+  } else if (element.locator.startsWith('tagName=')) {
+    const tagName = element.locator.substring(8);
+    result += `    return this.page.locator('${tagName}');\n`;
+  } else {
+    // Default to passing the locator directly
+    result += `    return this.page.locator(\`${element.locator.replace(/`/g, '\\`')}\`);\n`;
+  }
+  
+  result += '  }\n\n';
+  return result;
+}
