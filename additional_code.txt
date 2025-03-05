@@ -1,116 +1,241 @@
+#!/usr/bin/env node
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { Command } from 'commander';
+
 /**
- * Extract @FindBy elements from Java code
+ * Simplified QAF to Playwright Converter
+ * Focuses on handling the specific patterns mentioned in requirements
  */
-private extractElements(javaCode: string): any[] {
-  const elements: any[] = [];
-  const lines = javaCode.split('\n');
-  
-  let inFindBy = false;
-  let findByContent = '';
-  let currentElement = { locator: '', name: '', type: '' };
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    
-    // Handle multi-line @FindBy
-    if (line.startsWith('@FindBy') && !line.includes(';')) {
-      inFindBy = true;
-      findByContent = line;
-      continue;
-    }
-    
-    if (inFindBy) {
-      findByContent += ' ' + line;
+class SimplifiedQafConverter {
+  /**
+   * Convert a QAF Java file to Playwright TypeScript
+   */
+  convertFile(inputPath: string, outputPath: string): void {
+    try {
+      // Read the input file
+      let content = fs.readFileSync(inputPath, 'utf8');
       
-      // Check if the FindBy declaration is complete
-      if (line.includes(';')) {
-        inFindBy = false;
-        
-        // Extract locator
-        const locatorMatch = findByContent.match(/locator\s*=\s*"([^"]+)"/);
-        if (locatorMatch) {
-          currentElement.locator = locatorMatch[1];
-        }
-        
-        // Extract element type and name
-        const elementMatch = findByContent.match(/\s+(\w+)\s+(\w+)\s*;/);
-        if (elementMatch) {
-          currentElement.type = elementMatch[1];
-          currentElement.name = elementMatch[2];
-          
-          elements.push({ ...currentElement });
-          findByContent = '';
-          currentElement = { locator: '', name: '', type: '' };
-        }
-      }
-      continue;
-    }
-    
-    // Handle single-line @FindBy
-    if (line.startsWith('@FindBy') && line.includes(';')) {
-      const locatorMatch = line.match(/locator\s*=\s*"([^"]+)"/);
-      if (locatorMatch) {
-        currentElement.locator = locatorMatch[1];
+      // Apply conversions
+      content = this.convertFindByLocators(content);
+      content = this.convertMethodLocators(content);
+      content = this.convertStepDefinitions(content);
+      content = this.performCleanup(content);
+      
+      // Create output directory if it doesn't exist
+      const outputDir = path.dirname(outputPath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
       }
       
-      // The element declaration should be in the next line
-      if (i + 1 < lines.length) {
-        const nextLine = lines[i + 1].trim();
-        const elementMatch = nextLine.match(/(?:public|private|protected)\s+(\w+)\s+(\w+)\s*;/);
-        if (elementMatch) {
-          currentElement.type = elementMatch[1];
-          currentElement.name = elementMatch[2];
-          
-          elements.push({ ...currentElement });
-          i++; // Skip the next line since we processed it
-          currentElement = { locator: '', name: '', type: '' };
-        }
-      }
+      // Write the output file
+      fs.writeFileSync(outputPath, content);
+      console.log(`Converted ${inputPath} to ${outputPath}`);
+    } catch (error) {
+      console.error(`Error converting file ${inputPath}:`, error);
     }
   }
   
-  return elements;
-}
-
-/**
- * Convert Java element to Playwright locator method
- */
-private convertElementToLocator(element: any): string {
-  let result = `  async ${element.name}() {\n`;
-  
-  // Handle different locator types
-  if (element.locator.startsWith('xpath=')) {
-    const xpath = element.locator.substring(6);
-    // Use template literals to avoid quote escaping issues
-    result += `    return this.page.locator(\`xpath=${xpath.replace(/`/g, '\\`')}\`);\n`;
-  } else if (element.locator.startsWith('css=')) {
-    const css = element.locator.substring(4);
-    result += `    return this.page.locator(\`${css.replace(/`/g, '\\`')}\`);\n`;
-  } else if (element.locator.startsWith('id=')) {
-    const id = element.locator.substring(3);
-    result += `    return this.page.locator('#${id}');\n`;
-  } else if (element.locator.startsWith('name=')) {
-    const name = element.locator.substring(5);
-    result += `    return this.page.locator('[name="${name}"]');\n`;
-  } else if (element.locator.startsWith('linkText=')) {
-    const linkText = element.locator.substring(9);
-    result += `    return this.page.getByText(\`${linkText.replace(/`/g, '\\`')}\`);\n`;
-  } else if (element.locator.startsWith('partialLinkText=')) {
-    const partialText = element.locator.substring(16);
-    result += `    return this.page.getByText(\`${partialText.replace(/`/g, '\\`')}\`, { exact: false });\n`;
-  } else if (element.locator.startsWith('className=')) {
-    const className = element.locator.substring(10);
-    result += `    return this.page.locator('.${className}');\n`;
-  } else if (element.locator.startsWith('tagName=')) {
-    const tagName = element.locator.substring(8);
-    result += `    return this.page.locator('${tagName}');\n`;
-  } else {
-    // Default to passing the locator directly
-    result += `    return this.page.locator(\`${element.locator.replace(/`/g, '\\`')}\`);\n`;
-
-const multilineRegex = /@FindBy\s*\(\s*locator\s*=\s*"([^"]*?)(?:"\s*,\s*"desc"\s*=\s*"([^"]*?)")?\"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement|QAFWebElement)\s+(\w+)(?:\s*;)?/g;
+  /**
+   * Convert @FindBy locators to Playwright locators
+   */
+  convertFindByLocators(content: string): string {
+    // First, handle the JSON format locators
+    content = content.replace(
+      /@FindBy\s*\(\s*locator\s*=\s*"\{\s*\"locator\"\s*:\s*\"([^"]+)\"\s*,\s*\"desc\"\s*:\s*\"[^"]*\"\s*\}"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement)\s+(\w+)/g,
+      (match, locator, elementName) => {
+        return `private readonly ${elementName} = ${this.formatLocator(locator)}`;
+      }
+    );
+    
+    // Then, handle the simple format locators
+    content = content.replace(
+      /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement)\s+(\w+)/g,
+      (match, locator, elementName) => {
+        return `private readonly ${elementName} = ${this.formatLocator(locator)}`;
+      }
+    );
+    
+    return content;
   }
   
-  result += '  }\n\n';
-  return result;
+  /**
+   * Convert method-style locator declarations
+   */
+  convertMethodLocators(content: string): string {
+    // Handle method locators with JSON format
+    content = content.replace(
+      /public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+(?:CSWebElement|WebElement)\s*\(\s*"\{\s*\"locator\"\s*:\s*\"([^"]+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)\"\s*,\s*\"desc\"\s*:\s*\"[^"]*\"\s*\}"\s*\)\s*;\s*\}/g,
+      (match, methodName, paramName, locatorPrefix, paramRef, locatorSuffix) => {
+        return `private ${methodName} = (${paramName}: string) => \`${locatorPrefix}\${${paramName}}${locatorSuffix}\``;
+      }
+    );
+    
+    // Handle simple method locators
+    content = content.replace(
+      /public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+(?:CSWebElement|WebElement)\s*\(\s*"([^"]+)'\s*\+\s*(\w+)\s*\+\s*'([^"]*)"\s*\)\s*;\s*\}/g,
+      (match, methodName, paramName, locatorPrefix, paramRef, locatorSuffix) => {
+        return `private ${methodName} = (${paramName}: string) => \`${locatorPrefix}\${${paramName}}${locatorSuffix}\``;
+      }
+    );
+    
+    return content;
+  }
+  
+  /**
+   * Convert step definitions
+   */
+  convertStepDefinitions(content: string): string {
+    // Handle page object instantiations
+    content = content.replace(
+      /(\w+)\s+(\w+)\s*=\s*new\s+\1\(\);/g,
+      "private $2 = new $1();"
+    );
+    
+    // Handle step definitions
+    content = content.replace(
+      /@QAFTestStep\s*\(\s*description\s*=\s*"([^"]*)"\s*\)\s*public\s+void\s+(\w+)\s*\(([^)]*)\)\s*\{/g,
+      (match, description, methodName, params) => {
+        // Determine the step type (Given/When/Then)
+        let stepType = "Given";
+        if (description.toLowerCase().startsWith("when")) {
+          stepType = "When";
+        } else if (description.toLowerCase().startsWith("then")) {
+          stepType = "Then";
+        }
+        
+        // Convert parameters
+        const convertedParams = this.convertParameters(params);
+        
+        return `${stepType}('${description}', async function(${convertedParams}) {`;
+      }
+    );
+    
+    return content;
+  }
+  
+  /**
+   * Convert method parameters
+   */
+  convertParameters(params: string): string {
+    if (!params.trim()) return '';
+    
+    return params
+      .split(',')
+      .map(param => {
+        const parts = param.trim().split(/\s+/);
+        const paramName = parts[parts.length - 1];
+        return paramName;
+      })
+      .join(', ');
+  }
+  
+  /**
+   * Format locator string to Playwright format
+   */
+  formatLocator(locator: string): string {
+    // Handle different locator types
+    if (locator.startsWith('xpath=')) {
+      return `\`${locator.substring(6)}\``;
+    } else if (locator.startsWith('css=')) {
+      return `page.locator('${locator.substring(4)}')`;
+    } else if (locator.startsWith('id=')) {
+      return `page.locator('#${locator.substring(3)}')`;
+    } else if (locator.startsWith('name=')) {
+      return `page.locator('[name="${locator.substring(5)}"]')`;
+    } else if (locator.startsWith('link=')) {
+      return `page.getByRole('link', { name: '${locator.substring(5)}' })`;
+    } else if (locator.startsWith('text=')) {
+      return `page.getByText('${locator.substring(5)}')`;
+    } else {
+      // Default to using the locator as is
+      return `\`${locator}\``;
+    }
+  }
+  
+  /**
+   * Perform final cleanup and add required imports
+   */
+  performCleanup(content: string): string {
+    // Add imports
+    let result = "import { Given, When, Then } from '@cucumber/cucumber';\n";
+    result += "import { Page, expect } from '@playwright/test';\n\n";
+    
+    // Add the modified content
+    result += content;
+    
+    // Add await to common method calls
+    result = result.replace(/(\w+)\.click\(\)/g, 'await $1.click()');
+    result = result.replace(/(\w+)\.sendKeys\(([^)]+)\)/g, 'await $1.fill($2)');
+    
+    return result;
+  }
+  
+  /**
+   * Process a directory of files
+   */
+  processDirectory(inputDir: string, outputDir: string, extensions: string[]): void {
+    const files = this.getFiles(inputDir, extensions);
+    console.log(`Found ${files.length} files with extensions ${extensions.join(', ')} to process.`);
+    
+    for (const file of files) {
+      const relativePath = path.relative(inputDir, file);
+      const outputPath = path.join(outputDir, relativePath.replace(/\.[^/.]+$/, '.ts'));
+      this.convertFile(file, outputPath);
+    }
+    
+    console.log('Conversion completed.');
+  }
+  
+  /**
+   * Get all files with specified extensions from a directory recursively
+   */
+  getFiles(dir: string, extensions: string[]): string[] {
+    const files: string[] = [];
+    const items = fs.readdirSync(dir);
+    
+    for (const item of items) {
+      const fullPath = path.join(dir, item);
+      const stat = fs.statSync(fullPath);
+      
+      if (stat.isDirectory()) {
+        files.push(...this.getFiles(fullPath, extensions));
+      } else if (extensions.some(ext => fullPath.endsWith(ext))) {
+        files.push(fullPath);
+      }
+    }
+    
+    return files;
+  }
 }
+
+// Set up the command-line interface
+const program = new Command();
+
+program
+  .name('qaf-to-playwright')
+  .description('Convert QAF Java code to Playwright TypeScript')
+  .version('1.0.0')
+  .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
+  .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
+  .option('-e, --extensions <extensions>', 'File extensions to process (comma-separated)', '.java')
+  .action((options) => {
+    try {
+      const extensions = options.extensions.split(',').map((ext: string) => ext.trim());
+      
+      console.log('Starting conversion...');
+      console.log(`Input directory: ${options.input}`);
+      console.log(`Output directory: ${options.output}`);
+      console.log(`File extensions: ${extensions.join(', ')}`);
+      
+      const converter = new SimplifiedQafConverter();
+      converter.processDirectory(options.input, options.output, extensions);
+      
+    } catch (error) {
+      console.error('Conversion failed:', error);
+      process.exit(1);
+    }
+  });
+
+program.parse();
