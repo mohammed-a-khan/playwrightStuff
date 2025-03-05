@@ -1,37 +1,102 @@
-const fs = require('fs');
-const path = require('path');
+import * as fs from 'fs';
+import * as path from 'path';
 
-// Very simple converter that focuses only on @FindBy patterns
-function convertFile(inputFile, outputFile) {
+// TypeScript converter that focuses on @FindBy patterns with more variations
+function convertFile(inputFile: string, outputFile: string): void {
   console.log(`Converting ${inputFile} to ${outputFile}`);
   
   try {
     // Read the file
     let content = fs.readFileSync(inputFile, 'utf8');
     
-    // Pattern 1: JSON format with locator and desc
+    // Add imports at the top of the file
+    content = "import { Page } from '@playwright/test';\n\n" + content;
+    
+    // Convert classes
     content = content.replace(
-      /@FindBy\(locator\s*=\s*"\{\\"locator\\":\\"xpath=([^"]+)\\",\\"desc\\":\\"[^"]*\\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g,
-      (match, xpathValue, elementName) => {
-        return `private readonly ${elementName} = \`${xpathValue}\`;`;
+      /public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/g,
+      (match: string, className: string, parentClass?: string) => {
+        if (parentClass) {
+          return `export class ${className} extends ${parentClass} {\n  constructor(private page: Page) {\n    super(page);\n  }\n`;
+        } else {
+          return `export class ${className} {\n  constructor(private page: Page) {}\n`;
+        }
       }
     );
     
-    // Pattern 2: Direct xpath format
+    // Try different patterns for JSON locators with variations of escaping
+    const jsonLocatorPatterns = [
+      // Pattern with double-escaped quotes
+      /@FindBy\s*\(\s*locator\s*=\s*"\{\\"locator\\":\\"xpath=([^"]+)\\",\\"desc\\":\\"[^"]*\\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g,
+      
+      // Pattern with single-escaped quotes
+      /@FindBy\s*\(\s*locator\s*=\s*"\{\"locator\":\"xpath=([^"]+)\",\"desc\":\"[^"]*\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g,
+      
+      // Pattern without escaped quotes (in case they're not escaped in the file)
+      /@FindBy\s*\(\s*locator\s*=\s*"\{locator:\"xpath=([^"]+)\",desc:\"[^"]*\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g
+    ];
+    
+    // Apply each pattern
+    for (const pattern of jsonLocatorPatterns) {
+      content = content.replace(
+        pattern,
+        (match: string, xpathValue: string, elementName: string) => {
+          return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
+        }
+      );
+    }
+    
+    // Pattern for direct xpath format
     content = content.replace(
-      /@FindBy\(locator\s*=\s*"xpath=([^"]+)"\)\s*public\s+CSWebElement\s+(\w+);/g,
-      (match, xpathValue, elementName) => {
-        return `private readonly ${elementName} = \`${xpathValue}\`;`;
+      /@FindBy\s*\(\s*locator\s*=\s*"xpath=([^"]+)"\)\s*public\s+CSWebElement\s+(\w+);/g,
+      (match: string, xpathValue: string, elementName: string) => {
+        return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
       }
     );
     
-    // Method pattern
-    content = content.replace(
+    // Patterns for method-style locators with different escape variations
+    const methodPatterns = [
+      // Double-escaped quotes
       /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"\{\\"locator\\":\\"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)\\",\\"desc\\":\\"[^"]*\\"\}"\);\s*\}/g,
-      (match, methodName, paramName, prefix, param, suffix) => {
-        return `private ${methodName} = (${paramName}) => \`${prefix}\${${paramName}}${suffix}\`;`;
+      
+      // Single-escaped quotes
+      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"\{\"locator\":\"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)\",\"desc\":\"[^"]*\"\}"\);\s*\}/g,
+      
+      // No escaped quotes
+      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"\{locator:\"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)\",desc:\"[^"]*\"\}"\);\s*\}/g
+    ];
+    
+    // Apply each method pattern
+    for (const pattern of methodPatterns) {
+      content = content.replace(
+        pattern,
+        (match: string, methodName: string, paramName: string, prefix: string, param: string, suffix: string) => {
+          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+        }
+      );
+    }
+    
+    // Direct string concatenation pattern for method locators
+    content = content.replace(
+      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"([^"]+)"\s*\+\s*(\w+)\s*\+\s*"([^"]*)"\);\s*\}/g,
+      (match: string, methodName: string, paramName: string, prefix: string, param: string, suffix: string) => {
+        // Check for locator type prefix
+        if (prefix.startsWith("xpath=")) {
+          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix.replace("xpath=", "")}\${${paramName}}${suffix}\`);`;
+        } else if (prefix.startsWith("id=")) {
+          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`#\${${paramName}}\`);`;
+        } else if (prefix.startsWith("css=")) {
+          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix.replace("css=", "")}\${${paramName}}${suffix}\`);`;
+        } else {
+          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+        }
       }
     );
+    
+    // Clean up Java imports
+    content = content.replace(/import\s+[^;]+;/g, '');
+    // Clean up package declaration
+    content = content.replace(/package\s+[^;]+;/g, '');
     
     // Write the output file
     const outputDir = path.dirname(outputFile);
@@ -43,24 +108,27 @@ function convertFile(inputFile, outputFile) {
     console.log(`Conversion completed: ${outputFile}`);
     
   } catch (error) {
-    console.error(`Error converting file: ${error.message}`);
+    console.error(`Error converting file: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 // Process a directory
-function processDirectory(inputDir, outputDir) {
+function processDirectory(inputDir: string, outputDir: string): void {
   const files = getJavaFiles(inputDir);
+  console.log(`Found ${files.length} Java files to process`);
   
   files.forEach(file => {
     const relativePath = path.relative(inputDir, file);
     const outputFile = path.join(outputDir, relativePath.replace('.java', '.ts'));
     convertFile(file, outputFile);
   });
+  
+  console.log('Conversion process completed.');
 }
 
 // Get all Java files in a directory and its subdirectories
-function getJavaFiles(dir) {
-  const files = [];
+function getJavaFiles(dir: string): string[] {
+  const files: string[] = [];
   
   const items = fs.readdirSync(dir);
   
@@ -78,15 +146,39 @@ function getJavaFiles(dir) {
   return files;
 }
 
-// Get command line arguments
-const inputDir = process.argv[2];
-const outputDir = process.argv[3];
+// Main function with better error handling
+function main(): void {
+  try {
+    // Get command line arguments
+    const args = process.argv.slice(2);
+    const inputDir = args[0];
+    const outputDir = args[1];
 
-if (!inputDir || !outputDir) {
-  console.error('Usage: node findby-converter.js <input-directory> <output-directory>');
-  process.exit(1);
+    if (!inputDir || !outputDir) {
+      console.error('Usage: npx ts-node findby-converter.ts <input-directory> <output-directory>');
+      process.exit(1);
+    }
+
+    // Check if directories exist
+    if (!fs.existsSync(inputDir)) {
+      console.error(`Input directory does not exist: ${inputDir}`);
+      process.exit(1);
+    }
+
+    // Create output directory if it doesn't exist
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    // Run the conversion
+    console.log(`Converting files from ${inputDir} to ${outputDir}`);
+    processDirectory(inputDir, outputDir);
+    
+  } catch (error) {
+    console.error('Error during conversion:', error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
 }
 
-// Run the conversion
-console.log(`Converting files from ${inputDir} to ${outputDir}`);
-processDirectory(inputDir, outputDir);
+// Run the program
+main();
