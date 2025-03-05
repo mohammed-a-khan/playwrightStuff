@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-// TypeScript converter that focuses on @FindBy patterns with more variations
+/**
+ * Enhanced QAF to Playwright Converter
+ * Specifically handles @FindBy patterns and method-style element declarations
+ */
 function convertFile(inputFile: string, outputFile: string): void {
   console.log(`Converting ${inputFile} to ${outputFile}`);
   
@@ -9,8 +12,12 @@ function convertFile(inputFile: string, outputFile: string): void {
     // Read the file
     let content = fs.readFileSync(inputFile, 'utf8');
     
-    // Add imports at the top of the file
-    content = "import { Page } from '@playwright/test';\n\n" + content;
+    // Remove Java-style comments
+    content = content.replace(/\/\/.*$/gm, ''); // Remove single-line comments
+    content = content.replace(/\/\*[\s\S]*?\*\//g, ''); // Remove multi-line comments
+    
+    // Add Playwright imports at the top of the file
+    content = "import { Page, Locator } from '@playwright/test';\n\n" + content;
     
     // Convert classes
     content = content.replace(
@@ -24,79 +31,53 @@ function convertFile(inputFile: string, outputFile: string): void {
       }
     );
     
-    // Try different patterns for JSON locators with variations of escaping
-    const jsonLocatorPatterns = [
-      // Pattern with double-escaped quotes
-      /@FindBy\s*\(\s*locator\s*=\s*"\{\\"locator\\":\\"xpath=([^"]+)\\",\\"desc\\":\\"[^"]*\\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g,
-      
-      // Pattern with single-escaped quotes
-      /@FindBy\s*\(\s*locator\s*=\s*"\{\"locator\":\"xpath=([^"]+)\",\"desc\":\"[^"]*\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g,
-      
-      // Pattern without escaped quotes (in case they're not escaped in the file)
-      /@FindBy\s*\(\s*locator\s*=\s*"\{locator:\"xpath=([^"]+)\",desc:\"[^"]*\"\}"\)\s*public\s+CSWebElement\s+(\w+);/g
-    ];
-    
-    // Apply each pattern
-    for (const pattern of jsonLocatorPatterns) {
-      content = content.replace(
-        pattern,
-        (match: string, xpathValue: string, elementName: string) => {
-          return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
-        }
-      );
-    }
-    
-    // Pattern for direct xpath format
+    // Convert @FindBy with JSON format (with double quotes)
     content = content.replace(
-      /@FindBy\s*\(\s*locator\s*=\s*"xpath=([^"]+)"\)\s*public\s+CSWebElement\s+(\w+);/g,
+      /@FindBy\s*\(\s*locator\s*=\s*"(\{.*?\"locator\":\s*\"xpath=([^\"]+)\".*?\})"\s*\)\s*public\s+CSWebElement\s+(\w+)\s*;/g,
+      (match: string, jsonStr: string, xpathValue: string, elementName: string) => {
+        return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
+      }
+    );
+    
+    // Convert @FindBy with direct xpath
+    content = content.replace(
+      /@FindBy\s*\(\s*locator\s*=\s*"xpath=([^\"]+)"\s*\)\s*public\s+CSWebElement\s+(\w+)\s*;/g,
       (match: string, xpathValue: string, elementName: string) => {
         return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
       }
     );
     
-    // Patterns for method-style locators with different escape variations
-    const methodPatterns = [
-      // Double-escaped quotes
-      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"\{\\"locator\\":\\"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)\\",\\"desc\\":\\"[^"]*\\"\}"\);\s*\}/g,
-      
-      // Single-escaped quotes
-      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"\{\"locator\":\"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)\",\"desc\":\"[^"]*\"\}"\);\s*\}/g,
-      
-      // No escaped quotes
-      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"\{locator:\"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)\",desc:\"[^"]*\"\}"\);\s*\}/g
-    ];
-    
-    // Apply each method pattern
-    for (const pattern of methodPatterns) {
-      content = content.replace(
-        pattern,
-        (match: string, methodName: string, paramName: string, prefix: string, param: string, suffix: string) => {
-          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
-        }
-      );
-    }
-    
-    // Direct string concatenation pattern for method locators
+    // Method-style element declarations - more flexible pattern
     content = content.replace(
-      /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{\s*return\s+new\s+CSWebElement\(\s*"([^"]+)"\s*\+\s*(\w+)\s*\+\s*"([^"]*)"\);\s*\}/g,
-      (match: string, methodName: string, paramName: string, prefix: string, param: string, suffix: string) => {
-        // Check for locator type prefix
-        if (prefix.startsWith("xpath=")) {
-          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix.replace("xpath=", "")}\${${paramName}}${suffix}\`);`;
-        } else if (prefix.startsWith("id=")) {
-          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`#\${${paramName}}\`);`;
-        } else if (prefix.startsWith("css=")) {
-          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix.replace("css=", "")}\${${paramName}}${suffix}\`);`;
-        } else {
-          return `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+      /public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+CSWebElement\s*\(\s*"(.*?)"\s*\+\s*(\w+)\s*\+\s*"(.*?)"\s*\)\s*;\s*\}/g,
+      (match: string, methodName: string, paramName: string, prefix: string, paramRef: string, suffix: string) => {
+        // Extract xpath from the prefix if it's in JSON format
+        let xpathPrefix = prefix;
+        const jsonMatch = prefix.match(/\{.*?"locator":\s*"xpath=([^"]+)/);
+        if (jsonMatch) {
+          xpathPrefix = jsonMatch[1];
+        } else if (prefix.includes("xpath=")) {
+          xpathPrefix = prefix.split("xpath=")[1];
         }
+        
+        return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${xpathPrefix}\${${paramName}}${suffix}\`);`;
       }
     );
     
-    // Clean up Java imports
+    // Special case for method-style declarations with JSON string
+    content = content.replace(
+      /public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+CSWebElement\s*\(\s*"\{\\?"locator\\?":\s*\\?"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^\"]+)\\?".*?\}"\s*\)\s*;\s*\}/g,
+      (match: string, methodName: string, paramName: string, prefix: string, paramRef: string, suffix: string) => {
+        return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+      }
+    );
+    
+    // Clean up Java imports and package declarations
     content = content.replace(/import\s+[^;]+;/g, '');
-    // Clean up package declaration
     content = content.replace(/package\s+[^;]+;/g, '');
+    
+    // Clean up empty lines
+    content = content.replace(/\n\s*\n\s*\n/g, '\n\n');
     
     // Write the output file
     const outputDir = path.dirname(outputFile);
@@ -155,7 +136,7 @@ function main(): void {
     const outputDir = args[1];
 
     if (!inputDir || !outputDir) {
-      console.error('Usage: npx ts-node findby-converter.ts <input-directory> <output-directory>');
+      console.error('Usage: npx ts-node qaf-converter.ts <input-directory> <output-directory>');
       process.exit(1);
     }
 
