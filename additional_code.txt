@@ -4,236 +4,535 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
 
+interface ConversionOptions {
+  inputDir: string;
+  outputDir: string;
+  fileExtensions: string[];
+  verbose: boolean;
+}
+
 /**
- * Simplified QAF to Playwright Converter
- * Focuses on handling the specific patterns mentioned in requirements
+ * Intelligent QAF to Playwright Converter with CLI
  */
-class SimplifiedQafConverter {
+class IntelligentQafConverter {
+  private options: ConversionOptions;
+  private convertedCount: number = 0;
+  private elementsConverted: number = 0;
+  private methodsConverted: number = 0;
+  private stepsConverted: number = 0;
+
+  constructor(options: ConversionOptions) {
+    this.options = options;
+  }
+
   /**
-   * Convert a QAF Java file to Playwright TypeScript
+   * Convert QAF to Playwright
    */
-  convertFile(inputPath: string, outputPath: string): void {
+  async run(): Promise<void> {
     try {
-      // Read the input file
-      let content = fs.readFileSync(inputPath, 'utf8');
-      
-      // Apply conversions
-      content = this.convertFindByLocators(content);
-      content = this.convertMethodLocators(content);
-      content = this.convertStepDefinitions(content);
-      content = this.performCleanup(content);
-      
       // Create output directory if it doesn't exist
+      if (!fs.existsSync(this.options.outputDir)) {
+        fs.mkdirSync(this.options.outputDir, { recursive: true });
+      }
+
+      // Get files to process
+      const files = this.getFilesWithExtensions(this.options.inputDir, this.options.fileExtensions);
+      this.log(`Found ${files.length} files to process.`);
+
+      // Process each file
+      for (const file of files) {
+        await this.convertFile(file);
+      }
+
+      this.log('\nConversion completed successfully!');
+      this.log(`Files processed: ${this.convertedCount}`);
+      this.log(`Elements converted: ${this.elementsConverted}`);
+      this.log(`Methods converted: ${this.methodsConverted}`);
+      this.log(`Step definitions converted: ${this.stepsConverted}`);
+    } catch (error) {
+      console.error('Error during conversion process:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Convert a single file
+   */
+  private async convertFile(filePath: string): Promise<void> {
+    try {
+      const relativePath = path.relative(this.options.inputDir, filePath);
+      const outputPath = path.join(
+        this.options.outputDir,
+        relativePath.replace(/\.[^/.]+$/, '.ts')
+      );
+      
+      // Create output directory structure if needed
       const outputDir = path.dirname(outputPath);
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
+
+      // Read content
+      let content = fs.readFileSync(filePath, 'utf8');
       
-      // Write the output file
+      // Apply intelligent transformations
+      content = this.transformContent(content);
+      
+      // Write transformed content
       fs.writeFileSync(outputPath, content);
-      console.log(`Converted ${inputPath} to ${outputPath}`);
+      
+      this.convertedCount++;
+      this.log(`Converted: ${filePath} → ${outputPath}`);
     } catch (error) {
-      console.error(`Error converting file ${inputPath}:`, error);
+      console.error(`Error processing file ${filePath}:`, error);
     }
   }
-  
+
   /**
-   * Convert @FindBy locators to Playwright locators
+   * Transform file content using intelligent pattern recognition
    */
-  convertFindByLocators(content: string): string {
-    // First, handle the JSON format locators
-    content = content.replace(
-      /@FindBy\s*\(\s*locator\s*=\s*"\{\s*\"locator\"\s*:\s*\"([^"]+)\"\s*,\s*\"desc\"\s*:\s*\"[^"]*\"\s*\}"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement)\s+(\w+)/g,
-      (match, locator, elementName) => {
-        return `private readonly ${elementName} = ${this.formatLocator(locator)}`;
-      }
-    );
+  private transformContent(content: string): string {
+    let transformed = content;
     
-    // Then, handle the simple format locators
-    content = content.replace(
-      /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement)\s+(\w+)/g,
-      (match, locator, elementName) => {
-        return `private readonly ${elementName} = ${this.formatLocator(locator)}`;
-      }
-    );
+    // Add Playwright imports at the top
+    transformed = "import { Page, expect } from '@playwright/test';\n" + transformed;
     
-    return content;
+    // Convert class definitions
+    transformed = this.convertClassDefinitions(transformed);
+    
+    // Process content line by line for better context awareness
+    transformed = this.processLineByLine(transformed);
+    
+    // Convert method bodies - make methods async
+    transformed = this.convertMethodBodies(transformed);
+    
+    // Clean up imports and package declarations
+    transformed = this.cleanupJavaSpecifics(transformed);
+    
+    return transformed;
   }
-  
+
   /**
-   * Convert method-style locator declarations
+   * Process content line by line with context awareness
    */
-  convertMethodLocators(content: string): string {
-    // Handle method locators with JSON format
-    content = content.replace(
-      /public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+(?:CSWebElement|WebElement)\s*\(\s*"\{\s*\"locator\"\s*:\s*\"([^"]+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)\"\s*,\s*\"desc\"\s*:\s*\"[^"]*\"\s*\}"\s*\)\s*;\s*\}/g,
-      (match, methodName, paramName, locatorPrefix, paramRef, locatorSuffix) => {
-        return `private ${methodName} = (${paramName}: string) => \`${locatorPrefix}\${${paramName}}${locatorSuffix}\``;
+  private processLineByLine(content: string): string {
+    const lines = content.split('\n');
+    let result: string[] = [];
+    
+    // We'll keep track of state to handle multi-line declarations
+    let inFindByDeclaration = false;
+    let findByBuffer = '';
+    let inMethodDeclaration = false;
+    let methodBuffer = '';
+    let braceCount = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Handle @FindBy declarations (including multi-line)
+      if (line.includes('@FindBy') || inFindByDeclaration) {
+        inFindByDeclaration = true;
+        findByBuffer += line + '\n';
+        
+        // Check if this completes the declaration
+        if (line.includes(';')) {
+          inFindByDeclaration = false;
+          const convertedFindBy = this.convertFindByDeclaration(findByBuffer);
+          result.push(convertedFindBy);
+          findByBuffer = '';
+          this.elementsConverted++;
+          continue;
+        }
+        continue;
       }
-    );
-    
-    // Handle simple method locators
-    content = content.replace(
-      /public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+(?:CSWebElement|WebElement)\s*\(\s*"([^"]+)'\s*\+\s*(\w+)\s*\+\s*'([^"]*)"\s*\)\s*;\s*\}/g,
-      (match, methodName, paramName, locatorPrefix, paramRef, locatorSuffix) => {
-        return `private ${methodName} = (${paramName}: string) => \`${locatorPrefix}\${${paramName}}${locatorSuffix}\``;
-      }
-    );
-    
-    return content;
-  }
-  
-  /**
-   * Convert step definitions
-   */
-  convertStepDefinitions(content: string): string {
-    // Handle page object instantiations
-    content = content.replace(
-      /(\w+)\s+(\w+)\s*=\s*new\s+\1\(\);/g,
-      "private $2 = new $1();"
-    );
-    
-    // Handle step definitions
-    content = content.replace(
-      /@QAFTestStep\s*\(\s*description\s*=\s*"([^"]*)"\s*\)\s*public\s+void\s+(\w+)\s*\(([^)]*)\)\s*\{/g,
-      (match, description, methodName, params) => {
-        // Determine the step type (Given/When/Then)
-        let stepType = "Given";
-        if (description.toLowerCase().startsWith("when")) {
-          stepType = "When";
-        } else if (description.toLowerCase().startsWith("then")) {
-          stepType = "Then";
+      
+      // Handle method-style element declarations
+      if (line.match(/public\s+(?:CSWebElement|WebElement)\s+\w+\s*\(\s*String/) || inMethodDeclaration) {
+        if (!inMethodDeclaration) {
+          inMethodDeclaration = true;
+          braceCount = line.split('{').length - line.split('}').length;
+        } else {
+          braceCount += line.split('{').length - line.split('}').length;
         }
         
-        // Convert parameters
-        const convertedParams = this.convertParameters(params);
+        methodBuffer += line + '\n';
         
-        return `${stepType}('${description}', async function(${convertedParams}) {`;
+        // If braces are balanced, we have the full method
+        if (braceCount === 0) {
+          inMethodDeclaration = false;
+          const convertedMethod = this.convertMethodStyleLocator(methodBuffer);
+          result.push(convertedMethod);
+          methodBuffer = '';
+          this.methodsConverted++;
+          continue;
+        }
+        continue;
+      }
+      
+      // Handle @QAFTestStep declarations
+      if (line.includes('@QAFTestStep')) {
+        // Collect full step definition including method body
+        let stepBuffer = line + '\n';
+        let j = i + 1;
+        let stepBraceCount = 0;
+        let foundMethodOpening = false;
+        
+        while (j < lines.length) {
+          const stepLine = lines[j];
+          stepBuffer += stepLine + '\n';
+          
+          if (stepLine.includes('{') && !foundMethodOpening) {
+            foundMethodOpening = true;
+            stepBraceCount = 1;
+          } else if (foundMethodOpening) {
+            stepBraceCount += stepLine.split('{').length - stepLine.split('}').length;
+            if (stepBraceCount === 0) {
+              break;
+            }
+          }
+          j++;
+        }
+        
+        i = j; // Skip processed lines
+        const convertedStep = this.convertStepDefinition(stepBuffer);
+        result.push(convertedStep);
+        this.stepsConverted++;
+        continue;
+      }
+      
+      // Handle page object instantiations
+      if (line.match(/\w+\s+\w+\s*=\s*new\s+\w+\(\);/)) {
+        const convertedInstantiation = this.convertPageObjectInstantiation(line);
+        result.push(convertedInstantiation);
+        continue;
+      }
+      
+      // Default case: keep line as is
+      result.push(line);
+    }
+    
+    return result.join('\n');
+  }
+
+  /**
+   * Convert @FindBy declarations to Playwright locators
+   */
+  private convertFindByDeclaration(declaration: string): string {
+    // Clean up whitespace and newlines
+    const cleanDeclaration = declaration.replace(/\s+/g, ' ').trim();
+    
+    let elementName = '';
+    let locatorValue = '';
+    
+    // Extract element name
+    const elementNameMatch = cleanDeclaration.match(/CSWebElement\s+(\w+)\s*;/);
+    if (elementNameMatch) {
+      elementName = elementNameMatch[1];
+    }
+    
+    // Check for JSON format with locator
+    const jsonLocatorMatch = cleanDeclaration.match(/\"locator\"\s*:\s*\"(xpath=[^\"]+)\"/);
+    if (jsonLocatorMatch) {
+      locatorValue = jsonLocatorMatch[1].replace('xpath=', '');
+      return `private readonly ${elementName} = \`${locatorValue}\`;`;
+    }
+    
+    // Check for direct locator format
+    const directLocatorMatch = cleanDeclaration.match(/locator\s*=\s*\"(xpath=[^\"]+)\"/);
+    if (directLocatorMatch) {
+      locatorValue = directLocatorMatch[1].replace('xpath=', '');
+      return `private readonly ${elementName} = \`${locatorValue}\`;`;
+    }
+    
+    // Check for other locator types (css, id, etc.)
+    const otherLocatorMatch = cleanDeclaration.match(/locator\s*=\s*\"(css=[^\"]+)\"/);
+    if (otherLocatorMatch) {
+      const locatorType = otherLocatorMatch[1].split('=')[0];
+      const value = otherLocatorMatch[1].split('=')[1];
+      
+      switch (locatorType) {
+        case 'css':
+          return `private readonly ${elementName} = this.page.locator('${value}');`;
+        case 'id':
+          return `private readonly ${elementName} = this.page.locator('#${value}');`;
+        case 'name':
+          return `private readonly ${elementName} = this.page.locator('[name="${value}"]');`;
+        case 'linkText':
+        case 'link':
+          return `private readonly ${elementName} = this.page.getByRole('link', { name: '${value}' });`;
+        case 'text':
+          return `private readonly ${elementName} = this.page.getByText('${value}');`;
+        default:
+          return `private readonly ${elementName} = this.page.locator('${value}');`;
+      }
+    }
+    
+    // If we couldn't parse it, just comment it out
+    return `// CONVERSION NEEDED: ${declaration}`;
+  }
+
+  /**
+   * Convert method-style locator declarations to arrow functions
+   */
+  private convertMethodStyleLocator(method: string): string {
+    // Clean up whitespace and newlines for easier regex
+    const cleanMethod = method.replace(/\s+/g, ' ').trim();
+    
+    let methodName = '';
+    let paramName = '';
+    
+    // Extract method name and parameter name
+    const methodMatch = cleanMethod.match(/public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)/);
+    if (methodMatch) {
+      methodName = methodMatch[1];
+      paramName = methodMatch[2];
+    }
+    
+    // Check for JSON format with locator and parameter in the middle
+    const jsonParamMatch = cleanMethod.match(/\"locator\"\s*:\s*\"(xpath=[^\']+)'\s*\+\s*(\w+)\s*\+\s*'([^\"]+)\"/);
+    if (jsonParamMatch) {
+      const prefix = jsonParamMatch[1].replace('xpath=', '');
+      const param = jsonParamMatch[2];
+      const suffix = jsonParamMatch[3];
+      return `private ${methodName} = (${paramName}: string) => \`${prefix}\${${paramName}}${suffix}\`;`;
+    }
+    
+    // Check for simple locator with parameter
+    const simpleParamMatch = cleanMethod.match(/new\s+(?:CSWebElement|WebElement)\s*\(\s*\"([^\"]+)\"\s*\+\s*(\w+)(?:\s*\+\s*\"([^\"]+)\")?\s*\)/);
+    if (simpleParamMatch) {
+      const prefix = simpleParamMatch[1];
+      const param = simpleParamMatch[2];
+      const suffix = simpleParamMatch[3] || '';
+      
+      // Determine if it's a special locator type
+      if (prefix.startsWith('xpath=')) {
+        return `private ${methodName} = (${paramName}: string) => \`${prefix.replace('xpath=', '')}\${${paramName}}${suffix}\`;`;
+      } else if (prefix.startsWith('css=')) {
+        return `private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix.replace('css=', '')}\${${paramName}}${suffix}\`);`;
+      } else if (prefix.startsWith('id=')) {
+        return `private ${methodName} = (${paramName}: string) => this.page.locator(\`#\${${paramName}}\`);`;
+      } else {
+        return `private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+      }
+    }
+    
+    // If we couldn't parse it, just comment it out
+    return `// CONVERSION NEEDED: ${method}`;
+  }
+
+  /**
+   * Convert step definitions to Cucumber BDD format
+   */
+  private convertStepDefinition(step: string): string {
+    // Extract description from @QAFTestStep
+    const descriptionMatch = step.match(/@QAFTestStep\s*\(\s*description\s*=\s*"([^"]*)"\s*\)/);
+    if (!descriptionMatch) return `// CONVERSION NEEDED: ${step}`;
+    
+    const description = descriptionMatch[1];
+    
+    // Extract method name and parameters
+    const methodMatch = step.match(/public\s+void\s+(\w+)\s*\(([^)]*)\)\s*\{/);
+    if (!methodMatch) return `// CONVERSION NEEDED: ${step}`;
+    
+    const methodName = methodMatch[1];
+    const params = methodMatch[2];
+    
+    // Convert parameters
+    let paramList = '';
+    if (params && params.trim()) {
+      paramList = params.split(',')
+        .map(param => {
+          const parts = param.trim().split(/\s+/);
+          return parts[parts.length - 1]; // Just the parameter name, not type
+        })
+        .join(', ');
+    }
+    
+    // Determine step type (Given/When/Then)
+    let stepType = 'Given';
+    if (description.toLowerCase().startsWith('when')) {
+      stepType = 'When';
+    } else if (description.toLowerCase().startsWith('then')) {
+      stepType = 'Then';
+    }
+    
+    // Extract method body
+    const bodyMatch = step.match(/\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)?\}/s);
+    if (!bodyMatch) return `// CONVERSION NEEDED: ${step}`;
+    
+    let body = bodyMatch[1] || '';
+    
+    // Convert common method calls
+    body = body
+      .replace(/\.sendKeys\(/g, '.fill(')
+      .replace(/\.click\(\)/g, 'await .click()')
+      .replace(/Assert\.assertTrue\(([^)]+)\.isDisplayed\(\)\)/g, 'await expect($1).toBeVisible()')
+      .replace(/Assert\.assertTrue\(([^)]+)\)/g, 'expect($1).toBeTruthy()')
+      .replace(/Assert\.assertEquals\(([^,]+),\s*([^)]+)\)/g, 'expect($1).toEqual($2)');
+    
+    // Add await to common method calls if not already there
+    body = body.replace(/(?<!await\s+)(\w+)\.(click|type|fill|check|uncheck|selectOption|press)\(/g, 'await $1.$2(');
+    
+    // Prepare the result
+    let result = `${stepType}('${description}', async function(${paramList}) {\n`;
+    
+    // Clean up body lines and add them
+    body.split('\n').forEach(line => {
+      if (line.trim()) {
+        result += `  ${line.trim()}\n`;
+      }
+    });
+    
+    result += '});';
+    return result;
+  }
+
+  /**
+   * Convert page object instantiations
+   */
+  private convertPageObjectInstantiation(line: string): string {
+    const match = line.match(/(\w+)\s+(\w+)\s*=\s*new\s+\1\(\);/);
+    if (match) {
+      const className = match[1];
+      const variableName = match[2];
+      return `private ${variableName} = new ${className}(this.page);`;
+    }
+    return line;
+  }
+
+  /**
+   * Convert class definitions
+   */
+  private convertClassDefinitions(content: string): string {
+    return content.replace(
+      /public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/g,
+      (match, className, parentClass) => {
+        if (parentClass) {
+          return `export class ${className} extends ${parentClass} {\n  constructor(private page: Page) {\n    super(page);\n  }\n`;
+        } else {
+          return `export class ${className} {\n  constructor(private page: Page) {}\n`;
+        }
       }
     );
-    
-    return content;
   }
-  
+
   /**
-   * Convert method parameters
+   * Convert Java method bodies to TypeScript
    */
-  convertParameters(params: string): string {
-    if (!params.trim()) return '';
+  private convertMethodBodies(content: string): string {
+    // Make methods async
+    let result = content.replace(
+      /public\s+void\s+(\w+)\s*\(([^)]*)\)\s*\{/g,
+      'async $1($2) {'
+    );
     
-    return params
-      .split(',')
-      .map(param => {
-        const parts = param.trim().split(/\s+/);
-        const paramName = parts[parts.length - 1];
-        return paramName;
-      })
-      .join(', ');
-  }
-  
-  /**
-   * Format locator string to Playwright format
-   */
-  formatLocator(locator: string): string {
-    // Handle different locator types
-    if (locator.startsWith('xpath=')) {
-      return `\`${locator.substring(6)}\``;
-    } else if (locator.startsWith('css=')) {
-      return `page.locator('${locator.substring(4)}')`;
-    } else if (locator.startsWith('id=')) {
-      return `page.locator('#${locator.substring(3)}')`;
-    } else if (locator.startsWith('name=')) {
-      return `page.locator('[name="${locator.substring(5)}"]')`;
-    } else if (locator.startsWith('link=')) {
-      return `page.getByRole('link', { name: '${locator.substring(5)}' })`;
-    } else if (locator.startsWith('text=')) {
-      return `page.getByText('${locator.substring(5)}')`;
-    } else {
-      // Default to using the locator as is
-      return `\`${locator}\``;
-    }
-  }
-  
-  /**
-   * Perform final cleanup and add required imports
-   */
-  performCleanup(content: string): string {
-    // Add imports
-    let result = "import { Given, When, Then } from '@cucumber/cucumber';\n";
-    result += "import { Page, expect } from '@playwright/test';\n\n";
-    
-    // Add the modified content
-    result += content;
-    
-    // Add await to common method calls
-    result = result.replace(/(\w+)\.click\(\)/g, 'await $1.click()');
-    result = result.replace(/(\w+)\.sendKeys\(([^)]+)\)/g, 'await $1.fill($2)');
+    // Convert common Java constructs to TypeScript
+    result = result
+      // Convert for loops
+      .replace(/for\s*\(\s*int\s+(\w+)\s*=\s*(\d+)\s*;\s*\1\s*<\s*(\w+)\s*;\s*\1\+\+\s*\)/g, 'for (let $1 = $2; $1 < $3; $1++)')
+      // Convert while loops
+      .replace(/while\s*\(\s*([^)]+)\s*\)/g, 'while ($1)')
+      // Convert if statements
+      .replace(/if\s*\(\s*([^)]+)\s*\)/g, 'if ($1)')
+      // Convert variable declarations
+      .replace(/String\s+(\w+)\s*=\s*/g, 'const $1: string = ')
+      .replace(/int\s+(\w+)\s*=\s*/g, 'const $1: number = ')
+      .replace(/boolean\s+(\w+)\s*=\s*/g, 'const $1: boolean = ')
+      .replace(/List<([^>]+)>\s+(\w+)\s*=\s*/g, 'const $2: $1[] = ');
     
     return result;
   }
-  
+
   /**
-   * Process a directory of files
+   * Clean up Java-specific constructs
    */
-  processDirectory(inputDir: string, outputDir: string, extensions: string[]): void {
-    const files = this.getFiles(inputDir, extensions);
-    console.log(`Found ${files.length} files with extensions ${extensions.join(', ')} to process.`);
-    
-    for (const file of files) {
-      const relativePath = path.relative(inputDir, file);
-      const outputPath = path.join(outputDir, relativePath.replace(/\.[^/.]+$/, '.ts'));
-      this.convertFile(file, outputPath);
-    }
-    
-    console.log('Conversion completed.');
+  private cleanupJavaSpecifics(content: string): string {
+    return content
+      // Remove Java package declarations
+      .replace(/package\s+[\w.]+;/g, '')
+      // Convert Java imports to TypeScript imports where needed
+      .replace(/import\s+[\w.]+;/g, '')
+      // Remove public/private modifiers from methods
+      .replace(/public\s+/g, '')
+      .replace(/protected\s+/g, 'protected ')
+      // Convert Java comments to TypeScript comments
+      .replace(/\/\*\*\s*([\s\S]*?)\s*\*\//g, '/**$1 */');
   }
-  
+
   /**
-   * Get all files with specified extensions from a directory recursively
+   * Get all files with specified extensions from a directory
    */
-  getFiles(dir: string, extensions: string[]): string[] {
+  private getFilesWithExtensions(dir: string, extensions: string[]): string[] {
     const files: string[] = [];
-    const items = fs.readdirSync(dir);
     
-    for (const item of items) {
-      const fullPath = path.join(dir, item);
-      const stat = fs.statSync(fullPath);
+    try {
+      const items = fs.readdirSync(dir);
       
-      if (stat.isDirectory()) {
-        files.push(...this.getFiles(fullPath, extensions));
-      } else if (extensions.some(ext => fullPath.endsWith(ext))) {
-        files.push(fullPath);
+      for (const item of items) {
+        const fullPath = path.join(dir, item);
+        const stats = fs.statSync(fullPath);
+        
+        if (stats.isDirectory()) {
+          // Recursively process subdirectories
+          files.push(...this.getFilesWithExtensions(fullPath, extensions));
+        } else if (extensions.some(ext => fullPath.endsWith(ext))) {
+          // Add file if it has one of the specified extensions
+          files.push(fullPath);
+        }
       }
+    } catch (error) {
+      console.error(`Error reading directory ${dir}:`, error);
     }
     
     return files;
   }
+
+  /**
+   * Log message if verbose mode is enabled
+   */
+  private log(message: string): void {
+    if (this.options.verbose) {
+      console.log(message);
+    }
+  }
 }
 
-// Set up the command-line interface
+// Set up command-line interface
 const program = new Command();
 
 program
   .name('qaf-to-playwright')
-  .description('Convert QAF Java code to Playwright TypeScript')
+  .description('Intelligent converter for QAF Java code to Playwright TypeScript')
   .version('1.0.0')
   .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
   .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
   .option('-e, --extensions <extensions>', 'File extensions to process (comma-separated)', '.java')
-  .action((options) => {
+  .option('-v, --verbose', 'Enable verbose output', false)
+  .action(async (options) => {
     try {
-      const extensions = options.extensions.split(',').map((ext: string) => ext.trim());
+      console.log('🔄 QAF to Playwright Converter');
+      console.log('============================');
       
-      console.log('Starting conversion...');
+      const fileExtensions = options.extensions.split(',').map((ext: string) => ext.trim());
+      
       console.log(`Input directory: ${options.input}`);
       console.log(`Output directory: ${options.output}`);
-      console.log(`File extensions: ${extensions.join(', ')}`);
+      console.log(`File extensions: ${fileExtensions.join(', ')}`);
+      console.log(`Verbose mode: ${options.verbose ? 'enabled' : 'disabled'}`);
+      console.log('----------------------------');
       
-      const converter = new SimplifiedQafConverter();
-      converter.processDirectory(options.input, options.output, extensions);
+      const converter = new IntelligentQafConverter({
+        inputDir: options.input,
+        outputDir: options.output,
+        fileExtensions: fileExtensions,
+        verbose: options.verbose
+      });
       
+      await converter.run();
+      
+      console.log('✅ Conversion completed successfully!');
     } catch (error) {
-      console.error('Conversion failed:', error);
+      console.error('❌ Conversion failed:', error);
       process.exit(1);
     }
   });
