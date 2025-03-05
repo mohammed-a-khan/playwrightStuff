@@ -1,0 +1,381 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+interface ImportMapping {
+    [key: string]: string | null; // null means skip this import
+}
+
+// Map of Java imports to TypeScript/Playwright equivalents
+const importMappings: ImportMapping = {
+    'java.util.List': 'import { Locator } from \'@playwright/test\';',
+    'java.util.Map': null,
+    'java.util.HashMap': null,
+    'java.util.ArrayList': null,
+    'java.lang.String': null, // No need to import String in TypeScript
+    'java.lang.Thread': null, // Handle thread operations differently in Playwright
+    'org.openqa.selenium.WebElement': 'import { Locator } from \'@playwright/test\';',
+    'org.openqa.selenium.support.FindBy': null, // No direct equivalent in Playwright
+    'org.openqa.selenium.support.ui.WebDriverWait': null, // Use Playwright's built-in waiting mechanisms
+    'org.openqa.selenium.By': null, // Use Playwright's locator methods
+    'org.openqa.selenium.Keys': null, // Will use Playwright's keyboard API
+    'com.qmetry.qaf.automation.ui.WebDriverTestBase': 'import { Page } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.ui.webdriver.QAFWebElement': 'import { Locator } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.ui.annotations.FindBy': null,
+    'com.qmetry.qaf.automation.core.ConfigurationManager': null,
+    'com.example.exe.utils.CSWebElement': 'import { Locator } from \'@playwright/test\';',
+    'com.example.exe.utils.*': null, // Skip all other utility imports
+    'org.testng.Assert': 'import { expect } from \'@playwright/test\';',
+    // Add more mappings as needed
+};
+
+function convertQafToPlaywright(inputFilePath: string, outputFilePath: string): void {
+    try {
+        // Read the input file
+        const fileContent = fs.readFileSync(inputFilePath, 'utf8');
+        const lines = fileContent.split('\n');
+
+        // Process the file content
+        const tsContent = processContent(lines);
+
+        // Create the output directory if it doesn't exist
+        const outputDir = path.dirname(outputFilePath);
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        // Write the output file
+        fs.writeFileSync(outputFilePath, tsContent, 'utf8');
+        console.log(`Converted ${inputFilePath} to ${outputFilePath}`);
+    } catch (error) {
+        console.error(`Error converting ${inputFilePath}: ${error}`);
+    }
+}
+
+function processContent(lines: string[]): string {
+    const tsLines: string[] = [];
+    let className = '';
+    let inMethod = false;
+    let hasAddedPageField = false;
+    let foundImports = new Set<string>();
+
+    // Add base TypeScript imports
+    foundImports.add('import { Page, Locator, expect } from \'@playwright/test\';');
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+
+        // Skip empty lines
+        if (line === '') continue;
+
+        // Skip package declarations
+        if (line.startsWith('package ')) continue;
+
+        // Handle imports - convert Java imports to TypeScript equivalents
+        if (line.startsWith('import ')) {
+            const importPath = line.substring(7, line.endsWith(';') ? line.length - 1 : line.length).trim();
+            
+            // Check for direct matches first
+            if (importMappings[importPath] !== undefined) {
+                if (importMappings[importPath] !== null && !foundImports.has(importMappings[importPath]!)) {
+                    foundImports.add(importMappings[importPath]!);
+                }
+                continue;
+            }
+            
+            // Check for wildcard imports
+            const wildcardImports = Object.keys(importMappings).filter(key => key.endsWith('*'));
+            let matched = false;
+            for (const wildcard of wildcardImports) {
+                const prefix = wildcard.substring(0, wildcard.length - 1);
+                if (importPath.startsWith(prefix)) {
+                    matched = true;
+                    if (importMappings[wildcard] !== null && !foundImports.has(importMappings[wildcard]!)) {
+                        foundImports.add(importMappings[wildcard]!);
+                    }
+                    break;
+                }
+            }
+            
+            if (matched) continue;
+            
+            // Skip all other imports that we don't have mappings for
+            continue;
+        }
+
+        // Extract class name
+        const classMatch = line.match(/public\s+class\s+(\w+)/);
+        if (classMatch) {
+            className = classMatch[1];
+            tsLines.push(`export class ${className} {`);
+            
+            // Add page field if not added already
+            if (!hasAddedPageField) {
+                tsLines.push('  private page: Page;');
+                tsLines.push('');
+                tsLines.push('  constructor(page: Page) {');
+                tsLines.push('    this.page = page;');
+                tsLines.push('  }');
+                tsLines.push('');
+                hasAddedPageField = true;
+            }
+            continue;
+        }
+
+        // Handle FindBy annotations (both regular and with line breaks)
+        const findByPattern = /@FindBy\(locator="([^"]+)"\)\s+public\s+(\w+)\s+(\w+);/;
+        const findByMatch = line.match(findByPattern);
+        
+        if (findByMatch) {
+            const locator = findByMatch[1];
+            const elementType = findByMatch[2];
+            const elementName = findByMatch[3];
+            
+            // Generate getter method for this element
+            tsLines.push(`  async ${elementName}() {`);
+            
+            // Handle different locator types
+            processLocator(tsLines, locator);
+            
+            tsLines.push('  }');
+            tsLines.push('');
+            continue;
+        }
+        
+        // Check for multi-line FindBy
+        if (line.includes('@FindBy') && !line.includes(';')) {
+            let combinedLine = line;
+            let j = i + 1;
+            
+            // Collect the entire FindBy statement across multiple lines
+            while (j < lines.length && !lines[j].trim().includes(';')) {
+                combinedLine += ' ' + lines[j].trim();
+                j++;
+            }
+            
+            if (j < lines.length) {
+                combinedLine += ' ' + lines[j].trim();
+                i = j; // Skip processed lines
+            }
+            
+            const multiLineMatch = combinedLine.match(findByPattern);
+            if (multiLineMatch) {
+                const locator = multiLineMatch[1];
+                const elementType = multiLineMatch[2];
+                const elementName = multiLineMatch[3];
+                
+                tsLines.push(`  async ${elementName}() {`);
+                processLocator(tsLines, locator);
+                tsLines.push('  }');
+                tsLines.push('');
+            }
+            continue;
+        }
+
+        // Handle method conversion
+        const methodMatch = line.match(/public\s+void\s+(\w+)\s*\(\s*\)\s*\{/);
+        if (methodMatch) {
+            const methodName = methodMatch[1];
+            tsLines.push(`  async ${methodName}() {`);
+            inMethod = true;
+            continue;
+        }
+
+        // Handle method with parameters
+        const methodWithParamsMatch = line.match(/public\s+void\s+(\w+)\s*\((.*?)\)\s*\{/);
+        if (methodWithParamsMatch && !methodMatch) {
+            const methodName = methodWithParamsMatch[1];
+            let params = methodWithParamsMatch[2].trim();
+            
+            // Convert Java parameter types to TypeScript
+            params = params.replace(/String/g, 'string')
+                          .replace(/int/g, 'number')
+                          .replace(/boolean/g, 'boolean')
+                          .replace(/Map<[^>]+>/g, 'Record<string, any>')
+                          .replace(/List<[^>]+>/g, 'any[]');
+            
+            tsLines.push(`  async ${methodName}(${params}) {`);
+            inMethod = true;
+            continue;
+        }
+
+        // Handle method end
+        if (line === '}' && inMethod) {
+            tsLines.push('  }');
+            tsLines.push('');
+            inMethod = false;
+            continue;
+        }
+
+        // Handle class end
+        if (line === '}' && !inMethod) {
+            tsLines.push('}');
+            continue;
+        }
+
+        // Handle element actions inside methods
+        if (inMethod) {
+            // Convert Java element actions to Playwright actions
+            const clickMatch = line.match(/(\w+)\.click\(\);/);
+            if (clickMatch) {
+                const elementName = clickMatch[1];
+                tsLines.push(`    await (await this.${elementName}()).click();`);
+                continue;
+            }
+
+            const sendKeysMatch = line.match(/(\w+)\.sendKeys\("([^"]*)"\);/);
+            if (sendKeysMatch) {
+                const elementName = sendKeysMatch[1];
+                const text = sendKeysMatch[2];
+                tsLines.push(`    await (await this.${elementName}()).fill("${text}");`);
+                continue;
+            }
+
+            const clearMatch = line.match(/(\w+)\.clear\(\);/);
+            if (clearMatch) {
+                const elementName = clearMatch[1];
+                tsLines.push(`    await (await this.${elementName}()).clear();`);
+                continue;
+            }
+
+            const isDisplayedMatch = line.match(/(\w+)\.isDisplayed\(\)/);
+            if (isDisplayedMatch) {
+                const elementName = isDisplayedMatch[1];
+                if (line.includes('assert') || line.includes('verify')) {
+                    tsLines.push(`    await expect(await this.${elementName}()).toBeVisible();`);
+                } else {
+                    tsLines.push(`    await (await this.${elementName}()).isVisible();`);
+                }
+                continue;
+            }
+
+            const isEnabledMatch = line.match(/(\w+)\.isEnabled\(\)/);
+            if (isEnabledMatch) {
+                const elementName = isEnabledMatch[1];
+                if (line.includes('assert') || line.includes('verify')) {
+                    tsLines.push(`    await expect(await this.${elementName}()).toBeEnabled();`);
+                } else {
+                    tsLines.push(`    await (await this.${elementName}()).isEnabled();`);
+                }
+                continue;
+            }
+
+            const isSelectedMatch = line.match(/(\w+)\.isSelected\(\)/);
+            if (isSelectedMatch) {
+                const elementName = isSelectedMatch[1];
+                if (line.includes('assert') || line.includes('verify')) {
+                    tsLines.push(`    await expect(await this.${elementName}()).toBeChecked();`);
+                } else {
+                    tsLines.push(`    await (await this.${elementName}()).isChecked();`);
+                }
+                continue;
+            }
+
+            const getTextMatch = line.match(/(\w+)\.getText\(\)/);
+            if (getTextMatch) {
+                const elementName = getTextMatch[1];
+                tsLines.push(`    await (await this.${elementName}()).textContent();`);
+                continue;
+            }
+
+            const waitForElementMatch = line.match(/wait.*?(\w+)/);
+            if (line.includes('wait') && waitForElementMatch) {
+                const elementName = waitForElementMatch[1];
+                tsLines.push(`    await (await this.${elementName}()).waitFor({ state: 'visible' });`);
+                continue;
+            }
+
+            const sleepMatch = line.match(/Thread\.sleep\((\d+)\)/);
+            if (sleepMatch) {
+                const sleepTime = parseInt(sleepMatch[1]);
+                const timeInMs = sleepTime <= 1000 ? sleepTime : sleepTime / 1000; // Convert to ms if in seconds
+                tsLines.push(`    await this.page.waitForTimeout(${timeInMs});`);
+                continue;
+            }
+
+            // Assertions
+            const assertEqualsMatch = line.match(/Assert\.assertEquals\((.*?),(.*?)\)/);
+            if (assertEqualsMatch) {
+                const actual = assertEqualsMatch[1].trim();
+                const expected = assertEqualsMatch[2].trim();
+                tsLines.push(`    expect(${actual}).toEqual(${expected});`);
+                continue;
+            }
+
+            const assertTrueMatch = line.match(/Assert\.assertTrue\((.*?)\)/);
+            if (assertTrueMatch) {
+                const condition = assertTrueMatch[1].trim();
+                tsLines.push(`    expect(${condition}).toBeTruthy();`);
+                continue;
+            }
+
+            const assertFalseMatch = line.match(/Assert\.assertFalse\((.*?)\)/);
+            if (assertFalseMatch) {
+                const condition = assertFalseMatch[1].trim();
+                tsLines.push(`    expect(${condition}).toBeFalsy();`);
+                continue;
+            }
+
+            // Skip lines we don't know how to convert in methods
+            continue;
+        }
+        
+        // Skip any other lines that don't match our patterns
+    }
+
+    // Now add all unique imports at the top
+    let finalContent = Array.from(foundImports).join('\n') + '\n\n';
+    finalContent += tsLines.join('\n');
+    
+    return finalContent;
+}
+
+function processLocator(tsLines: string[], locator: string): void {
+    // Handle different locator types with proper quoting
+    if (locator.startsWith('xpath=')) {
+        const xpathValue = locator.substring(6);
+        // Use template literals to avoid quote escaping issues
+        tsLines.push(`    return this.page.locator(\`xpath=${xpathValue.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('css=')) {
+        const cssValue = locator.substring(4);
+        tsLines.push(`    return this.page.locator(\`${cssValue.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('id=')) {
+        tsLines.push(`    return this.page.locator('#${locator.substring(3)}');`);
+    } else if (locator.startsWith('name=')) {
+        tsLines.push(`    return this.page.locator('[name="${locator.substring(5)}"]');`);
+    } else if (locator.startsWith('linkText=')) {
+        const linkText = locator.substring(9);
+        tsLines.push(`    return this.page.getByText(\`${linkText.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('partialLinkText=')) {
+        const partialText = locator.substring(16);
+        tsLines.push(`    return this.page.getByText(\`${partialText.replace(/`/g, '\\`')}\`, { exact: false });`);
+    } else if (locator.startsWith('className=')) {
+        tsLines.push(`    return this.page.locator('.${locator.substring(10)}');`);
+    } else if (locator.startsWith('tagName=')) {
+        tsLines.push(`    return this.page.locator('${locator.substring(8)}');`);
+    } else {
+        // Generic fallback using template literals
+        tsLines.push(`    return this.page.locator(\`${locator.replace(/`/g, '\\`')}\`);`);
+    }
+}
+
+// Handle execution errors
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    process.exit(1);
+});
+
+// Example usage
+const inputFile = process.argv[2];
+const outputFile = process.argv[3] || inputFile.replace('.java', '.spec.ts');
+
+if (!inputFile) {
+    console.error('Please provide an input file path');
+    process.exit(1);
+}
+
+try {
+    convertQafToPlaywright(inputFile, outputFile);
+} catch (error) {
+    console.error('Error executing conversion:', error);
+    process.exit(1);
+}
