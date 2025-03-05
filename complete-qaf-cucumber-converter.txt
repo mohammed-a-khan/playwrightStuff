@@ -1,0 +1,360 @@
+#!/usr/bin/env node
+
+import * as fs from 'fs';
+import * as path from 'path';
+import { Command } from 'commander';
+
+interface ConversionOptions {
+  inputDir: string;
+  outputDir: string;
+  fileExtensions: string[];
+  generateFeatureFiles: boolean;
+}
+
+class QafToPlaywrightCucumberConverter {
+  private options: ConversionOptions;
+
+  constructor(options: ConversionOptions) {
+    this.options = options;
+  }
+
+  /**
+   * Process all files in the given directory
+   */
+  public async processDirectory(): Promise<void> {
+    if (!fs.existsSync(this.options.outputDir)) {
+      fs.mkdirSync(this.options.outputDir, { recursive: true });
+    }
+
+    const files = this.getJavaFiles(this.options.inputDir);
+    console.log(`Found ${files.length} files to process.`);
+    
+    for (const file of files) {
+      await this.processFile(file);
+    }
+    
+    if (this.options.generateFeatureFiles) {
+      await this.generateFeatureFiles();
+    }
+  }
+
+  /**
+   * Get all Java files from directory recursively
+   */
+  private getJavaFiles(dir: string): string[] {
+    const files: string[] = [];
+    const items = fs.readdirSync(dir);
+
+    for (const item of items) {
+      const fullPath = path.join(dir, item);
+      const stat = fs.statSync(fullPath);
+
+      if (stat.isDirectory()) {
+        files.push(...this.getJavaFiles(fullPath));
+      } else if (this.options.fileExtensions.some(ext => fullPath.endsWith(ext))) {
+        files.push(fullPath);
+      }
+    }
+
+    return files;
+  }
+
+  /**
+   * Process a single file
+   */
+  private async processFile(filePath: string): Promise<void> {
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const convertedContent = this.convertContent(content);
+      
+      const relativePath = path.relative(this.options.inputDir, filePath);
+      const outputPath = path.join(
+        this.options.outputDir,
+        'step-definitions',
+        relativePath.replace(/\.java$/, '.ts')
+      );
+      
+      const outputDir = path.dirname(outputPath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      fs.writeFileSync(outputPath, convertedContent);
+      console.log(`Converted: ${filePath} -> ${outputPath}`);
+    } catch (error) {
+      console.error(`Error processing file ${filePath}:`, error);
+    }
+  }
+
+  /**
+   * Generate feature files based on step definitions
+   */
+  private async generateFeatureFiles(): Promise<void> {
+    const featureDirPath = path.join(this.options.outputDir, 'features');
+    if (!fs.existsSync(featureDirPath)) {
+      fs.mkdirSync(featureDirPath, { recursive: true });
+    }
+    
+    // For now, just create a sample feature file
+    // In a real implementation, you'd analyze the step definitions and create appropriate feature files
+    const sampleFeatureContent = `Feature: Sample Feature
+  This is a sample feature file generated from QAF step definitions
+
+  Scenario: Sample Scenario
+    Given user is on the application
+    When user performs an action
+    Then user should see the results
+`;
+    
+    fs.writeFileSync(path.join(featureDirPath, 'sample.feature'), sampleFeatureContent);
+    console.log(`Generated sample feature file at: ${path.join(featureDirPath, 'sample.feature')}`);
+  }
+
+  /**
+   * Convert Java content to TypeScript Cucumber BDD
+   */
+  private convertContent(content: string): string {
+    let result = content;
+
+    // Extract class name for context
+    const className = this.extractClassName(result);
+    
+    // Convert locator declarations
+    result = this.convertLocatorDeclarations(result);
+    
+    // Convert method-style locators
+    result = this.convertMethodLocators(result);
+    
+    // Convert step definitions to Cucumber BDD format
+    result = this.convertStepDefinitions(result);
+    
+    // Convert page object instantiations
+    result = this.convertPageObjectInstantiations(result);
+    
+    // Additional conversions and cleanups
+    result = this.finalCleanups(result);
+    
+    // Add standard Cucumber BDD imports
+    result = this.addCucumberImports(result);
+    
+    return result;
+  }
+
+  /**
+   * Extract class name from Java file
+   */
+  private extractClassName(content: string): string {
+    const classMatch = content.match(/public\s+class\s+(\w+)/);
+    return classMatch ? classMatch[1] : '';
+  }
+
+  /**
+   * Convert @FindBy locator declarations to Playwright locators
+   */
+  private convertLocatorDeclarations(content: string): string {
+    const multilineRegex = /@FindBy\s*\(\s*locator\s*=\s*"((?:\\"|[^"])*?)(?:"\s*,\s*"desc"\s*=\s*"((?:\\"|[^"])*?)")?)"\s*\)\s*(?:public\s+)?(?:CSWebElement|WebElement|QAFWebElement)\s+(\w+)(?:\s*;)?/g;
+    
+    return content.replace(multilineRegex, (match, locator, desc, elementName) => {
+      // Extract actual locator value
+      let locatorValue = this.extractLocatorValue(locator);
+      return `private readonly ${elementName} = ${locatorValue};`;
+    });
+  }
+
+  /**
+   * Convert method-style locator declarations
+   */
+  private convertMethodLocators(content: string): string {
+    const methodLocatorRegex = /public\s+(?:CSWebElement|WebElement|QAFWebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{\s*return\s+new\s+(?:CSWebElement|WebElement|QAFWebElement)\s*\(\s*"((?:\\"|[^"])*?)"\s*\)\s*;\s*\}/g;
+    
+    return content.replace(methodLocatorRegex, (match, methodName, paramName, locator) => {
+      // Extract actual locator value and replace parameter references
+      let locatorValue = this.extractLocatorValue(locator);
+      locatorValue = locatorValue.replace(new RegExp(`'\\s*\\+\\s*${paramName}\\s*\\+\\s*'`, 'g'), '${' + paramName + '}');
+      
+      return `private ${methodName} = (${paramName}: string) => ${locatorValue};`;
+    });
+  }
+
+  /**
+   * Convert @QAFTestStep annotations to Cucumber step definitions
+   */
+  private convertStepDefinitions(content: string): string {
+    const stepRegex = /@QAFTestStep\s*\(\s*description\s*=\s*"([^"]*)"\s*\)\s*public\s+(?:void|[a-zA-Z<>[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*\{/g;
+    
+    return content.replace(stepRegex, (match, description, methodName, params) => {
+      const convertedParams = this.convertParameters(params);
+      
+      // Determine the appropriate step type (Given/When/Then)
+      let stepType = 'Given';
+      if (description.toLowerCase().startsWith('when')) {
+        stepType = 'When';
+      } else if (description.toLowerCase().startsWith('then')) {
+        stepType = 'Then';
+      }
+      
+      // Replace placeholder variables {varName} with cucumber expressions {string}
+      let cucumberExpression = description.replace(/\{(\w+)\}/g, '{string}');
+      
+      // Generate the step definition
+      return `${stepType}('${cucumberExpression}', async function(${convertedParams}) {`;
+    });
+  }
+
+  /**
+   * Convert page object instantiations
+   */
+  private convertPageObjectInstantiations(content: string): string {
+    const pageObjectRegex = /(\w+)\s+(\w+)\s*=\s*new\s+\1\(\);/g;
+    
+    return content.replace(pageObjectRegex, (match, className, variableName) => {
+      return `const ${variableName} = new ${className}(this.page);`;
+    });
+  }
+
+  /**
+   * Convert method parameters from Java to TypeScript
+   */
+  private convertParameters(params: string): string {
+    if (!params.trim()) return '';
+    
+    return params
+      .split(',')
+      .map((param, index) => {
+        const parts = param.trim().split(/\s+/);
+        const paramName = parts[parts.length - 1];
+        
+        // In Cucumber expressions, parameters come in as strings
+        return paramName;
+      })
+      .join(', ');
+  }
+
+  /**
+   * Extract the actual locator value from a locator string
+   * Handles both simple locators and JSON-formatted locators with descriptions
+   */
+  private extractLocatorValue(locator: string): string {
+    // Handle JSON format
+    if (locator.startsWith('{') || locator.includes('"locator"')) {
+      try {
+        // Clean up any escaped quotes and parse
+        const cleanLocator = locator.replace(/\\"/g, '"');
+        const locatorObj = JSON.parse(cleanLocator);
+        const actualLocator = locatorObj.locator || locator;
+        return this.formatLocator(actualLocator);
+      } catch (e) {
+        // If JSON parsing fails, try to extract using regex
+        const match = locator.match(/"locator"\s*:\s*"([^"]+)"/);
+        if (match) {
+          return this.formatLocator(match[1]);
+        }
+      }
+    }
+    
+    // Handle direct locator format
+    return this.formatLocator(locator);
+  }
+
+  /**
+   * Format locator string into Playwright format
+   */
+  private formatLocator(locator: string): string {
+    // Handle different locator types
+    if (locator.startsWith('xpath=')) {
+      return `this.page.locator('${locator.substring(6)}')`;
+    } else if (locator.startsWith('css=')) {
+      return `this.page.locator('${locator.substring(4)}')`;
+    } else if (locator.startsWith('id=')) {
+      return `this.page.locator('#${locator.substring(3)}')`;
+    } else if (locator.startsWith('name=')) {
+      return `this.page.locator('[name="${locator.substring(5)}"]')`;
+    } else if (locator.startsWith('link=')) {
+      return `this.page.getByRole('link', { name: '${locator.substring(5)}' })`;
+    } else if (locator.startsWith('text=')) {
+      return `this.page.getByText('${locator.substring(5)}')`;
+    } else {
+      // Default to xpath if no prefix is found
+      return `this.page.locator('${locator}')`;
+    }
+  }
+
+  /**
+   * Add Cucumber imports to the file
+   */
+  private addCucumberImports(content: string): string {
+    const imports = [
+      'import { Given, When, Then } from \'@cucumber/cucumber\';',
+      'import { expect } from \'@playwright/test\';',
+      ''
+    ];
+    
+    return `${imports.join('\n')}\n${content}`;
+  }
+
+  /**
+   * Perform final cleanups and adjustments
+   */
+  private finalCleanups(content: string): string {
+    let result = content;
+    
+    // Convert remaining Java-specific syntax
+    result = result
+      // Replace Java package declarations
+      .replace(/package\s+[\w.]+;/g, '')
+      // Replace Java imports with TypeScript imports
+      .replace(/import\s+[\w.]+;/g, '')
+      // Convert assertion statements
+      .replace(/Assert\.assertTrue\(([^)]+)\.isDisplayed\(\)\);/g, 'await expect($1).toBeVisible();')
+      .replace(/Assert\.assertTrue\(([^)]+)\);/g, 'expect($1).toBeTruthy();')
+      .replace(/Assert\.assertEquals\(([^,]+),\s*([^)]+)\);/g, 'expect($1).toEqual($2);')
+      // Convert common method calls
+      .replace(/\.sendKeys\(/g, '.fill(')
+      .replace(/\.click\(\);/g, '.click();')
+      // Add 'await' to method calls
+      .replace(/(\w+)\.(\w+)\(/g, 'await $1.$2(')
+      // Fix duplicate 'await's
+      .replace(/await await/g, 'await');
+    
+    return result;
+  }
+}
+
+// Set up CLI command
+const program = new Command();
+
+program
+  .name('qaf-to-playwright-cucumber')
+  .description('Convert QAF Selenium Java code to Playwright Cucumber BDD TypeScript')
+  .version('1.0.0')
+  .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
+  .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
+  .option('-e, --extensions <extensions>', 'File extensions to process (comma-separated)', '.java')
+  .option('-f, --feature-files', 'Generate feature files from step definitions', false)
+  .action(async (options) => {
+    const fileExtensions = options.extensions.split(',').map((ext: string) => ext.trim());
+    
+    const converter = new QafToPlaywrightCucumberConverter({
+      inputDir: options.input,
+      outputDir: options.output,
+      fileExtensions: fileExtensions,
+      generateFeatureFiles: options.featureFiles
+    });
+    
+    try {
+      console.log('Starting conversion...');
+      console.log(`Input directory: ${options.input}`);
+      console.log(`Output directory: ${options.output}`);
+      console.log(`File extensions: ${fileExtensions.join(', ')}`);
+      console.log(`Generate feature files: ${options.featureFiles}`);
+      
+      await converter.processDirectory();
+      
+      console.log('Conversion completed successfully!');
+    } catch (error) {
+      console.error('Conversion failed:', error);
+      process.exit(1);
+    }
+  });
+
+program.parse();
