@@ -1,0 +1,871 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+/**
+ * Standalone QAF to Playwright Converter
+ * No external dependencies required
+ */
+
+// Configuration
+interface Config {
+  debug: boolean;
+  outputFormat: 'playwright' | 'cucumber';
+  outputDir: string;
+}
+
+class QafToPlaywrightConverter {
+  private config: Config;
+  private elementClasses = new Set(['CSWebElement', 'QAFWebElement', 'WebElement']);
+  private pageClasses = new Set<string>();
+  
+  constructor(config: Config) {
+    this.config = config;
+  }
+  
+  /**
+   * Process a Java file and convert it to TypeScript
+   */
+  public convertFile(inputFilePath: string, outputFilePath: string): void {
+    try {
+      console.log(`Converting ${inputFilePath} to ${outputFilePath}`);
+      
+      // Read the Java file
+      const javaCode = fs.readFileSync(inputFilePath, 'utf8');
+      
+      // Analyze for class references first to improve conversion
+      this.analyzeClassReferences(javaCode);
+      
+      // Convert to TypeScript based on output format
+      let tsCode;
+      if (this.config.outputFormat === 'cucumber') {
+        tsCode = this.convertToCucumberStyle(javaCode);
+      } else {
+        tsCode = this.convertToPlaywrightStyle(javaCode);
+      }
+      
+      // Create output directory if it doesn't exist
+      const outputDir = path.dirname(outputFilePath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      // Write the converted file
+      fs.writeFileSync(outputFilePath, tsCode, 'utf8');
+      
+      console.log(`Successfully converted to ${outputFilePath}`);
+    } catch (error) {
+      console.error(`Error converting file ${inputFilePath}:`, error);
+    }
+  }
+  
+  /**
+   * Process a directory of Java files
+   */
+  public convertDirectory(inputDirPath: string, outputDirPath: string): void {
+    try {
+      console.log(`Processing directory ${inputDirPath}`);
+      
+      // First pass - analyze all files
+      this.analyzeDirectory(inputDirPath);
+      
+      // Create output directory if it doesn't exist
+      if (!fs.existsSync(outputDirPath)) {
+        fs.mkdirSync(outputDirPath, { recursive: true });
+      }
+      
+      // Second pass - convert files
+      const files = fs.readdirSync(inputDirPath);
+      
+      for (const file of files) {
+        const filePath = path.join(inputDirPath, file);
+        const stats = fs.statSync(filePath);
+        
+        if (stats.isDirectory()) {
+          // Recursively process subdirectories
+          const subOutputPath = path.join(outputDirPath, file);
+          this.convertDirectory(filePath, subOutputPath);
+        } else if (file.endsWith('.java')) {
+          // Convert Java file to TypeScript
+          const outputFile = path.join(outputDirPath, file.replace('.java', '.ts'));
+          this.convertFile(filePath, outputFile);
+        }
+      }
+      
+      // Generate any helper files needed for the project
+      if (this.config.outputFormat === 'cucumber') {
+        this.generateCucumberSupportFiles(outputDirPath);
+      }
+    } catch (error) {
+      console.error(`Error processing directory ${inputDirPath}:`, error);
+    }
+  }
+  
+  /**
+   * Analyze a directory to build context
+   */
+  private analyzeDirectory(dirPath: string): void {
+    const files = fs.readdirSync(dirPath);
+    
+    for (const file of files) {
+      const filePath = path.join(dirPath, file);
+      const stats = fs.statSync(filePath);
+      
+      if (stats.isDirectory()) {
+        // Recursively analyze subdirectories
+        this.analyzeDirectory(filePath);
+      } else if (file.endsWith('.java')) {
+        // Analyze Java file for class references
+        const javaCode = fs.readFileSync(filePath, 'utf8');
+        this.analyzeClassReferences(javaCode);
+      }
+    }
+  }
+  
+  /**
+   * Analyze a Java file for class references
+   */
+  private analyzeClassReferences(javaCode: string): void {
+    // Look for class declarations that are likely page objects
+    const classMatch = javaCode.match(/public\s+class\s+(\w+)/);
+    if (classMatch) {
+      const className = classMatch[1];
+      
+      // Check if it's likely a page object
+      if (
+        className.endsWith('Page') || 
+        className.endsWith('Screen') ||
+        javaCode.includes('@FindBy') ||
+        javaCode.includes('CSWebElement') ||
+        javaCode.includes('WebElement')
+      ) {
+        this.pageClasses.add(className);
+      }
+    }
+  }
+  
+  /**
+   * Convert a Java file to Playwright TypeScript
+   */
+  private convertToPlaywrightStyle(javaCode: string): string {
+    let tsCode = '';
+    
+    // Add imports
+    tsCode += this.generateImports(javaCode);
+    tsCode += '\n\n';
+    
+    // Extract class name
+    const classMatch = javaCode.match(/public\s+class\s+(\w+)/);
+    const className = classMatch ? classMatch[1] : 'ConvertedClass';
+    
+    // Start class declaration
+    tsCode += `export class ${className} {\n`;
+    tsCode += '  private page: Page;\n\n';
+    
+    // Add constructor
+    tsCode += '  constructor(page: Page) {\n';
+    tsCode += '    this.page = page;\n';
+    tsCode += '  }\n\n';
+    
+    // Process @FindBy elements
+    const elements = this.extractElements(javaCode);
+    for (const el of elements) {
+      tsCode += this.convertElementToLocator(el);
+    }
+    
+    // Process methods
+    const methods = this.extractMethods(javaCode);
+    for (const method of methods) {
+      tsCode += this.convertMethodToPlaywright(method);
+    }
+    
+    // Close class declaration
+    tsCode += '}\n';
+    
+    return tsCode;
+  }
+  
+  /**
+   * Convert a Java file to Cucumber TypeScript
+   */
+  private convertToCucumberStyle(javaCode: string): string {
+    let tsCode = '';
+    
+    // Add imports
+    tsCode += 'import { Given, When, Then } from \'@cucumber/cucumber\';\n';
+    tsCode += 'import { expect } from \'@playwright/test\';\n';
+    tsCode += 'import { ICustomWorld } from \'../support/custom-world\';\n';
+    
+    // Check for required page objects
+    const pageImports = this.extractPageObjectImports(javaCode);
+    for (const pageImport of pageImports) {
+      tsCode += `import { ${pageImport} } from '../page-objects/${pageImport}';\n`;
+    }
+    
+    tsCode += '\n';
+    
+    // Process step methods
+    const stepMethods = this.extractStepMethods(javaCode);
+    for (const step of stepMethods) {
+      tsCode += this.convertStepMethodToCucumber(step);
+    }
+    
+    return tsCode;
+  }
+  
+  /**
+   * Generate TypeScript imports based on Java imports
+   */
+  private generateImports(javaCode: string): string {
+    let imports = 'import { Page, Locator, expect } from \'@playwright/test\';\n';
+    
+    // Extract additional page object imports
+    const pageImports = this.extractPageObjectImports(javaCode);
+    for (const pageImport of pageImports) {
+      imports += `import { ${pageImport} } from './${pageImport}';\n`;
+    }
+    
+    return imports;
+  }
+  
+  /**
+   * Extract page object imports from Java code
+   */
+  private extractPageObjectImports(javaCode: string): string[] {
+    const imports: string[] = [];
+    const lines = javaCode.split('\n');
+    
+    for (const line of lines) {
+      if (line.trim().startsWith('import ')) {
+        // Extract import class name
+        const importMatch = line.match(/import\s+.*\.(\w+);/);
+        if (importMatch) {
+          const className = importMatch[1];
+          if (this.pageClasses.has(className) || className.endsWith('Page')) {
+            imports.push(className);
+          }
+        }
+      }
+    }
+    
+    return imports;
+  }
+  
+  /**
+   * Extract @FindBy elements from Java code
+   */
+  private extractElements(javaCode: string): any[] {
+    const elements: any[] = [];
+    const lines = javaCode.split('\n');
+    
+    let inFindBy = false;
+    let currentElement = { locator: '', name: '', type: '' };
+    
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      if (trimmedLine.startsWith('@FindBy')) {
+        inFindBy = true;
+        const locatorMatch = trimmedLine.match(/@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"/);
+        if (locatorMatch) {
+          currentElement.locator = locatorMatch[1];
+        }
+      } else if (inFindBy) {
+        const elementMatch = trimmedLine.match(/(?:public|private|protected)\s+(\w+)\s+(\w+)\s*;/);
+        if (elementMatch) {
+          currentElement.type = elementMatch[1];
+          currentElement.name = elementMatch[2];
+          
+          elements.push({ ...currentElement });
+          inFindBy = false;
+          currentElement = { locator: '', name: '', type: '' };
+        }
+      }
+    }
+    
+    return elements;
+  }
+  
+  /**
+   * Convert Java element to Playwright locator method
+   */
+  private convertElementToLocator(element: any): string {
+    let result = `  async ${element.name}() {\n`;
+    
+    // Handle different locator types
+    if (element.locator.startsWith('xpath=')) {
+      const xpath = element.locator.substring(6);
+      result += `    return this.page.locator(\`xpath=${xpath}\`);\n`;
+    } else if (element.locator.startsWith('css=')) {
+      const css = element.locator.substring(4);
+      result += `    return this.page.locator(\`${css}\`);\n`;
+    } else if (element.locator.startsWith('id=')) {
+      const id = element.locator.substring(3);
+      result += `    return this.page.locator('#${id}');\n`;
+    } else if (element.locator.startsWith('name=')) {
+      const name = element.locator.substring(5);
+      result += `    return this.page.locator('[name="${name}"]');\n`;
+    } else {
+      // Default to passing the locator directly
+      result += `    return this.page.locator(\`${element.locator}\`);\n`;
+    }
+    
+    result += '  }\n\n';
+    return result;
+  }
+  
+  /**
+   * Extract methods from Java code
+   */
+  private extractMethods(javaCode: string): any[] {
+    const methods: any[] = [];
+    const lines = javaCode.split('\n');
+    
+    let inMethod = false;
+    let currentMethod = { name: '', returnType: '', params: [], body: [] as string[] };
+    let braceCount = 0;
+    
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      
+      if (!inMethod) {
+        // Look for method declarations
+        const methodMatch = trimmedLine.match(/(?:public|private|protected)\s+(\w+)\s+(\w+)\s*\((.*?)\)\s*(?:throws\s+\w+\s*)?{/);
+        if (methodMatch) {
+          inMethod = true;
+          braceCount = 1; // Count the opening brace
+          
+          currentMethod.returnType = methodMatch[1];
+          currentMethod.name = methodMatch[2];
+          
+          // Parse parameters
+          if (methodMatch[3].trim()) {
+            currentMethod.params = methodMatch[3].split(',').map(p => {
+              const parts = p.trim().split(/\s+/);
+              return { type: parts[0], name: parts[1] };
+            });
+          }
+        }
+      } else {
+        // Count braces to determine method boundary
+        braceCount += (trimmedLine.match(/{/g) || []).length;
+        braceCount -= (trimmedLine.match(/}/g) || []).length;
+        
+        // Add line to method body
+        currentMethod.body.push(line);
+        
+        if (braceCount === 0) {
+          // Method is complete
+          methods.push({ ...currentMethod });
+          inMethod = false;
+          currentMethod = { name: '', returnType: '', params: [], body: [] };
+        }
+      }
+    }
+    
+    return methods;
+  }
+  
+  /**
+   * Convert Java method to Playwright TypeScript method
+   */
+  private convertMethodToPlaywright(method: any): string {
+    // Skip constructors
+    if (method.name === 'constructor') return '';
+    
+    let result = `  async ${method.name}(${this.convertParamsToTypeScript(method.params)}) {\n`;
+    
+    // Convert method body
+    const convertedLines = this.convertMethodBodyToPlaywright(method.body);
+    result += convertedLines.map(line => `    ${line}`).join('\n');
+    
+    result += '\n  }\n\n';
+    return result;
+  }
+  
+  /**
+   * Convert Java parameters to TypeScript
+   */
+  private convertParamsToTypeScript(params: any[]): string {
+    return params.map(p => {
+      const tsType = this.convertJavaTypeToTypeScript(p.type);
+      return `${p.name}: ${tsType}`;
+    }).join(', ');
+  }
+  
+  /**
+   * Convert Java type to TypeScript
+   */
+  private convertJavaTypeToTypeScript(javaType: string): string {
+    const typeMap: Record<string, string> = {
+      'String': 'string',
+      'int': 'number',
+      'Integer': 'number',
+      'long': 'number',
+      'Long': 'number',
+      'double': 'number',
+      'Double': 'number',
+      'boolean': 'boolean',
+      'Boolean': 'boolean',
+      'void': 'void',
+      'Object': 'any'
+    };
+    
+    // Check if it's a known type
+    if (typeMap[javaType]) {
+      return typeMap[javaType];
+    }
+    
+    // Check if it's an element class
+    if (this.elementClasses.has(javaType)) {
+      return 'Locator';
+    }
+    
+    // Default to same type
+    return javaType;
+  }
+  
+  /**
+   * Convert Java method body to Playwright TypeScript
+   */
+  private convertMethodBodyToPlaywright(bodyLines: string[]): string[] {
+    const result: string[] = [];
+    
+    for (let i = 0; i < bodyLines.length; i++) {
+      const line = bodyLines[i].trim();
+      
+      // Skip empty lines and the first/last lines (brackets)
+      if (!line || line === '{' || (i === bodyLines.length - 1 && line === '}')) {
+        continue;
+      }
+      
+      // Convert Reporter.log
+      if (line.includes('Reporter.log(')) {
+        const logMatch = line.match(/Reporter\.log\(([^,)]+)(?:,\s*\w+)?\);/);
+        if (logMatch) {
+          result.push(`console.log(${logMatch[1]});`);
+          continue;
+        }
+      }
+      
+      // Convert element actions
+      let converted = this.convertElementAction(line);
+      if (converted) {
+        result.push(converted);
+        continue;
+      }
+      
+      // Convert exceptions
+      converted = this.convertException(line);
+      if (converted) {
+        result.push(converted);
+        continue;
+      }
+      
+      // Convert waits
+      converted = this.convertWait(line);
+      if (converted) {
+        result.push(converted);
+        continue;
+      }
+      
+      // Convert if/else statements
+      if (line.startsWith('if') || line.startsWith('else') || line.startsWith('for') || line.startsWith('while')) {
+        result.push(line); // Keep control flow statements as is
+        continue;
+      }
+      
+      // Add as comment for unhandled lines
+      result.push(`// TODO: ${line}`);
+    }
+    
+    return result;
+  }
+  
+  /**
+   * Convert Java element actions to Playwright
+   */
+  private convertElementAction(line: string): string | null {
+    // Click
+    const clickMatch = line.match(/(\w+)\.click\(\);/);
+    if (clickMatch) {
+      return `await (await this.${clickMatch[1]}()).click();`;
+    }
+    
+    // SendKeys
+    const sendKeysMatch = line.match(/(\w+)\.sendKeys\("([^"]*)"\);/);
+    if (sendKeysMatch) {
+      return `await (await this.${sendKeysMatch[1]}()).fill("${sendKeysMatch[2]}");`;
+    }
+    
+    // Clear
+    const clearMatch = line.match(/(\w+)\.clear\(\);/);
+    if (clearMatch) {
+      return `await (await this.${clearMatch[1]}()).clear();`;
+    }
+    
+    // isDisplayed
+    const displayedMatch = line.match(/(\w+)\.isDisplayed\(\)/);
+    if (displayedMatch) {
+      if (line.includes('assert') || line.includes('verify')) {
+        return `await expect(await this.${displayedMatch[1]}()).toBeVisible();`;
+      } else {
+        return `await (await this.${displayedMatch[1]}()).isVisible();`;
+      }
+    }
+    
+    // verifyVisible
+    const verifyVisibleMatch = line.match(/(\w+)\.verifyVisible\("([^"]*)"\);/);
+    if (verifyVisibleMatch) {
+      return `await expect(await this.${verifyVisibleMatch[1]}()).toBeVisible();`;
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Convert Java exception to TypeScript
+   */
+  private convertException(line: string): string | null {
+    const throwMatch = line.match(/throw\s+new\s+(\w+)\("([^"]*)"\);/);
+    if (throwMatch) {
+      return `throw new Error("${throwMatch[2]}");`;
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Convert Java waits to Playwright waits
+   */
+  private convertWait(line: string): string | null {
+    // Thread.sleep
+    const sleepMatch = line.match(/Thread\.sleep\((\d+)\);/);
+    if (sleepMatch) {
+      const time = parseInt(sleepMatch[1]);
+      // Convert ms to appropriate unit
+      if (time > 1000) {
+        return `await this.page.waitForTimeout(${time});`;
+      } else {
+        return `await this.page.waitForTimeout(${time});`;
+      }
+    }
+    
+    // waitForPresent
+    const waitMatch = line.match(/(\w+)\.waitForPresent\((\d+)\);/);
+    if (waitMatch) {
+      return `await (await this.${waitMatch[1]}()).waitFor({ state: 'visible', timeout: ${waitMatch[2]} });`;
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Extract QAF TestStep methods
+   */
+  private extractStepMethods(javaCode: string): any[] {
+    const steps: any[] = [];
+    const lines = javaCode.split('\n');
+    
+    let currentStep: any = null;
+    let inMethod = false;
+    let braceCount = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Look for step annotations
+      if (line.startsWith('@QAFTestStep')) {
+        // Extract step description
+        const descriptionMatch = line.match(/@QAFTestStep\s*\(\s*description\s*=\s*"([^"]+)"\s*\)/);
+        if (descriptionMatch) {
+          currentStep = {
+            description: descriptionMatch[1],
+            method: '',
+            params: [],
+            body: []
+          };
+          
+          // Look ahead for method signature
+          let j = i + 1;
+          while (j < lines.length && !lines[j].trim().match(/public.*?\(.*?\)/)) {
+            j++;
+          }
+          
+          if (j < lines.length) {
+            const methodLine = lines[j].trim();
+            const methodMatch = methodLine.match(/public.*?(\w+)\s*\((.*?)\)/);
+            if (methodMatch) {
+              currentStep.method = methodMatch[1];
+              
+              // Extract parameters
+              if (methodMatch[2].trim()) {
+                currentStep.params = methodMatch[2].split(',').map((p: string) => {
+                  const parts = p.trim().split(/\s+/);
+                  return { type: parts[0], name: parts[1] };
+                });
+              }
+            }
+          }
+        }
+      }
+      
+      // Look for method start after step annotation
+      if (currentStep && line.includes('{') && line.includes('public') && line.includes(currentStep.method)) {
+        inMethod = true;
+        braceCount = 1; // Count the opening brace
+      } else if (inMethod) {
+        // Track braces
+        braceCount += (line.match(/{/g) || []).length;
+        braceCount -= (line.match(/}/g) || []).length;
+        
+        // Add line to method body
+        if (line !== '{') {
+          currentStep.body.push(line);
+        }
+        
+        if (braceCount === 0) {
+          // Method is complete
+          steps.push({ ...currentStep });
+          currentStep = null;
+          inMethod = false;
+        }
+      }
+    }
+    
+    return steps;
+  }
+  
+  /**
+   * Convert QAF step method to Cucumber step
+   */
+  private convertStepMethodToCucumber(step: any): string {
+    // Determine step type (Given/When/Then)
+    let stepType = 'Given';
+    const lcDescription = step.description.toLowerCase();
+    if (lcDescription.startsWith('when ')) {
+      stepType = 'When';
+    } else if (lcDescription.startsWith('then ')) {
+      stepType = 'Then';
+    }
+    
+    // Format parameters
+    const paramsList = step.params.map((p: any) => 'string').join(', ');
+    const worldParams = paramsList ? `, ${paramsList}` : '';
+    
+    let result = `// Original: ${step.description}\n`;
+    result += `${stepType}('${this.formatStepDescription(step.description)}', async function(this: ICustomWorld${worldParams}) {\n`;
+    result += '  const { page } = this;\n';
+    
+    // Add page object initialization
+    const pageObjects = this.extractRequiredPageObjects(step.body);
+    if (pageObjects.length > 0) {
+      result += '\n  // Initialize page objects\n';
+      for (const po of pageObjects) {
+        result += `  const ${po.toLowerCase()} = new ${po}(page);\n`;
+      }
+      result += '\n';
+    }
+    
+    // Convert method body
+    const convertedLines = this.convertMethodBodyToCucumber(step.body, pageObjects);
+    result += convertedLines.join('\n');
+    
+    result += '\n});\n\n';
+    return result;
+  }
+  
+  /**
+   * Format step description for Cucumber
+   */
+  private formatStepDescription(description: string): string {
+    // Replace QAF parameter format with Cucumber format
+    return description.replace(/\$\{(\w+)\}/g, '{string}');
+  }
+  
+  /**
+   * Extract required page objects from a step method
+   */
+  private extractRequiredPageObjects(bodyLines: string[]): string[] {
+    const pageObjects = new Set<string>();
+    
+    for (const line of bodyLines) {
+      // Look for references to page objects
+      const poMatch = line.match(/(\w+)\.\w+\(/);
+      if (poMatch) {
+        const objName = poMatch[1];
+        
+        // Check if it's likely a page object
+        if (
+          this.pageClasses.has(objName) || 
+          objName.toLowerCase().endsWith('page') || 
+          objName.toLowerCase().includes('screen')
+        ) {
+          // Convert to PascalCase
+          const poName = objName.charAt(0).toUpperCase() + objName.slice(1);
+          pageObjects.add(poName);
+        }
+      }
+    }
+    
+    return Array.from(pageObjects);
+  }
+  
+  /**
+   * Convert method body to Cucumber style
+   */
+  private convertMethodBodyToCucumber(bodyLines: string[], pageObjects: string[]): string[] {
+    const result: string[] = [];
+    
+    for (let i = 0; i < bodyLines.length; i++) {
+      const line = bodyLines[i].trim();
+      
+      // Skip empty lines and the first/last lines (brackets)
+      if (!line || line === '{' || line === '}') {
+        continue;
+      }
+      
+      // Convert Reporter.log
+      if (line.includes('Reporter.log(')) {
+        const logMatch = line.match(/Reporter\.log\(([^,)]+)(?:,\s*\w+)?\);/);
+        if (logMatch) {
+          result.push(`  console.log(${logMatch[1]});`);
+          continue;
+        }
+      }
+      
+      // Convert element actions for page objects
+      let pageObjectAction = false;
+      for (const po of pageObjects) {
+        const poLower = po.toLowerCase();
+        
+        // Click
+        const clickMatch = line.match(new RegExp(`${poLower}\.(\\w+)\\.click\\(\\);`));
+        if (clickMatch) {
+          result.push(`  await ${poLower}.${clickMatch[1]}().click();`);
+          pageObjectAction = true;
+          break;
+        }
+        
+        // SendKeys
+        const sendKeysMatch = line.match(new RegExp(`${poLower}\\.(\\w+)\\.sendKeys\\("([^"]*)"\\);`));
+        if (sendKeysMatch) {
+          result.push(`  await ${poLower}.${sendKeysMatch[1]}().fill("${sendKeysMatch[2]}");`);
+          pageObjectAction = true;
+          break;
+        }
+        
+        // IsDisplayed
+        const displayedMatch = line.match(new RegExp(`${poLower}\\.(\\w+)\\.isDisplayed\\(\\)`));
+        if (displayedMatch) {
+          if (line.includes('assert') || line.includes('verify')) {
+            result.push(`  await expect(${poLower}.${displayedMatch[1]}()).toBeVisible();`);
+          } else {
+            result.push(`  const isVisible = await ${poLower}.${displayedMatch[1]}().isVisible();`);
+          }
+          pageObjectAction = true;
+          break;
+        }
+      }
+      
+      if (pageObjectAction) continue;
+      
+      // Convert exceptions
+      const throwMatch = line.match(/throw\s+new\s+(\w+)\("([^"]*)"\);/);
+      if (throwMatch) {
+        result.push(`  throw new Error("${throwMatch[2]}");`);
+        continue;
+      }
+      
+      // Convert if/else statements
+      if (line.startsWith('if') || line.startsWith('else') || line.startsWith('for') || line.startsWith('while')) {
+        result.push(`  ${line}`);
+        continue;
+      }
+      
+      // Add as comment for unhandled lines
+      result.push(`  // TODO: ${line}`);
+    }
+    
+    return result;
+  }
+  
+  /**
+   * Generate Cucumber support files
+   */
+  private generateCucumberSupportFiles(outputDir: string): void {
+    const supportDir = path.join(outputDir, 'support');
+    if (!fs.existsSync(supportDir)) {
+      fs.mkdirSync(supportDir, { recursive: true });
+    }
+    
+    // Generate custom world
+    const worldPath = path.join(supportDir, 'custom-world.ts');
+    const worldContent = `
+import { World, IWorldOptions, setWorldConstructor } from '@cucumber/cucumber';
+import { Browser, BrowserContext, Page, chromium } from '@playwright/test';
+
+export interface ICustomWorld extends World {
+  browser?: Browser;
+  context?: BrowserContext;
+  page?: Page;
+}
+
+export class CustomWorld extends World implements ICustomWorld {
+  browser?: Browser;
+  context?: BrowserContext;
+  page?: Page;
+
+  constructor(options: IWorldOptions) {
+    super(options);
+  }
+
+  async init() {
+    this.browser = await chromium.launch({ headless: false });
+    this.context = await this.browser.newContext();
+    this.page = await this.context.newPage();
+  }
+
+  async teardown() {
+    if (this.browser) {
+      await this.browser.close();
+    }
+  }
+}
+
+setWorldConstructor(CustomWorld);
+`;
+    
+    fs.writeFileSync(worldPath, worldContent, 'utf8');
+    console.log(`Generated Cucumber world at ${worldPath}`);
+  }
+}
+
+// Example usage
+const inputPath = process.argv[2];
+const outputPath = process.argv[3] || '';
+
+if (!inputPath) {
+  console.error('Please provide an input file or directory path');
+  process.exit(1);
+}
+
+const config: Config = {
+  debug: true,
+  outputFormat: 'cucumber', // or 'playwright'
+  outputDir: outputPath || './converted'
+};
+
+try {
+  const converter = new QafToPlaywrightConverter(config);
+  
+  const stats = fs.statSync(inputPath);
+  if (stats.isDirectory()) {
+    converter.convertDirectory(inputPath, outputPath || './converted');
+  } else {
+    const outputFile = outputPath || inputPath.replace('.java', '.ts');
+    converter.convertFile(inputPath, outputFile);
+  }
+} catch (error) {
+  console.error('Error:', error);
+  process.exit(1);
+}
