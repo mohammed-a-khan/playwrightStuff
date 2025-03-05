@@ -1,0 +1,911 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
+const DEBUG = true; // Set to true to see debugging information
+
+interface ImportMapping {
+    [key: string]: string | null; // null means skip this import
+}
+
+// Map of Java imports to TypeScript/Playwright equivalents
+const importMappings: ImportMapping = {
+    // Standard Java imports
+    'java.util.List': 'import { Locator } from \'@playwright/test\';',
+    'java.util.Map': null,
+    'java.util.HashMap': null,
+    'java.util.ArrayList': null,
+    'java.lang.String': null,
+    'java.lang.Thread': null,
+    // Selenium imports
+    'org.openqa.selenium.WebElement': 'import { Locator } from \'@playwright/test\';',
+    'org.openqa.selenium.support.FindBy': null,
+    'org.openqa.selenium.support.ui.WebDriverWait': null,
+    'org.openqa.selenium.By': null,
+    'org.openqa.selenium.Keys': null,
+    // QAF imports
+    'com.qmetry.qaf.automation.ui.WebDriverTestBase': 'import { Page } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.ui.webdriver.QAFWebElement': 'import { Locator } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.ui.annotations.FindBy': null,
+    'com.qmetry.qaf.automation.core.ConfigurationManager': null,
+    'com.qmetry.qaf.automation.step.QAFTestStep': null,
+    'com.qmetry.qaf.automation.step.QAFTestStepProvider': 'import { test } from \'@playwright/test\';',
+    'com.qmetry.qaf.automation.testng.pro.QAFProStep': null,
+    // TestNG imports
+    'org.testng.Assert': 'import { expect } from \'@playwright/test\';',
+    'org.testng.annotations.Test': 'import { test } from \'@playwright/test\';',
+    // Custom imports
+    'com.example.exe.utils.CSWebElement': 'import { Locator } from \'@playwright/test\';',
+};
+
+// Classes that should be converted to Playwright Locator
+const elementClasses = [
+    'CSWebElement',
+    'QAFWebElement',
+    'WebElement',
+    'Element',
+    'PageElement'
+];
+
+// QAF BDD Step annotations to be converted
+const bddStepAnnotations = [
+    '@QAFTestStep',
+    '@Step',
+    '@Given',
+    '@When',
+    '@Then',
+    '@And',
+    '@But'
+];
+
+// Determines if a file is likely to be a BDD step definition file
+function isBDDStepFile(fileContent: string): boolean {
+    return bddStepAnnotations.some(annotation => fileContent.includes(annotation));
+}
+
+function convertQafToPlaywright(inputFilePath: string, outputFilePath: string): void {
+    try {
+        // Read the input file
+        const fileContent = fs.readFileSync(inputFilePath, 'utf8');
+        
+        // Create debug file with line numbers
+        if (DEBUG) {
+            const debugLines = fileContent.split('\n').map((line, index) => `${index + 1}: ${line}`);
+            fs.writeFileSync(outputFilePath + '.debug.txt', debugLines.join('\n'), 'utf8');
+            console.log(`Created debug file: ${outputFilePath}.debug.txt`);
+        }
+        
+        const lines = fileContent.split('\n');
+
+        // Detect if file is a BDD step definition file
+        const isBDD = isBDDStepFile(fileContent);
+        
+        // Process the file content based on the file type
+        const { tsContent, skippedLines } = isBDD 
+            ? processBDDStepContent(lines)
+            : processPageObjectContent(lines);
+
+        // Create the output directory if it doesn't exist
+        const outputDir = path.dirname(outputFilePath);
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        // Write the output file
+        fs.writeFileSync(outputFilePath, tsContent, 'utf8');
+        console.log(`Converted ${inputFilePath} to ${outputFilePath} (${isBDD ? 'BDD Steps' : 'Page Object'})`);
+        
+        // Create a log of skipped lines for debugging
+        if (DEBUG) {
+            fs.writeFileSync(outputFilePath + '.skipped.txt', skippedLines.join('\n'), 'utf8');
+            console.log(`Created skipped lines log: ${outputFilePath}.skipped.txt`);
+        }
+    } catch (error) {
+        console.error(`Error converting ${inputFilePath}: ${error}`);
+    }
+}
+
+// Process a page object class
+function processPageObjectContent(lines: string[]): { tsContent: string, skippedLines: string[] } {
+    const tsLines: string[] = [];
+    const skippedLines: string[] = [];
+    let className = '';
+    let inMethod = false;
+    let braceCount = 0; // Track open braces to ensure proper closing
+    let hasAddedPageField = false;
+    let foundImports = new Set<string>();
+
+    // Add base TypeScript imports
+    foundImports.add('import { Page, Locator, expect } from \'@playwright/test\';');
+
+    // For debugging output
+    const debugLine = (index: number, line: string, reason: string) => {
+        if (DEBUG) {
+            skippedLines.push(`Line ${index + 1}: ${line} - ${reason}`);
+        }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const originalLine = lines[i];
+        const line = originalLine.trim();
+
+        // Skip empty lines
+        if (line === '') continue;
+
+        // Skip package declarations
+        if (line.startsWith('package ')) {
+            debugLine(i, line, "Skipped package declaration");
+            continue;
+        }
+
+        // Handle imports - convert Java imports to TypeScript equivalents
+        if (line.startsWith('import ')) {
+            const importPath = line.substring(7, line.endsWith(';') ? line.length - 1 : line.length).trim();
+            
+            // Check for direct matches first
+            if (importMappings[importPath] !== undefined) {
+                if (importMappings[importPath] !== null && !foundImports.has(importMappings[importPath]!)) {
+                    foundImports.add(importMappings[importPath]!);
+                }
+                debugLine(i, line, `Mapped import to: ${importMappings[importPath]}`);
+                continue;
+            }
+            
+            // If no match, skip the import but log it
+            debugLine(i, line, "No mapping found for import");
+            continue;
+        }
+
+        // Extract class name
+        const classMatch = line.match(/public\s+class\s+(\w+)/);
+        if (classMatch) {
+            className = classMatch[1];
+            tsLines.push(`export class ${className} {`);
+            braceCount++;
+            
+            // Add page field if not added already
+            if (!hasAddedPageField) {
+                tsLines.push('  private page: Page;');
+                tsLines.push('');
+                tsLines.push('  constructor(page: Page) {');
+                braceCount++;
+                tsLines.push('    this.page = page;');
+                tsLines.push('  }');
+                braceCount--; // Close constructor
+                tsLines.push('');
+                hasAddedPageField = true;
+            }
+            continue;
+        }
+
+        // Try multiple FindBy patterns to be more flexible
+        const findByPatterns = [
+            /@FindBy\(locator="([^"]+)"\)\s*public\s+(\w+)\s+(\w+)\s*;/,
+            /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*public\s+(\w+)\s+(\w+)\s*;/,
+            /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*private\s+(\w+)\s+(\w+)\s*;/,
+            /@FindBy\s*\(\s*locator\s*=\s*"([^"]+)"\s*\)\s*protected\s+(\w+)\s+(\w+)\s*;/
+        ];
+        
+        let findByMatch = null;
+        for (const pattern of findByPatterns) {
+            const match = line.match(pattern);
+            if (match) {
+                findByMatch = match;
+                break;
+            }
+        }
+        
+        if (findByMatch) {
+            const locator = findByMatch[1];
+            const elementType = findByMatch[2];
+            const elementName = findByMatch[3];
+            
+            // Generate getter method for this element
+            tsLines.push(`  async ${elementName}() {`);
+            braceCount++;
+            
+            // Handle different locator types
+            processLocator(tsLines, locator);
+            
+            tsLines.push('  }');
+            braceCount--;
+            tsLines.push('');
+            continue;
+        }
+        
+        // Check for multi-line FindBy
+        if (line.includes('@FindBy') && !line.includes(';')) {
+            let combinedLine = line;
+            let j = i + 1;
+            let foundEnd = false;
+            
+            // Collect the entire FindBy statement across multiple lines
+            while (j < lines.length && !lines[j].trim().includes(';')) {
+                combinedLine += ' ' + lines[j].trim();
+                j++;
+            }
+            
+            if (j < lines.length) {
+                combinedLine += ' ' + lines[j].trim();
+                
+                // Try to match the combined line with our patterns
+                for (const pattern of findByPatterns) {
+                    const match = combinedLine.match(pattern);
+                    if (match) {
+                        const locator = match[1];
+                        const elementType = match[2];
+                        const elementName = match[3];
+                        
+                        tsLines.push(`  async ${elementName}() {`);
+                        braceCount++;
+                        processLocator(tsLines, locator);
+                        tsLines.push('  }');
+                        braceCount--;
+                        tsLines.push('');
+                        
+                        i = j; // Skip processed lines
+                        foundEnd = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (foundEnd) continue;
+            
+            // If we couldn't match the multi-line FindBy, log it as skipped
+            debugLine(i, line, "Skipped unmatched multi-line FindBy annotation");
+            continue;
+        }
+
+        // Handle CSWebElement or similar element return methods
+        // This matches patterns like: public CSWebElement methodName(String someArgs) { return new CSWebElement(...); }
+        const elementReturnMethodPattern = new RegExp(`public\\s+(${elementClasses.join('|')})\\s+(\\w+)\\s*\\((.*?)\\)\\s*\\{`);
+        const elementReturnMatch = line.match(elementReturnMethodPattern);
+        
+        if (elementReturnMatch) {
+            const returnType = elementReturnMatch[1];
+            const methodName = elementReturnMatch[2];
+            let params = elementReturnMatch[3].trim();
+            
+            // Convert Java parameter types to TypeScript
+            params = convertJavaParamsToTypeScript(params);
+            
+            tsLines.push(`  async ${methodName}(${params}) {`);
+            braceCount++;
+            
+            // Now we need to find the return statement with the locator information
+            let foundReturn = false;
+            let k = i + 1;
+            let methodBody = '';
+            
+            // Collect the entire method body to analyze
+            while (k < lines.length) {
+                const currentLine = lines[k].trim();
+                methodBody += ' ' + currentLine;
+                
+                if (currentLine === '}') {
+                    break;
+                }
+                k++;
+            }
+            
+            // Look for return new CSWebElement pattern in the method body
+            const returnPattern = /return\s+new\s+\w+\s*\(\s*"(.+?)"\s*\)/;
+            const returnMatch = methodBody.match(returnPattern);
+            
+            if (returnMatch) {
+                try {
+                    const locatorStr = returnMatch[1];
+                    
+                    // Check if it's a JSON-like structure
+                    if (locatorStr.includes('{') && locatorStr.includes('}')) {
+                        // Try to extract the locator from JSON-like string
+                        const locatorExtract = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
+                        if (locatorExtract) {
+                            const locatorValue = locatorExtract[1];
+                            
+                            // Check if the locator includes parameter substitution
+                            const paramNames = params.split(',').map(p => p.trim().split(' ').pop()?.trim());
+                            const paramReferences = paramNames.filter(p => p && methodBody.includes(p));
+                            
+                            if (paramReferences.length > 0) {
+                                // This locator likely uses parameters for dynamic parts
+                                tsLines.push(`    // Original complex locator with parameter substitution: ${locatorValue}`);
+                                
+                                // Try to create a template literal with parameter substitution
+                                let dynamicLocator = locatorValue;
+                                paramReferences.forEach(param => {
+                                    if (param) {
+                                        dynamicLocator = dynamicLocator.replace(new RegExp(`'\\s*\\+\\s*${param}\\s*\\+\\s*'`, 'g'), '${' + param + '}');
+                                    }
+                                });
+                                
+                                if (locatorValue.startsWith('xpath=')) {
+                                    tsLines.push(`    return this.page.locator(\`xpath=${dynamicLocator.substring(6)}\`);`);
+                                } else {
+                                    tsLines.push(`    return this.page.locator(\`${dynamicLocator}\`);`);
+                                }
+                            } else {
+                                // Static locator
+                                if (locatorValue.startsWith('xpath=')) {
+                                    tsLines.push(`    return this.page.locator(\`xpath=${locatorValue.substring(6)}\`);`);
+                                } else {
+                                    tsLines.push(`    return this.page.locator(\`${locatorValue}\`);`);
+                                }
+                            }
+                            foundReturn = true;
+                        }
+                    } else {
+                        // It's a simple locator string
+                        if (locatorStr.startsWith('xpath=')) {
+                            tsLines.push(`    return this.page.locator(\`xpath=${locatorStr.substring(6)}\`);`);
+                        } else {
+                            tsLines.push(`    return this.page.locator(\`${locatorStr}\`);`);
+                        }
+                        foundReturn = true;
+                    }
+                } catch (e) {
+                    // If we can't parse it, use a generic approach
+                    tsLines.push(`    // TODO: Couldn't parse locator string: ${returnMatch[1]}`);
+                    tsLines.push(`    return this.page.locator('xpath=//TODO');`);
+                    foundReturn = true;
+                }
+            }
+            
+            if (!foundReturn) {
+                // Look for other types of element returns
+                const otherReturnPattern = /return\s+(\w+)/;
+                const otherMatch = methodBody.match(otherReturnPattern);
+                
+                if (otherMatch && otherMatch[1] !== 'null' && otherMatch[1] !== 'this') {
+                    const elementName = otherMatch[1];
+                    tsLines.push(`    // Original returned an existing element: ${elementName}`);
+                    tsLines.push(`    return await this.${elementName}();`);
+                    foundReturn = true;
+                }
+            }
+            
+            if (!foundReturn) {
+                // Generic fallback
+                tsLines.push(`    // TODO: Couldn't determine how to convert this element method`);
+                tsLines.push(`    return this.page.locator('xpath=//TODO');`);
+            }
+            
+            i = k; // Skip to the end of the method
+            tsLines.push('  }');
+            braceCount--;
+            tsLines.push('');
+            continue;
+        }
+
+        // Try to match regular method patterns with more flexibility
+        const methodPatterns = [
+            /public\s+void\s+(\w+)\s*\(\s*\)\s*\{/,
+            /public\s+void\s+(\w+)\s*\(\s*\)\s*throws\s+.*?\{/,
+            /private\s+void\s+(\w+)\s*\(\s*\)\s*\{/,
+            /protected\s+void\s+(\w+)\s*\(\s*\)\s*\{/,
+            /public\s+(\w+)\s+(\w+)\s*\(\s*\)\s*\{/
+        ];
+        
+        let methodMatch = null;
+        for (const pattern of methodPatterns) {
+            const match = line.match(pattern);
+            if (match) {
+                methodMatch = match;
+                break;
+            }
+        }
+        
+        if (methodMatch) {
+            const methodName = methodMatch[1];
+            tsLines.push(`  async ${methodName}() {`);
+            braceCount++;
+            inMethod = true;
+            continue;
+        }
+
+        // Handle method with parameters
+        const methodWithParamsPatterns = [
+            /public\s+void\s+(\w+)\s*\((.*?)\)\s*\{/,
+            /public\s+void\s+(\w+)\s*\((.*?)\)\s*throws\s+.*?\{/,
+            /private\s+void\s+(\w+)\s*\((.*?)\)\s*\{/,
+            /protected\s+void\s+(\w+)\s*\((.*?)\)\s*\{/,
+            /public\s+(\w+)\s+(\w+)\s*\((.*?)\)\s*\{/
+        ];
+        
+        let methodWithParamsMatch = null;
+        for (const pattern of methodWithParamsPatterns) {
+            const match = line.match(pattern);
+            if (match && !methodMatch) {
+                methodWithParamsMatch = match;
+                break;
+            }
+        }
+        
+        if (methodWithParamsMatch) {
+            let methodName;
+            let params;
+            
+            if (methodWithParamsMatch[2] && methodWithParamsMatch.length > 3 && typeof methodWithParamsMatch[3] === 'string') {
+                // This is the fifth pattern with return type
+                methodName = methodWithParamsMatch[2];
+                params = methodWithParamsMatch[3]?.trim() || '';
+            } else {
+                // This is the first through fourth pattern
+                methodName = methodWithParamsMatch[1];
+                params = methodWithParamsMatch[2]?.trim() || '';
+            }
+            
+            // Convert Java parameter types to TypeScript
+            params = convertJavaParamsToTypeScript(params);
+            
+            tsLines.push(`  async ${methodName}(${params}) {`);
+            braceCount++;
+            inMethod = true;
+            continue;
+        }
+
+        // Handle method end and track brace count
+        if (line === '}') {
+            if (inMethod) {
+                tsLines.push('  }');
+                inMethod = false;
+                braceCount--;
+                tsLines.push('');
+            } else if (braceCount > 0) {
+                tsLines.push('}');
+                braceCount--;
+            } else {
+                // Skip extra closing braces
+                debugLine(i, line, "Skipped extra closing brace");
+            }
+            continue;
+        }
+
+        // Handle element actions inside methods
+        if (inMethod) {
+            // Try to match common Selenium/QAF actions
+            const actionMatch = matchAndConvertAction(line);
+            if (actionMatch) {
+                tsLines.push(actionMatch);
+                continue;
+            }
+            
+            // For any line we couldn't match, add it as a comment
+            tsLines.push(`    // TODO: ${line}`);
+        }
+    }
+
+    // Ensure we close any remaining open braces
+    while (braceCount > 0) {
+        tsLines.push('}');
+        braceCount--;
+    }
+
+    // Now add all unique imports at the top
+    let finalContent = Array.from(foundImports).join('\n') + '\n\n';
+    finalContent += tsLines.join('\n');
+    
+    return { tsContent: finalContent, skippedLines };
+}
+
+// Process a BDD step definition file
+function processBDDStepContent(lines: string[]): { tsContent: string, skippedLines: string[] } {
+    const tsLines: string[] = [];
+    const skippedLines: string[] = [];
+    let className = '';
+    let braceCount = 0; 
+    let foundImports = new Set<string>();
+
+    // Add base TypeScript imports
+    foundImports.add('import { test, expect, Page } from \'@playwright/test\';');
+
+    // For debugging output
+    const debugLine = (index: number, line: string, reason: string) => {
+        if (DEBUG) {
+            skippedLines.push(`Line ${index + 1}: ${line} - ${reason}`);
+        }
+    };
+
+    // Add helper comment for BDD file
+    tsLines.push('// Converted QAF BDD Step Definitions');
+    tsLines.push('');
+
+    // Track if we're inside a step method
+    let inStepMethod = false;
+    let currentStep = '';
+    let currentStepDescription = '';
+    let currentStepParams: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const originalLine = lines[i];
+        const line = originalLine.trim();
+
+        // Skip empty lines
+        if (line === '') continue;
+
+        // Skip package declarations
+        if (line.startsWith('package ')) {
+            debugLine(i, line, "Skipped package declaration");
+            continue;
+        }
+
+        // Handle imports - convert Java imports to TypeScript equivalents
+        if (line.startsWith('import ')) {
+            const importPath = line.substring(7, line.endsWith(';') ? line.length - 1 : line.length).trim();
+            
+            // Check for direct matches first
+            if (importMappings[importPath] !== undefined) {
+                if (importMappings[importPath] !== null && !foundImports.has(importMappings[importPath]!)) {
+                    foundImports.add(importMappings[importPath]!);
+                }
+                debugLine(i, line, `Mapped import to: ${importMappings[importPath]}`);
+                continue;
+            }
+            
+            // If no match, skip the import but log it
+            debugLine(i, line, "No mapping found for import");
+            continue;
+        }
+
+        // Handle QAF BDD step definitions
+        const stepMatch = line.match(/@QAFTestStep\s*\(\s*description\s*=\s*"([^"]+)"\s*\)/);
+        if (stepMatch || bddStepAnnotations.some(a => line.startsWith(a))) {
+            // Extract step description
+            if (stepMatch) {
+                currentStepDescription = stepMatch[1];
+            } else {
+                // Handle other BDD annotations
+                const otherStepMatch = line.match(/@(\w+)\s*\(\s*"([^"]+)"\s*\)/);
+                if (otherStepMatch) {
+                    currentStepDescription = otherStepMatch[2];
+                } else {
+                    currentStepDescription = 'Step description not found';
+                }
+            }
+            
+            // Look ahead to find the method signature
+            let j = i + 1;
+            while (j < lines.length && !lines[j].trim().match(/public.*?\(.*?\)/)) {
+                j++;
+            }
+            
+            if (j < lines.length) {
+                const methodLine = lines[j].trim();
+                const methodMatch = methodLine.match(/public.*?(\w+)\s*\((.*?)\)/);
+                
+                if (methodMatch) {
+                    currentStep = methodMatch[1];
+                    const params = methodMatch[2].trim();
+                    
+                    // Extract parameter names for use in the step description
+                    currentStepParams = params.split(',').map(p => {
+                        const parts = p.trim().split(' ');
+                        return parts[parts.length - 1];
+                    });
+                    
+                    // Skip to the method line
+                    i = j;
+                    inStepMethod = true;
+                    
+                    // Convert step description to accommodate parameters
+                    let testDescription = currentStepDescription;
+                    currentStepParams.forEach((param, index) => {
+                        // Replace QAF parameter format with Playwright format
+                        testDescription = testDescription.replace(new RegExp(`\\$\\{${param}\\}`, 'g'), `$\{${param}}`);
+                    });
+                    
+                    // Convert parameter types
+                    const tsParams = convertJavaParamsToTypeScript(params);
+                    
+                    // Start the test step function
+                    tsLines.push(`// Original QAF step: "${currentStepDescription}"`);
+                    tsLines.push(`test('${testDescription}', async ({ page }) => {`);
+                    braceCount++;
+                    
+                    // For parameterized tests, add code to extract parameters from test data
+                    if (currentStepParams.length > 0) {
+                        tsLines.push('    // Example of extracting parameters from test data');
+                        currentStepParams.forEach(param => {
+                            if (param.includes('String')) {
+                                tsLines.push(`    const ${param} = 'example-value'; // TODO: Replace with actual test data`);
+                            } else if (param.includes('int') || param.includes('Integer')) {
+                                tsLines.push(`    const ${param} = 123; // TODO: Replace with actual test data`);
+                            } else if (param.includes('boolean')) {
+                                tsLines.push(`    const ${param} = true; // TODO: Replace with actual test data`);
+                            } else {
+                                tsLines.push(`    const ${param} = null; // TODO: Replace with actual test data`);
+                            }
+                        });
+                        tsLines.push('');
+                    }
+                    
+                    tsLines.push('    // TODO: Add page objects initialization here');
+                    tsLines.push('    // const pageObject = new PageObjectClass(page);');
+                    tsLines.push('');
+                    continue;
+                }
+            }
+            
+            // If we couldn't find the method, skip this annotation
+            debugLine(i, line, "Skipped BDD step annotation - couldn't find method");
+            continue;
+        }
+
+        // Handle method end specifically for step methods
+        if (line === '}' && inStepMethod) {
+            tsLines.push('});');
+            braceCount--;
+            inStepMethod = false;
+            currentStep = '';
+            currentStepDescription = '';
+            currentStepParams = [];
+            tsLines.push('');
+            continue;
+        }
+
+        // Extract class name but don't create a class for BDD files
+        const classMatch = line.match(/public\s+class\s+(\w+)/);
+        if (classMatch) {
+            className = classMatch[1];
+            tsLines.push(`// Original class name: ${className}`);
+            tsLines.push('');
+            continue;
+        }
+
+        // Handle code inside step methods
+        if (inStepMethod) {
+            // Skip method signature line
+            if (line.includes('public') && line.includes('(') && line.includes(')')) {
+                continue;
+            }
+            
+            // Try to match common Selenium/QAF actions
+            const actionMatch = matchAndConvertAction(line);
+            if (actionMatch) {
+                tsLines.push(actionMatch);
+                continue;
+            }
+            
+            // For any line we couldn't match, add it as a comment
+            if (line.trim() !== '{') { // Skip opening braces
+                tsLines.push(`    // TODO: ${line}`);
+            }
+            continue;
+        }
+
+        // Skip lines outside step methods for BDD files
+        debugLine(i, line, "Skipped line outside step method in BDD file");
+    }
+
+    // Ensure we close any remaining open braces
+    while (braceCount > 0) {
+        tsLines.push('});');
+        braceCount--;
+    }
+
+    // Now add all unique imports at the top
+    let finalContent = Array.from(foundImports).join('\n') + '\n\n';
+    finalContent += tsLines.join('\n');
+    
+    return { tsContent: finalContent, skippedLines };
+}
+
+function matchAndConvertAction(line: string): string | null {
+    // Define patterns and their replacements
+    const actionPatterns = [
+        // Element actions
+        { 
+            pattern: /(\w+)\.click\(\);/, 
+            handler: (m: RegExpMatchArray) => `    await page.locator('${elementStringToPlaywright(m[1])}').click();` 
+        },
+        { 
+            pattern: /(\w+)\.sendKeys\("([^"]*)"\);/, 
+            handler: (m: RegExpMatchArray) => `    await page.locator('${elementStringToPlaywright(m[1])}').fill("${m[2]}");` 
+        },
+        { 
+            pattern: /(\w+)\.clear\(\);/, 
+            handler: (m: RegExpMatchArray) => `    await page.locator('${elementStringToPlaywright(m[1])}').clear();` 
+        },
+        { 
+            pattern: /(\w+)\.isDisplayed\(\)/, 
+            handler: (m: RegExpMatchArray) => 
+                line.includes('assert') || line.includes('verify') 
+                    ? `    await expect(page.locator('${elementStringToPlaywright(m[1])}')).toBeVisible();`
+                    : `    const isVisible = await page.locator('${elementStringToPlaywright(m[1])}').isVisible();` 
+        },
+        { 
+            pattern: /(\w+)\.isEnabled\(\)/, 
+            handler: (m: RegExpMatchArray) => 
+                line.includes('assert') || line.includes('verify')
+                    ? `    await expect(page.locator('${elementStringToPlaywright(m[1])}')).toBeEnabled();`
+                    : `    const isEnabled = await page.locator('${elementStringToPlaywright(m[1])}').isEnabled();`
+        },
+        { 
+            pattern: /(\w+)\.getText\(\)/, 
+            handler: (m: RegExpMatchArray) => `    const text = await page.locator('${elementStringToPlaywright(m[1])}').textContent();` 
+        },
+        
+        // Waits and sleeps
+        { 
+            pattern: /Thread\.sleep\((\d+)\)/, 
+            handler: (m: RegExpMatchArray) => {
+                const timeInMs = parseInt(m[1]) <= 1000 ? parseInt(m[1]) : parseInt(m[1]) / 1000;
+                return `    await page.waitForTimeout(${timeInMs});`;
+            }
+        },
+        { 
+            pattern: /wait\.until/, 
+            handler: () => `    // TODO: Convert wait condition to Playwright's built-in waits` 
+        },
+        
+        // Assertions
+        { 
+            pattern: /Assert\.assertEquals\((.*?),(.*?)\)/, 
+            handler: (m: RegExpMatchArray) => {
+                const actual = m[1].trim();
+                const expected = m[2].trim();
+                return `    expect(${actual}).toEqual(${expected});`;
+            } 
+        },
+        { 
+            pattern: /Assert\.assertTrue\((.*?)\)/, 
+            handler: (m: RegExpMatchArray) => `    expect(${m[1].trim()}).toBeTruthy();` 
+        },
+        { 
+            pattern: /Assert\.assertFalse\((.*?)\)/, 
+            handler: (m: RegExpMatchArray) => `    expect(${m[1].trim()}).toBeFalsy();` 
+        },
+        
+        // Page object method calls
+        { 
+            pattern: /(\w+)\.(\w+)\(\);/, 
+            handler: (m: RegExpMatchArray) => {
+                // Check if it's likely a page object method call
+                if (!['driver', 'assert', 'wait', 'this', 'Thread'].includes(m[1])) {
+                    return `    await ${m[1]}.${m[2]}();`;
+                }
+                return null;
+            } 
+        }
+    ];
+    
+    for (const { pattern, handler } of actionPatterns) {
+        const match = line.match(pattern);
+        if (match) {
+            const result = handler(match);
+            if (result) return result;
+        }
+    }
+    
+    return null;
+}
+
+// Converts Java element references to Playwright locator expressions
+function elementStringToPlaywright(element: string): string {
+    // This is a simplification - in a real converter you might need a more sophisticated approach
+    if (['driver', 'assert', 'wait', 'this', 'Thread'].includes(element)) {
+        return `#${element}-element`;
+    }
+    
+    // Add # to make it look like a CSS selector by default
+    return `#${element}`;
+}
+
+function convertJavaParamsToTypeScript(params: string): string {
+    if (!params) return '';
+    
+    return params.replace(/String/g, 'string')
+                .replace(/int\b/g, 'number')
+                .replace(/Integer/g, 'number')
+                .replace(/boolean/g, 'boolean')
+                .replace(/Map<[^>]+>/g, 'Record<string, any>')
+                .replace(/List<[^>]+>/g, 'any[]')
+                .replace(/Object/g, 'any');
+}
+
+function processLocator(tsLines: string[], locator: string): void {
+    // Handle different locator types with proper quoting
+    if (locator.startsWith('xpath=')) {
+        const xpathValue = locator.substring(6);
+        // Use template literals to avoid quote escaping issues
+        tsLines.push(`    return this.page.locator(\`xpath=${xpathValue.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('css=')) {
+        const cssValue = locator.substring(4);
+        tsLines.push(`    return this.page.locator(\`${cssValue.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('id=')) {
+        tsLines.push(`    return this.page.locator('#${locator.substring(3)}');`);
+    } else if (locator.startsWith('name=')) {
+        tsLines.push(`    return this.page.locator('[name="${locator.substring(5)}"]');`);
+    } else if (locator.startsWith('linkText=')) {
+        const linkText = locator.substring(9);
+        tsLines.push(`    return this.page.getByText(\`${linkText.replace(/`/g, '\\`')}\`);`);
+    } else if (locator.startsWith('partialLinkText=')) {
+        const partialText = locator.substring(16);
+        tsLines.push(`    return this.page.getByText(\`${partialText.replace(/`/g, '\\`')}\`, { exact: false });`);
+    } else if (locator.startsWith('className=')) {
+        tsLines.push(`    return this.page.locator('.${locator.substring(10)}');`);
+    } else if (locator.startsWith('tagName=')) {
+        tsLines.push(`    return this.page.locator('${locator.substring(8)}');`);
+    } else {
+        // Try to detect if it's a complex locator with a type
+        const complexMatch = locator.match(/^(\w+)=(.+)$/);
+        if (complexMatch) {
+            const type = complexMatch[1];
+            const value = complexMatch[2];
+            
+            switch (type.toLowerCase()) {
+                case 'text':
+                    tsLines.push(`    return this.page.getByText(\`${value.replace(/`/g, '\\`')}\`);`);
+                    break;
+                case 'role':
+                    tsLines.push(`    return this.page.getByRole('${value}');`);
+                    break;
+                case 'label':
+                    tsLines.push(`    return this.page.getByLabel(\`${value.replace(/`/g, '\\`')}\`);`);
+                    break;
+                case 'placeholder':
+                    tsLines.push(`    return this.page.getByPlaceholder(\`${value.replace(/`/g, '\\`')}\`);`);
+                    break;
+                case 'alt':
+                    tsLines.push(`    return this.page.getByAltText(\`${value.replace(/`/g, '\\`')}\`);`);
+                    break;
+                case 'title':
+                    tsLines.push(`    return this.page.getByTitle(\`${value.replace(/`/g, '\\`')}\`);`);
+                    break;
+                default:
+                    // Generic fallback
+                    tsLines.push(`    return this.page.locator(\`[${type}="${value}"]\`);`);
+            }
+        } else {
+            // Generic fallback using template literals
+            tsLines.push(`    return this.page.locator(\`${locator.replace(/`/g, '\\`')}\`);`);
+        }
+    }
+}
+
+// Handle execution errors
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    process.exit(1);
+});
+
+// Process a directory or a single file
+function processPath(inputPath: string, outputBasePath: string = '') {
+    const stats = fs.statSync(inputPath);
+    
+    if (stats.isDirectory()) {
+        // Process all Java files in the directory
+        const files = fs.readdirSync(inputPath);
+        files.forEach(file => {
+            if (file.endsWith('.java')) {
+                const filePath = path.join(inputPath, file);
+                const outputPath = outputBasePath 
+                    ? path.join(outputBasePath, file.replace('.java', '.spec.ts'))
+                    : filePath.replace('.java', '.spec.ts');
+                convertQafToPlaywright(filePath, outputPath);
+            }
+        });
+    } else if (stats.isFile() && inputPath.endsWith('.java')) {
+        // Process a single file
+        const outputPath = outputBasePath || inputPath.replace('.java', '.spec.ts');
+        convertQafToPlaywright(inputPath, outputPath);
+    } else {
+        console.error(`Error: ${inputPath} is not a directory or a Java file`);
+    }
+}
+
+// Example usage
+const inputPath = process.argv[2];
+const outputPath = process.argv[3] || '';
+
+if (!inputPath) {
+    console.error('Please provide an input path (file or directory)');
+    process.exit(1);
+}
+
+try {
+    processPath(inputPath, outputPath);
+} catch (error) {
+    console.error('Error executing conversion:', error);
+    process.exit(1);
+}
