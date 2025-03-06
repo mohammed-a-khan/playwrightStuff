@@ -1,629 +1,273 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Command } from 'commander';
 
 /**
- * QAF to Playwright Converter
- * Converts QAF Selenium Java tests to Playwright TypeScript
+ * QAF to Cucumber Adapter
+ * Converts QAF BDD files to Cucumber .feature files and step definitions
  */
-class QafToPlaywrightConverter {
+class QafToCucumberAdapter {
   private filesProcessed = 0;
-  private elementsConverted = 0;
-  private methodsConverted = 0;
+  private scenariosConverted = 0;
   private stepsConverted = 0;
 
   /**
-   * Convert a single Java file to TypeScript
-   */
-  public convertFile(inputPath: string, outputPath: string): void {
-    try {
-      console.log(`Processing: ${inputPath}`);
-      
-      // Read the file content
-      const content = fs.readFileSync(inputPath, 'utf8');
-      let result = '';
-      
-      // Process the content
-      result = this.processContent(content);
-      
-      // Ensure output directory exists
-      const outputDir = path.dirname(outputPath);
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-      }
-      
-      // Write the output file
-      fs.writeFileSync(outputPath, result);
-      this.filesProcessed++;
-      
-      console.log(`Converted: ${outputPath}`);
-    } catch (error) {
-      console.error(`Error processing file ${inputPath}:`, error);
-    }
-  }
-
-  /**
-   * Process the content of a Java file
-   */
-  private processContent(content: string): string {
-    // Add TypeScript imports
-    let result = "import { Page, Locator, expect } from '@playwright/test';\nimport * as fs from 'fs';\nimport * as path from 'path';\n\n";
-    
-    // Remove comments
-    content = this.removeComments(content);
-    
-    // Remove package and import statements
-    content = this.removePackageAndImports(content);
-    
-    // Process class definition
-    const { className, processedContent } = this.processClassDefinition(content);
-    content = processedContent;
-    
-    if (className) {
-      result += `export class ${className} {\n`;
-      result += `  protected page: Page;\n\n`;
-      result += `  constructor(page: Page) {\n`;
-      result += `    this.page = page;\n`;
-    } else {
-      result += `export class PageObject {\n`;
-      result += `  protected page: Page;\n\n`;
-      result += `  constructor(page: Page) {\n`;
-      result += `    this.page = page;\n`;
-    }
-    
-    // Process @FindBy declarations to initialize elements in constructor
-    const { constructorContent, remainingContent } = this.processFindByDeclarations(content);
-    result += constructorContent;
-    result += `  }\n\n`;  // Close constructor
-    
-    // Process remaining content including methods
-    content = this.processMethodDeclarations(remainingContent);
-    
-    // Add processed content to result
-    result += content;
-    
-    // Close the class
-    result += '}\n';
-    
-    return result;
-  }
-
-  /**
-   * Remove comments from the code
-   */
-  private removeComments(content: string): string {
-    // Remove single line comments
-    let result = content.replace(/\/\/.*$/gm, '');
-    
-    // Remove multi-line comments
-    result = result.replace(/\/\*[\s\S]*?\*\//g, '');
-    
-    return result;
-  }
-
-  /**
-   * Remove package and import statements
-   */
-  private removePackageAndImports(content: string): string {
-    // Remove package declarations
-    let result = content.replace(/package\s+[\w.]+;/g, '');
-    
-    // Remove import statements
-    result = result.replace(/import\s+[\w.]+(?:\.\*)?;/g, '');
-    
-    return result;
-  }
-
-  /**
-   * Process class definition
-   */
-  private processClassDefinition(content: string): { className: string | null, processedContent: string } {
-    const classMatch = content.match(/public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/);
-    
-    if (classMatch) {
-      const className = classMatch[1];
-      const baseClassName = classMatch[2] || null;
-      
-      let processedContent = content.replace(
-        /public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/,
-        ''
-      );
-      
-      // Remove the closing brace of the class
-      const lastBraceIndex = processedContent.lastIndexOf('}');
-      if (lastBraceIndex !== -1) {
-        processedContent = processedContent.substring(0, lastBraceIndex);
-      }
-      
-      return { className, processedContent };
-    }
-    
-    return { className: null, processedContent: content };
-  }
-
-  /**
-   * Process @FindBy declarations and extract them for constructor initialization
-   */
-  private processFindByDeclarations(content: string): { constructorContent: string, remainingContent: string } {
-    let constructorContent = '';
-    let elementDeclarations = '';
-    const lines = content.split('\n');
-    const processedLines: string[] = [];
-    const findByLines: string[] = [];
-    
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i].trim();
-      
-      // Check if line contains @FindBy
-      if (line.includes('@FindBy')) {
-        // Start collecting the full declaration that may span multiple lines
-        let fullDeclaration = line;
-        let j = i + 1;
-        
-        // Keep collecting lines until we find one with a semicolon
-        while (j < lines.length && !lines[j].includes(';')) {
-          fullDeclaration += ' ' + lines[j].trim();
-          j++;
-        }
-        
-        // Include the line with semicolon
-        if (j < lines.length) {
-          fullDeclaration += ' ' + lines[j].trim();
-        }
-        
-        // Extract the element information
-        const elementInfo = this.extractElementInfo(fullDeclaration);
-        if (elementInfo) {
-          // Add element declaration
-          elementDeclarations += `  readonly ${elementInfo.name}: Locator;\n`;
-          
-          // Add constructor initialization
-          constructorContent += `    this.${elementInfo.name} = page.locator('${elementInfo.locator}');\n`;
-          
-          this.elementsConverted++;
-        } else {
-          // If extraction failed, keep track of the original line
-          findByLines.push(fullDeclaration);
-        }
-        
-        // Skip ahead to after the semicolon
-        i = j + 1;
-      } else {
-        processedLines.push(lines[i]);
-        i++;
-      }
-    }
-    
-    // Combine processed lines, but put them after element declarations
-    return { 
-      constructorContent, 
-      remainingContent: elementDeclarations + processedLines.join('\n') 
-    };
-  }
-
-  /**
-   * Extract element information from a @FindBy declaration
-   */
-  private extractElementInfo(declaration: string): { name: string, locator: string } | null {
-    // Extract the element name
-    const elementMatch = declaration.match(/\b(?:private|public|protected)?\s*\w+Element\s+(\w+)\s*;/);
-    if (!elementMatch) {
-      return null;
-    }
-    
-    const elementName = elementMatch[1];
-    
-    try {
-      // Extract the locator string between quotes
-      let locatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"(.*?)"\s*\)/);
-      
-      if (locatorMatch) {
-        const locator = locatorMatch[1];
-        
-        try {
-          // Try parsing as JSON with escaped quotes replaced
-          const jsonStr = locator.replace(/\\"/g, '"');
-          let jsonLocator: any = null;
-          
-          try {
-            jsonLocator = JSON.parse(jsonStr);
-          } catch (e) {
-            // If it's not valid JSON, it might be a direct string
-          }
-          
-          if (jsonLocator && jsonLocator.locator) {
-            // Extract the locator type and value
-            if (jsonLocator.locator.startsWith("xpath=")) {
-              return { name: elementName, locator: jsonLocator.locator.substring(6) };
-            } else if (jsonLocator.locator.startsWith("path=")) {
-              // Some codebases use "path=" as an alias for "xpath="
-              return { name: elementName, locator: jsonLocator.locator.substring(5) };
-            } else if (jsonLocator.locator.startsWith("css=")) {
-              return { name: elementName, locator: jsonLocator.locator.substring(4) };
-            } else if (jsonLocator.locator.startsWith("id=")) {
-              return { name: elementName, locator: `#${jsonLocator.locator.substring(3)}` };
-            } else {
-              // Default to the raw value
-              return { name: elementName, locator: jsonLocator.locator };
-            }
-          } else if (locator.startsWith("xpath=")) {
-            return { name: elementName, locator: locator.substring(6) };
-          } else if (locator.startsWith("css=")) {
-            return { name: elementName, locator: locator.substring(4) };
-          } else if (locator.startsWith("id=")) {
-            return { name: elementName, locator: `#${locator.substring(3)}` };
-          } else {
-            // Default to the raw value
-            return { name: elementName, locator: locator };
-          }
-        } catch (e) {
-          console.error(`Error processing JSON locator for ${elementName}:`, e);
-          return { name: elementName, locator: `//TODO-FIX-LOCATOR-FOR-${elementName}` };
-        }
-      } else {
-        // Try direct attribute format: @FindBy(xpath="//div[@id='something']")
-        locatorMatch = declaration.match(/@FindBy\s*\(\s*(xpath|css|id)\s*=\s*"(.*?)"\s*\)/);
-        
-        if (locatorMatch) {
-          const locatorType = locatorMatch[1];
-          const locatorValue = locatorMatch[2];
-          
-          if (locatorType === 'xpath') {
-            return { name: elementName, locator: locatorValue };
-          } else if (locatorType === 'id') {
-            return { name: elementName, locator: `#${locatorValue}` };
-          } else {
-            return { name: elementName, locator: locatorValue };
-          }
-        }
-      }
-    } catch (error) {
-      console.error(`Error processing locator for ${elementName}:`, error);
-    }
-    
-    // If all extraction methods fail, return a placeholder
-    return { name: elementName, locator: `//TODO-FIX-LOCATOR-FOR-${elementName}` };
-  }
-
-  /**
-   * Process method declarations and convert Java syntax to TypeScript
-   */
-  private processMethodDeclarations(content: string): string {
-    const lines = content.split('\n');
-    const processedLines: string[] = [];
-    
-    // Process dynamic locator methods first
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      
-      // Check if it's a dynamic locator method (returns CSWebElement or similar)
-      if ((line.includes('public') || line.includes('private') || line.includes('protected')) && 
-          (line.includes('CSWebElement') || line.includes('DropDownListWebElement')) && line.includes('(')) {
-        // Start of method declaration
-        let methodDeclaration = line;
-        let braceCount = line.split('{').length - line.split('}').length;
-        let j = i + 1;
-        
-        // Collect the entire method
-        while (j < lines.length && braceCount > 0) {
-          methodDeclaration += '\n' + lines[j];
-          braceCount += lines[j].split('{').length - lines[j].split('}').length;
-          j++;
-        }
-        
-        // Convert the dynamic locator method
-        const convertedMethod = this.convertDynamicLocatorMethod(methodDeclaration);
-        processedLines.push(convertedMethod);
-        this.methodsConverted++;
-        
-        // Skip to after the method
-        i = j;
-      } else {
-        // Regular business methods
-        if ((line.includes('public') || line.includes('private') || line.includes('protected')) && 
-            line.includes('void') && line.includes('(')) {
-          // Start of business method declaration
-          let methodDeclaration = line;
-          let braceCount = line.split('{').length - line.split('}').length;
-          let j = i + 1;
-          
-          // Collect the entire method
-          while (j < lines.length && braceCount > 0) {
-            methodDeclaration += '\n' + lines[j];
-            braceCount += lines[j].split('{').length - lines[j].split('}').length;
-            j++;
-          }
-          
-          // Convert the business method
-          const convertedMethod = this.convertBusinessMethod(methodDeclaration);
-          processedLines.push(convertedMethod);
-          this.methodsConverted++;
-          
-          // Skip to after the method
-          i = j;
-        } else {
-          // Other lines (properties, etc.)
-          processedLines.push(this.convertPropertyDeclaration(line));
-          i++;
-        }
-      }
-    }
-    
-    return processedLines.join('\n');
-  }
-
-  /**
-   * Convert a property declaration
-   */
-  private convertPropertyDeclaration(line: string): string {
-    // Skip WebDriver declarations (handled in constructor)
-    if (line.includes('WebDriver')) {
-      return '';
-    }
-    
-    // Convert Java logger to console.log comment
-    if (line.includes('Logger')) {
-      return '  // Logger is replaced with console.log in TypeScript';
-    }
-    
-    // Other property declarations
-    return line;
-  }
-
-  /**
-   * Convert a dynamic locator method that returns CSWebElement or similar
-   */
-  private convertDynamicLocatorMethod(methodDeclaration: string): string {
-    try {
-      // Extract method info
-      const methodInfoMatch = methodDeclaration.match(/(?:public|private|protected)\s+(CS\w+Element)\s+(\w+)\s*\((.*?)\)\s*\{/);
-      if (!methodInfoMatch) {
-        return methodDeclaration; // Return as-is if no match
-      }
-      
-      const returnType = methodInfoMatch[1];
-      const methodName = methodInfoMatch[2];
-      const params = methodInfoMatch[3];
-      
-      // Process parameters
-      const processedParams = this.convertMethodParameters(params);
-      
-      // Extract method body
-      const bodyMatch = methodDeclaration.match(/\{([\s\S]*)\}/);
-      const methodBody = bodyMatch ? bodyMatch[1] : '';
-      
-      // Look for the return statement with locator string
-      const newElementMatch = methodBody.match(/return\s+new\s+\w+\s*\(\s*"(.+?)"\s*\)/s);
-      const locatorString = newElementMatch ? newElementMatch[1] : '';
-      
-      // Build the converted method
-      let convertedMethod = `  /**\n   * ${methodName} - Dynamic locator method\n   */\n`;
-      convertedMethod += `  ${methodName}(${processedParams}): Locator {\n`;
-      
-      if (locatorString) {
-        // Check if the locator string contains parameters
-        const hasParameters = processedParams.split(',').some(param => {
-          const paramName = param.split(':')[0].trim();
-          return locatorString.includes(paramName);
-        });
-        
-        if (hasParameters) {
-          // Handle dynamic string construction with template literals
-          const templateString = this.convertStringConcatenationToTemplate(locatorString);
-          convertedMethod += `    return this.page.locator(\`${templateString}\`);\n`;
-        } else {
-          // Static locator
-          convertedMethod += `    return this.page.locator('${locatorString}');\n`;
-        }
-      } else {
-        // Fallback if return statement pattern wasn't matched
-        convertedMethod += `    // TODO: Implement locator strategy\n`;
-        convertedMethod += `    return this.page.locator('//TODO-IMPLEMENT-${methodName}');\n`;
-      }
-      
-      convertedMethod += `  }`;
-      
-      return convertedMethod;
-    } catch (error) {
-      console.error(`Error converting dynamic locator method:`, error);
-      return methodDeclaration; // Return original on error
-    }
-  }
-
-  /**
-   * Convert Java method parameters to TypeScript
-   */
-  private convertMethodParameters(params: string): string {
-    if (!params.trim()) {
-      return '';
-    }
-    
-    return params.split(',').map(param => {
-      const parts = param.trim().split(/\s+/);
-      if (parts.length < 2) {
-        return param.trim(); // Return as-is if unusual format
-      }
-      
-      const paramType = parts[0];
-      const paramName = parts[parts.length - 1];
-      
-      // Convert Java types to TypeScript
-      let tsType: string;
-      switch (paramType) {
-        case 'String':
-          tsType = 'string';
-          break;
-        case 'int':
-        case 'double':
-        case 'float':
-        case 'Integer':
-        case 'Double':
-        case 'Float':
-          tsType = 'number';
-          break;
-        case 'boolean':
-        case 'Boolean':
-          tsType = 'boolean';
-          break;
-        default:
-          tsType = 'any';
-      }
-      
-      return `${paramName}: ${tsType}`;
-    }).join(', ');
-  }
-
-  /**
-   * Convert a Java business method to TypeScript async method
-   */
-  private convertBusinessMethod(methodDeclaration: string): string {
-    try {
-      // Extract method info
-      const methodInfoMatch = methodDeclaration.match(/(?:public|private|protected)\s+void\s+(\w+)\s*\((.*?)\)\s*(?:throws\s+[\w,\s]+)?\s*\{/);
-      if (!methodInfoMatch) {
-        return methodDeclaration; // Return as-is if no match
-      }
-      
-      const methodName = methodInfoMatch[1];
-      const params = methodInfoMatch[2];
-      
-      // Process parameters
-      const processedParams = this.convertMethodParameters(params);
-      
-      // Extract method body
-      const bodyMatch = methodDeclaration.match(/\{([\s\S]*)\}/);
-      let methodBody = bodyMatch ? bodyMatch[1] : '';
-      
-      // Convert Java method calls to Playwright equivalents
-      methodBody = this.convertMethodBody(methodBody);
-      
-      // Build the converted method
-      let convertedMethod = `  /**\n   * ${methodName}\n   */\n`;
-      convertedMethod += `  async ${methodName}(${processedParams}): Promise<void> {\n`;
-      
-      // Add method body with proper indentation
-      methodBody.split('\n').forEach(line => {
-        if (line.trim()) {
-          convertedMethod += `    ${line.trim()}\n`;
-        }
-      });
-      
-      convertedMethod += `  }`;
-      
-      return convertedMethod;
-    } catch (error) {
-      console.error(`Error converting business method:`, error);
-      return methodDeclaration; // Return original on error
-    }
-  }
-
-  /**
-   * Convert Java method body to Playwright TypeScript
-   */
-  private convertMethodBody(body: string): string {
-    let result = body;
-    
-    // Replace Java Properties with Node.js approach
-    result = result.replace(/Properties\s+(\w+)\s*=\s*new\s+Properties\(\);/g, 
-                           'const $1: Record<string, string> = {};');
-    result = result.replace(/FileInputStream\s+(\w+)\s*=\s*new\s+FileInputStream\(([^)]+)\);/g,
-                           '// FileInputStream replaced with fs.readFileSync\n' +
-                           'const $1Content = fs.readFileSync($2, \'utf8\');');
-    result = result.replace(/(\w+)\.load\((\w+)\);/g,
-                           '$1 = this.parseProperties($2Content);');
-    
-    // Convert Selenium waits to Playwright
-    result = result.replace(/syncUtil\.sleep\((\d+)\);/g, 'await this.page.waitForTimeout($1);');
-    result = result.replace(/waitForPageToLoad\(\);/g, 'await this.page.waitForLoadState(\'domcontentloaded\');');
-    
-    // Convert element interactions
-    result = result.replace(/(\w+)\.getText\(\)/g, 'await $1.textContent() || \'\'');
-    result = result.replace(/(\w+)\.isVisible\(\)/g, 'await $1.isVisible()');
-    result = result.replace(/(\w+)\.click\(\);/g, 'await $1.click();');
-    result = result.replace(/(\w+)\.clear\(\);/g, 'await $1.clear();');
-    result = result.replace(/(\w+)\.sendKeys\(([^)]+)\);/g, 'await $1.fill($2);');
-    
-    // Convert QAF Reporter to console.log
-    result = result.replace(/Reporter\.log\(([^,]+),\s*\w+\);/g, 'console.log($1);');
-    
-    // Convert System.out.println to console.log
-    result = result.replace(/System\.out\.println\(([^)]+)\);/g, 'console.log($1);');
-    
-    // Convert String declarations
-    result = result.replace(/String\s+(\w+)\s*=\s*([^;]+);/g, 'const $1 = $2;');
-    
-    // Convert for-each loop
-    result = result.replace(/for\s*\(\s*String\s+(\w+)\s*:\s*(\w+)\s*\)\s*\{/g, 'for (const $1 of $2) {');
-    
-    // Convert while loop
-    result = result.replace(/while\s*\(\s*true\s*\)\s*\{/g, '// Original had infinite loop\nlet breakCounter = 0;\nwhile (breakCounter < 10) {\n  breakCounter++;');
-    
-    // Keyboard operations
-    result = result.replace(/Keys\.CONTROL\s*\+\s*"A"\s*\+\s*Keys\.DELETE/g, 
-                           '\'Control+a Delete\'');
-    
-    // Fix property access
-    result = result.replace(/(\w+)\.getProperty\(([^)]+)\)/g, '$1[$2]');
-    
-    return result;
-  }
-
-  /**
-   * Convert Java string concatenation to template literals
-   */
-  private convertStringConcatenationToTemplate(str: string): string {
-    // Replace Java-style string concatenation with template literals
-    let template = str;
-    
-    // Replace string concatenation 'prefix' + variable + 'suffix'
-    template = template.replace(/'([^']*)'\s*\+\s*(\w+)\s*\+\s*'([^']*)'/g, '$1${$2}$3');
-    
-    // Replace JSON-style escaped quotes with regular quotes
-    template = template.replace(/\\"/g, '"');
-    
-    // Replace remaining concatenation
-    template = template.replace(/"\s*\+\s*(\w+)\s*\+\s*"/g, '${$1}');
-    
-    return template;
-  }
-
-  /**
-   * Process a directory of Java files
+   * Process a directory containing QAF BDD files
    */
   public processDirectory(inputDir: string, outputDir: string): void {
     try {
-      // Get all Java files
-      const files = this.getJavaFiles(inputDir);
-      console.log(`Found ${files.length} Java files to process`);
+      // Find QAF BDD files
+      const bddFiles = this.getBddFiles(inputDir);
+      console.log(`Found ${bddFiles.length} BDD files to process`);
       
-      // Create output directory if it doesn't exist
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
+      // Create output directory structure for Cucumber
+      const featuresDir = path.join(outputDir, 'features');
+      const stepsDir = path.join(outputDir, 'steps');
+      
+      if (!fs.existsSync(featuresDir)) {
+        fs.mkdirSync(featuresDir, { recursive: true });
       }
       
-      // Process each file
-      for (const file of files) {
-        const relativePath = path.relative(inputDir, file);
-        const outputPath = path.join(outputDir, relativePath.replace('.java', '.ts'));
-        this.convertFile(file, outputPath);
+      if (!fs.existsSync(stepsDir)) {
+        fs.mkdirSync(stepsDir, { recursive: true });
       }
       
-      // Generate helper utilities needed by the converted files
-      this.generateHelperUtilities(outputDir);
+      // Process each BDD file
+      for (const file of bddFiles) {
+        this.processBddFile(file, featuresDir, stepsDir);
+      }
       
-      console.log('\nConversion completed successfully!');
+      // Generate step definitions for Java step methods
+      this.generateStepDefinitions(inputDir, stepsDir);
+      
+      console.log('\nBDD Conversion completed successfully!');
       console.log(`Files processed: ${this.filesProcessed}`);
-      console.log(`Elements converted: ${this.elementsConverted}`);
-      console.log(`Methods converted: ${this.methodsConverted}`);
+      console.log(`Scenarios converted: ${this.scenariosConverted}`);
+      console.log(`Steps converted: ${this.stepsConverted}`);
     } catch (error) {
-      console.error('Error processing directory:', error);
+      console.error('Error processing BDD files:', error);
     }
   }
 
   /**
-   * Get all Java files in a directory and its subdirectories
+   * Find all QAF BDD files in a directory
+   */
+  private getBddFiles(dir: string): string[] {
+    const files: string[] = [];
+    
+    try {
+      const items = fs.readdirSync(dir);
+      
+      for (const item of items) {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+        
+        if (stat.isDirectory()) {
+          files.push(...this.getBddFiles(fullPath));
+        } else if (item.endsWith('.bdd') || item.endsWith('.scenario')) {
+          files.push(fullPath);
+        }
+      }
+    } catch (error) {
+      console.error(`Error reading directory ${dir}:`, error);
+    }
+    
+    return files;
+  }
+
+  /**
+   * Process a single QAF BDD file
+   */
+  private processBddFile(filePath: string, featuresDir: string, stepsDir: string): void {
+    try {
+      console.log(`Processing BDD file: ${filePath}`);
+      
+      // Read file content
+      const content = fs.readFileSync(filePath, 'utf8');
+      
+      // Extract scenarios
+      const scenarios = this.extractScenarios(content);
+      
+      if (scenarios.length === 0) {
+        console.log(`No scenarios found in ${filePath}`);
+        return;
+      }
+      
+      // Create feature file name from original file name
+      const baseName = path.basename(filePath, path.extname(filePath));
+      const featureFileName = `${baseName}.feature`;
+      const featureFilePath = path.join(featuresDir, featureFileName);
+      
+      // Generate Cucumber feature file
+      const featureContent = this.generateFeatureFile(baseName, scenarios);
+      fs.writeFileSync(featureFilePath, featureContent);
+      
+      // Generate step definition file
+      const stepDefFileName = `${baseName}.steps.ts`;
+      const stepDefFilePath = path.join(stepsDir, stepDefFileName);
+      
+      // Extract unique steps from all scenarios
+      const allSteps = scenarios.flatMap(scenario => scenario.steps);
+      const uniqueSteps = [...new Set(allSteps.map(step => step.text))].map(text => {
+        const step = allSteps.find(s => s.text === text);
+        return step!;
+      });
+      
+      const stepDefContent = this.generateStepDefinitionsFile(baseName, uniqueSteps);
+      fs.writeFileSync(stepDefFilePath, stepDefContent);
+      
+      this.filesProcessed++;
+      this.scenariosConverted += scenarios.length;
+      this.stepsConverted += uniqueSteps.length;
+      
+      console.log(`Generated: ${featureFilePath}`);
+      console.log(`Generated: ${stepDefFilePath}`);
+    } catch (error) {
+      console.error(`Error processing BDD file ${filePath}:`, error);
+    }
+  }
+
+  /**
+   * Extract scenarios from QAF BDD content
+   */
+  private extractScenarios(content: string): any[] {
+    const scenarios: any[] = [];
+    
+    // QAF scenario pattern
+    const scenarioMatches = [...content.matchAll(/SCENARIO\s*(?:=|:)\s*(?:'|")(.+?)(?:'|")/gi)];
+    
+    for (const scenarioMatch of scenarioMatches) {
+      const scenarioName = scenarioMatch[1];
+      const scenarioStartIndex = scenarioMatch.index!;
+      
+      // Find the end of the scenario (either next SCENARIO or end of file)
+      const nextScenarioMatch = content.indexOf('SCENARIO', scenarioStartIndex + 1);
+      const scenarioEndIndex = nextScenarioMatch > 0 ? nextScenarioMatch : content.length;
+      
+      // Extract scenario content
+      const scenarioContent = content.substring(scenarioStartIndex, scenarioEndIndex);
+      
+      // Extract steps
+      const steps: any[] = [];
+      const stepMatches = [...scenarioContent.matchAll(/(GIVEN|WHEN|THEN|AND)\s*(?:=|:)\s*(?:'|")(.+?)(?:'|")/gi)];
+      
+      for (const stepMatch of stepMatches) {
+        const stepType = stepMatch[1].toLowerCase();
+        const stepText = stepMatch[2];
+        
+        steps.push({
+          type: stepType,
+          text: stepText
+        });
+      }
+      
+      scenarios.push({
+        name: scenarioName,
+        steps: steps
+      });
+    }
+    
+    return scenarios;
+  }
+
+  /**
+   * Generate a Cucumber feature file
+   */
+  private generateFeatureFile(featureName: string, scenarios: any[]): string {
+    // Format feature name with spaces
+    const formattedFeatureName = featureName
+      .replace(/([A-Z])/g, ' $1')
+      .replace(/^./, str => str.toUpperCase())
+      .trim();
+    
+    let content = `Feature: ${formattedFeatureName}\n\n`;
+    
+    // Add scenarios
+    for (const scenario of scenarios) {
+      content += `  Scenario: ${scenario.name}\n`;
+      
+      // Add steps
+      for (const step of scenario.steps) {
+        const stepType = step.type.charAt(0).toUpperCase() + step.type.slice(1).toLowerCase();
+        content += `    ${stepType} ${step.text}\n`;
+      }
+      
+      content += '\n';
+    }
+    
+    return content;
+  }
+
+  /**
+   * Generate step definitions file for Cucumber
+   */
+  private generateStepDefinitionsFile(featureName: string, steps: any[]): string {
+    let content = `import { Given, When, Then, Before } from '@cucumber/cucumber';\nimport { expect } from '@playwright/test';\n\n`;
+    
+    // Add imports for page objects
+    const pageObjectName = featureName.replace(/Test$/, '');
+    content += `// Import page objects\nimport { ${pageObjectName} } from '../pages/${pageObjectName.toLowerCase()}';\n\n`;
+    
+    // Add page object initialization
+    content += `// Initialize page objects\nlet ${pageObjectName.toLowerCase()}: ${pageObjectName};\n\n`;
+    
+    // Add Before hook
+    content += `// Hook to initialize page objects\nBefore(async function({ page }) {\n`;
+    content += `  ${pageObjectName.toLowerCase()} = new ${pageObjectName}(page);\n});\n\n`;
+    
+    // Add step definitions
+    for (const step of steps) {
+      const stepType = step.type.charAt(0).toUpperCase() + step.type.slice(1).toLowerCase();
+      const stepText = step.text;
+      
+      // Convert step text to a regex-safe string
+      const regexSafeText = stepText
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/'([^']+)'/g, "'([^']+)'");  // Replace quoted parameters with capture groups
+      
+      // Extract parameters from the step text
+      const params = [...stepText.matchAll(/'([^']+)'/g)].map(match => match[1]);
+      
+      // Generate parameter list
+      const paramList = params.map((_, i) => `param${i + 1}`).join(', ');
+      
+      // Add the step definition
+      content += `${stepType}('${regexSafeText}', async function(${paramList ? paramList : ''}) {\n`;
+      content += `  // TODO: Implement this step\n`;
+      
+      if (params.length > 0) {
+        content += `  // Parameters: ${params.join(', ')}\n`;
+      }
+      
+      content += `  await ${pageObjectName.toLowerCase()}.page.waitForTimeout(100);\n`;
+      content += `});\n\n`;
+    }
+    
+    return content;
+  }
+
+  /**
+   * Generate step definitions from Java classes with @QAFTestStep annotations
+   */
+  private generateStepDefinitions(inputDir: string, stepsDir: string): void {
+    try {
+      // Find Java files with @QAFTestStep annotations
+      const javaFiles = this.getJavaFiles(inputDir);
+      
+      for (const file of javaFiles) {
+        const content = fs.readFileSync(file, 'utf8');
+        
+        // Check if the file contains @QAFTestStep annotations
+        if (content.includes('@QAFTestStep')) {
+          this.processStepDefinitionFile(file, content, stepsDir);
+        }
+      }
+    } catch (error) {
+      console.error(`Error generating step definitions:`, error);
+    }
+  }
+
+  /**
+   * Find all Java files in a directory
    */
   private getJavaFiles(dir: string): string[] {
     const files: string[] = [];
@@ -649,173 +293,118 @@ class QafToPlaywrightConverter {
   }
 
   /**
-   * Generate helper utilities needed by the converted files
+   * Process a Java file containing @QAFTestStep annotations
    */
-  private generateHelperUtilities(outputDir: string): void {
-    // Generate a utilities file with helper functions used by converted code
-    const utilsContent = `/**
- * Utility functions for converted QAF tests
- */
-
-import * as fs from 'fs';
-
-/**
- * Parse a properties file content
- */
-export function parseProperties(content: string): Record<string, string> {
-  const properties: Record<string, string> = {};
-  
-  content.split('\\n').forEach(line => {
-    line = line.trim();
-    if (line && !line.startsWith('#')) {
-      const separatorIndex = line.indexOf('=');
-      if (separatorIndex > 0) {
-        const key = line.substring(0, separatorIndex).trim();
-        const value = line.substring(separatorIndex + 1).trim();
-        properties[key] = value;
+  private processStepDefinitionFile(filePath: string, content: string, stepsDir: string): void {
+    try {
+      console.log(`Processing step definitions from: ${filePath}`);
+      
+      // Extract class name
+      const classMatch = content.match(/public\s+class\s+(\w+)/);
+      if (!classMatch) {
+        console.log(`Could not determine class name in ${filePath}`);
+        return;
       }
+      
+      const className = classMatch[1];
+      
+      // Extract @QAFTestStep methods
+      const stepMethods: any[] = [];
+      const stepMatches = [...content.matchAll(/@QAFTestStep\s*\(\s*(?:description\s*=\s*|injectableProcessor\s*=\s*(?:.*?),\s*description\s*=\s*)"([^"]*)"/g)];
+      
+      for (const stepMatch of stepMatches) {
+        const stepDescription = stepMatch[1];
+        const methodStart = content.indexOf('public void', stepMatch.index!);
+        
+        if (methodStart > 0) {
+          // Extract method name and params
+          const methodMatch = content.substring(methodStart).match(/public\s+void\s+(\w+)\s*\(([^)]*)\)/);
+          
+          if (methodMatch) {
+            const methodName = methodMatch[1];
+            const methodParams = methodMatch[2];
+            
+            stepMethods.push({
+              description: stepDescription,
+              methodName,
+              params: methodParams
+            });
+          }
+        }
+      }
+      
+      if (stepMethods.length === 0) {
+        console.log(`No step methods found in ${filePath}`);
+        return;
+      }
+      
+      // Generate step definition file
+      const stepDefFileName = `${className}.steps.ts`;
+      const stepDefFilePath = path.join(stepsDir, stepDefFileName);
+      
+      const stepDefContent = this.generateStepDefinitionsFromMethods(className, stepMethods);
+      fs.writeFileSync(stepDefFilePath, stepDefContent);
+      
+      this.stepsConverted += stepMethods.length;
+      
+      console.log(`Generated: ${stepDefFilePath}`);
+    } catch (error) {
+      console.error(`Error processing step definition file ${filePath}:`, error);
     }
-  });
-  
-  return properties;
-}
+  }
 
-/**
- * Wait for an element to be hidden
- */
-export async function waitForElementToBeHidden(locator: any, timeout = 30000): Promise<void> {
-  await locator.waitFor({ state: 'hidden', timeout });
-}
-
-/**
- * Wait for a timeout
- */
-export async function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-`;
-
-    const utilsPath = path.join(outputDir, 'utils.ts');
-    fs.writeFileSync(utilsPath, utilsContent);
-    console.log(`Utilities file generated: ${utilsPath}`);
+  /**
+   * Generate step definitions from @QAFTestStep methods
+   */
+  private generateStepDefinitionsFromMethods(className: string, stepMethods: any[]): string {
+    let content = `import { Given, When, Then, Before } from '@cucumber/cucumber';\nimport { expect } from '@playwright/test';\n\n`;
     
-    // Generate a Playwright config file
-    const configContent = `import { defineConfig, devices } from '@playwright/test';
-
-/**
- * Auto-generated Playwright configuration
- * Converted from QAF framework
- */
-export default defineConfig({
-  testDir: './tests',
-  timeout: 60000,
-  expect: {
-    timeout: 10000,
-  },
-  
-  // Run tests in files in parallel
-  fullyParallel: false,
-  
-  // Retry on CI only
-  retries: process.env.CI ? 2 : 0,
-  
-  // Limit parallel workers on CI, use default locally
-  workers: process.env.CI ? 1 : undefined,
-  
-  // Reporter to use
-  reporter: [['html', { open: 'never' }]],
-  
-  // Configure projects for different browsers
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
-    {
-      name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
-    },
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-    },
-  ],
-  
-  // Global setup/teardown scripts
-  // globalSetup: require.resolve('./global-setup'),
-  // globalTeardown: require.resolve('./global-teardown'),
-  
-  // Configure the base URL and other options for all tests
-  use: {
-    // Base URL to use in tests
-    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    // Add imports for page objects
+    content += `// Import page objects\nimport { ${className} } from '../pages/${className.toLowerCase()}';\n\n`;
     
-    // Collect trace when retrying the failed test
-    trace: 'on-first-retry',
+    // Add page object initialization
+    content += `// Initialize page objects\nlet ${className.toLowerCase()}: ${className};\n\n`;
     
-    // Capture screenshot on failure
-    screenshot: 'only-on-failure',
-  },
-});
-`;
-
-    const configPath = path.join(outputDir, 'playwright.config.ts');
-    fs.writeFileSync(configPath, configContent);
-    console.log(`Playwright config generated: ${configPath}`);
+    // Add Before hook
+    content += `// Hook to initialize page objects\nBefore(async function({ page }) {\n`;
+    content += `  ${className.toLowerCase()} = new ${className}(page);\n});\n\n`;
     
-    // Generate a Cucumber config if needed
-    const cucumberContent = `module.exports = {
-  default: {
-    paths: ['features/**/*.feature'],
-    require: ['steps/**/*.ts'],
-    requireModule: ['ts-node/register'],
-    format: [
-      'progress-bar',
-      'html:reports/cucumber-report.html',
-      'json:reports/cucumber-report.json',
-    ],
-    formatOptions: { snippetInterface: 'async-await' },
-    publishQuiet: true,
-  },
-};
-`;
-
-    const cucumberDir = path.join(outputDir, 'cucumber');
-    if (!fs.existsSync(cucumberDir)) {
-      fs.mkdirSync(cucumberDir, { recursive: true });
+    // Add step definitions
+    for (const method of stepMethods) {
+      const description = method.description;
+      
+      // Determine step type (Given/When/Then) based on description
+      let stepType = 'Given';
+      if (description.toLowerCase().startsWith('when')) {
+        stepType = 'When';
+      } else if (description.toLowerCase().startsWith('then')) {
+        stepType = 'Then';
+      }
+      
+      // Convert step description to a regex-safe string
+      const regexSafeText = description
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/'([^']+)'/g, "'([^']+)'");  // Replace quoted parameters with capture groups
+      
+      // Extract parameters from method
+      const params = method.params.split(',').filter((p: string) => p.trim());
+      const paramNames = params.map((param: string) => {
+        const parts = param.trim().split(/\s+/);
+        return parts[parts.length - 1];
+      });
+      
+      // Generate parameter list
+      const paramList = paramNames.join(', ');
+      
+      // Add the step definition
+      content += `${stepType}('${regexSafeText}', async function(${paramList}) {\n`;
+      content += `  // Call the page object method\n`;
+      content += `  await ${className.toLowerCase()}.${method.methodName}(${paramList});\n`;
+      content += `});\n\n`;
     }
     
-    const cucumberConfigPath = path.join(cucumberDir, 'cucumber.js');
-    fs.writeFileSync(cucumberConfigPath, cucumberContent);
-    console.log(`Cucumber config generated: ${cucumberConfigPath}`);
+    return content;
   }
 }
 
-// Set up command-line interface
-const program = new Command();
-
-program
-  .name('qaf-to-playwright')
-  .description('Converter for QAF Java code to Playwright TypeScript')
-  .version('1.0.0')
-  .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
-  .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
-  .action((options) => {
-    try {
-      console.log('\n🔄 QAF to Playwright Converter');
-      console.log('============================');
-      
-      console.log(`Input directory: ${options.input}`);
-      console.log(`Output directory: ${options.output}`);
-      console.log('----------------------------');
-      
-      const converter = new QafToPlaywrightConverter();
-      converter.processDirectory(options.input, options.output);
-      
-    } catch (error) {
-      console.error('❌ Conversion failed:', error);
-      process.exit(1);
-    }
-  });
-
-program.parse();
+export default QafToCucumberAdapter;
