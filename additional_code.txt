@@ -76,6 +76,9 @@ class QafToPlaywrightParser {
     // Process step definitions
     content = this.processStepDefinitions(content);
     
+    // Additional clean-up for any remaining Java elements
+    content = this.cleanupRemainingJavaElements(content);
+    
     // Add processed content to result
     result += content;
     
@@ -106,7 +109,7 @@ class QafToPlaywrightParser {
     let result = content.replace(/package\s+[\w.]+;/g, '');
     
     // Remove import statements
-    result = result.replace(/import\s+[\w.]+;/g, '');
+    result = result.replace(/import\s+[\w.]+(?:\.\*)?;/g, '');
     
     return result;
   }
@@ -139,116 +142,140 @@ class QafToPlaywrightParser {
   }
 
   /**
-   * Process @FindBy declarations
+   * Process @FindBy declarations - completely revamped to handle complex cases
    */
   private processFindByDeclarations(content: string): string {
-    let result = content;
+    // Process line by line to handle complex multi-line declarations
+    const lines = content.split('\n');
+    const processedLines: string[] = [];
     
-    // Process multi-line content by examining line by line
-    const lines = result.split('\n');
-    let processedLines: string[] = [];
-    
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].includes('@FindBy')) {
-        // Collect the entire declaration that might span multiple lines
-        let declaration = lines[i];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+      
+      // Check if line contains @FindBy
+      if (line.includes('@FindBy')) {
+        // Start collecting the full declaration that may span multiple lines
+        let fullDeclaration = line;
         let j = i + 1;
         
-        // Continue collecting lines until we hit a semicolon
+        // Keep collecting lines until we find one with a semicolon
         while (j < lines.length && !lines[j].includes(';')) {
-          declaration += ' ' + lines[j].trim();
+          fullDeclaration += ' ' + lines[j].trim();
           j++;
         }
         
-        // Add the line with the semicolon if found
+        // Include the line with semicolon
         if (j < lines.length) {
-          declaration += ' ' + lines[j].trim();
+          fullDeclaration += ' ' + lines[j].trim();
         }
         
-        // Now we have the complete declaration, let's process it
-        const processedDeclaration = this.processFindByDeclaration(declaration);
-        processedLines.push(processedDeclaration);
+        // Now we have the full multi-line declaration
+        const convertedLine = this.convertFindByToLocator(fullDeclaration);
+        if (convertedLine) {
+          processedLines.push(convertedLine);
+          this.elementsConverted++;
+        } else {
+          // If conversion failed, keep original lines
+          processedLines.push(line);
+          for (let k = i + 1; k <= j; k++) {
+            if (k < lines.length) {
+              processedLines.push(lines[k]);
+            }
+          }
+        }
         
-        // Skip the lines we've already processed
-        i = j;
+        // Skip ahead to after the semicolon
+        i = j + 1;
       } else {
         processedLines.push(lines[i]);
+        i++;
       }
     }
     
-    result = processedLines.join('\n');
-    return result;
+    return processedLines.join('\n');
   }
 
   /**
-   * Process a single @FindBy declaration
+   * Convert @FindBy annotation to Playwright locator - completely new approach
    */
-  private processFindByDeclaration(declaration: string): string {
-    // Extract element name
-    const elementNameMatch = declaration.match(/\bCSWebElement\s+(\w+)\s*;/);
-    if (!elementNameMatch) {
-      return declaration; // Keep as is if no match
+  private convertFindByToLocator(declaration: string): string | null {
+    // First, extract the element name from CSWebElement declaration
+    const elementMatch = declaration.match(/\b(?:private|public|protected)?\s*CSWebElement\s+(\w+)\s*;/);
+    if (!elementMatch) {
+      return null;
     }
     
-    const elementName = elementNameMatch[1];
+    const elementName = elementMatch[1];
     
-    // Check for JSON format with locator
-    const jsonLocatorMatch = declaration.match(/locator\s*=\s*"(\{.*?"locator"\s*:\s*"([^"]+)".*?\})"/);
+    // Handle complex quote escaping in locator strings
+    let locatorValue: string | null = null;
+    let locatorType: string | null = null;
+    
+    // Try to match different locator formats
+    
+    // Format 1: @FindBy(locator="xpath=//div[@id='something']")
+    const simpleLocatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"([^"]*?)"\s*\)/);
+    if (simpleLocatorMatch) {
+      locatorValue = simpleLocatorMatch[1];
+    }
+    
+    // Format 2: @FindBy(locator="{\"locator\":\"xpath=//div[@id='something']\"}")
+    const jsonLocatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"(\{.*?\"locator\"(?:\\"|:|\")\s*\"(.*?)\".*?\})"\s*\)/);
     if (jsonLocatorMatch) {
-      const fullJson = jsonLocatorMatch[1];
-      const locatorValue = jsonLocatorMatch[2];
-      
-      // Extract the xpath value
-      if (locatorValue.startsWith('xpath=')) {
-        const xpathValue = locatorValue.substring(6);
-        this.elementsConverted++;
-        return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
-      }
-      
-      // Handle other locator types
-      if (locatorValue.startsWith('css=')) {
-        const cssValue = locatorValue.substring(4);
-        this.elementsConverted++;
-        return `  private readonly ${elementName} = this.page.locator('${cssValue}');`;
-      }
-      
-      if (locatorValue.startsWith('id=')) {
-        const idValue = locatorValue.substring(3);
-        this.elementsConverted++;
-        return `  private readonly ${elementName} = this.page.locator('#${idValue}');`;
+      locatorValue = jsonLocatorMatch[2];
+    }
+    
+    // Format 3: @FindBy(locator="\"locator\":\"xpath=//div[@id='something']\"")
+    const nestedQuotesMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"\\+"locator\\+"(?:\\"|:)\\+"(.*?)\\+"\s*\)/);
+    if (nestedQuotesMatch) {
+      locatorValue = nestedQuotesMatch[1];
+    }
+    
+    // If we couldn't extract a locator value, try a more general approach
+    if (!locatorValue) {
+      // Look for any pattern that might contain xpath=, css=, or id=
+      const generalMatch = declaration.match(/(?:xpath|css|id)=([^"']+?)(?:\\"|\\',|\s|"|')/);
+      if (generalMatch) {
+        locatorValue = generalMatch[0];
       }
     }
     
-    // Check for direct locator format
-    const directLocatorMatch = declaration.match(/locator\s*=\s*"([^"]+)"/);
-    if (directLocatorMatch) {
-      const locatorValue = directLocatorMatch[1];
-      
-      if (locatorValue.startsWith('xpath=')) {
-        const xpathValue = locatorValue.substring(6);
-        this.elementsConverted++;
-        return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
-      }
-      
-      if (locatorValue.startsWith('css=')) {
-        const cssValue = locatorValue.substring(4);
-        this.elementsConverted++;
-        return `  private readonly ${elementName} = this.page.locator('${cssValue}');`;
-      }
-      
-      if (locatorValue.startsWith('id=')) {
-        const idValue = locatorValue.substring(3);
-        this.elementsConverted++;
-        return `  private readonly ${elementName} = this.page.locator('#${idValue}');`;
-      }
+    // If we still couldn't extract, return null
+    if (!locatorValue) {
+      return null;
     }
     
-    // If no match found, keep the original line
-    return declaration;
+    // Determine locator type
+    if (locatorValue.includes('xpath=')) {
+      locatorType = 'xpath';
+      locatorValue = locatorValue.replace('xpath=', '');
+    } else if (locatorValue.includes('css=')) {
+      locatorType = 'css';
+      locatorValue = locatorValue.replace('css=', '');
+    } else if (locatorValue.includes('id=')) {
+      locatorType = 'id';
+      locatorValue = locatorValue.replace('id=', '');
+    } else {
+      // Default to CSS if no prefix is found
+      locatorType = 'css';
+    }
+    
+    // Clean up the locator value - remove any escaped quotes
+    locatorValue = locatorValue.replace(/\\"/g, '"').replace(/\\'/g, "'");
+    
+    // Create the Playwright locator
+    if (locatorType === 'xpath') {
+      return `  private readonly ${elementName} = this.page.locator('xpath=${locatorValue}');`;
+    } else if (locatorType === 'id') {
+      return `  private readonly ${elementName} = this.page.locator('#${locatorValue}');`;
+    } else {
+      return `  private readonly ${elementName} = this.page.locator('${locatorValue}');`;
+    }
   }
 
   /**
-   * Process method-style element declarations
+   * Process method-style element declarations with improved regex
    */
   private processMethodStyleDeclarations(content: string): string {
     const lines = content.split('\n');
@@ -257,8 +284,10 @@ class QafToPlaywrightParser {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       
-      // Check if line might be the start of a method-style declaration
-      if (line.includes('public CSWebElement') && line.includes('(String ')) {
+      // Check for method-style declarations with CSWebElement return type
+      if ((line.includes('public CSWebElement') || line.includes('private CSWebElement') || 
+           line.includes('protected CSWebElement')) && line.includes('(')) {
+        
         // Collect the entire method
         let methodDeclaration = line;
         let braceCount = line.split('{').length - line.split('}').length;
@@ -285,11 +314,11 @@ class QafToPlaywrightParser {
   }
 
   /**
-   * Process a single method-style declaration
+   * Process a single method-style declaration with improved pattern matching
    */
   private processMethodDeclaration(declaration: string): string {
-    // Extract method name and parameter name
-    const methodInfoMatch = declaration.match(/public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)/);
+    // Extract method name and parameter name with improved pattern
+    const methodInfoMatch = declaration.match(/(?:public|private|protected)\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)(?:\s*,\s*[^)]*?)?\s*\)/);
     if (!methodInfoMatch) {
       return declaration; // Keep as is if no match
     }
@@ -297,60 +326,68 @@ class QafToPlaywrightParser {
     const methodName = methodInfoMatch[1];
     const paramName = methodInfoMatch[2];
     
-    // Look for the return statement with locator
-    const lines = declaration.split('\n');
-    let returnLine = '';
-    
-    for (const line of lines) {
-      if (line.includes('return') && line.includes('new CSWebElement')) {
-        returnLine = line;
-        break;
-      }
-    }
-    
-    if (!returnLine) {
+    // Look for the return statement with locator with more flexible pattern
+    const returnMatches = declaration.match(/return\s+(?:.*?)(?:new\s+CSWebElement\s*\(\s*"(.*?)"\s*\)|new\s+CSWebElement\s*\(\s*(.*?)\s*\))/s);
+    if (!returnMatches) {
       return declaration; // Keep as is if no return line found
     }
     
-    // Try to extract the locator value
-    let processedDeclaration = '';
+    // Try to extract the locator expression
+    const locatorExpression = returnMatches[1] || returnMatches[2];
     
-    // Check for JSON format with xpath
-    const jsonXpathMatch = returnLine.match(/\{\s*"locator"\s*:\s*"xpath=([^']+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)"/);
-    if (jsonXpathMatch) {
-      const prefix = jsonXpathMatch[1];
-      const suffix = jsonXpathMatch[3];
-      this.methodsConverted++;
-      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
-    }
+    // Try to determine if it's an xpath, css, or id locator
+    let locatorType = 'xpath'; // Default to xpath
+    let locatorTemplate = '';
     
-    // Check for direct xpath format
-    const directXpathMatch = returnLine.match(/xpath=([^']+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)/);
-    if (directXpathMatch) {
-      const prefix = directXpathMatch[1];
-      const suffix = directXpathMatch[3];
-      this.methodsConverted++;
-      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
-    }
-    
-    // Check for id, css or other simple locators
-    const simpleLocatorMatch = returnLine.match(/"([^=]+)="\s*\+\s*(\w+)/);
-    if (simpleLocatorMatch) {
-      const locatorType = simpleLocatorMatch[1];
+    if (locatorExpression.includes('xpath=')) {
+      locatorType = 'xpath';
       
-      if (locatorType === 'id') {
-        this.methodsConverted++;
-        return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`#\${${paramName}}\`);`;
+      // Try to extract the pattern with parameter
+      const xpathMatch = locatorExpression.match(/xpath=([^']+?)'(?:\s*\+\s*(\w+)\s*\+\s*'([^']*?))?/);
+      if (xpathMatch) {
+        if (xpathMatch[2] === paramName) {
+          // We have a parameterized xpath
+          const prefix = xpathMatch[1] || '';
+          const suffix = xpathMatch[3] || '';
+          locatorTemplate = `xpath=${prefix}\${${paramName}}${suffix}`;
+        } else {
+          // Non-parameterized xpath
+          locatorTemplate = `xpath=${locatorExpression.replace('xpath=', '')}`;
+        }
+      } else {
+        // Fallback for xpath
+        locatorTemplate = `xpath=${locatorExpression.replace('xpath=', '')}`;
       }
-      
-      if (locatorType === 'css') {
-        this.methodsConverted++;
-        return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`\${${paramName}}\`);`;
+    } else if (locatorExpression.includes('css=')) {
+      locatorType = 'css';
+      // Similar pattern for CSS
+      locatorTemplate = locatorExpression.replace('css=', '');
+    } else if (locatorExpression.includes('id=')) {
+      locatorType = 'id';
+      // Format for ID selector
+      locatorTemplate = `#${locatorExpression.replace('id=', '')}`;
+    } else {
+      // Try to guess from the context if no explicit prefix
+      if (locatorExpression.includes("//")) {
+        locatorType = 'xpath';
+        locatorTemplate = `xpath=${locatorExpression}`;
+      } else {
+        locatorType = 'css';
+        locatorTemplate = locatorExpression;
       }
     }
     
-    // Default case if we couldn't specifically match the locator format
-    return declaration;
+    // Check if the locator uses parameter interpolation
+    const hasInterpolation = locatorExpression.includes(paramName);
+    
+    // Create the Playwright locator method
+    this.methodsConverted++;
+    
+    if (hasInterpolation) {
+      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${locatorTemplate}\`);`;
+    } else {
+      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator('${locatorTemplate}');`;
+    }
   }
 
   /**
@@ -405,11 +442,11 @@ class QafToPlaywrightParser {
   }
 
   /**
-   * Process a single step definition
+   * Process a single step definition with improved parameter handling
    */
   private processStepDefinition(declaration: string): string {
-    // Extract step description
-    const descriptionMatch = declaration.match(/@QAFTestStep\s*\(\s*description\s*=\s*"([^"]*)"/);
+    // Extract step description with improved pattern
+    const descriptionMatch = declaration.match(/@QAFTestStep\s*\(\s*(?:description\s*=\s*|injectableProcessor\s*=\s*(?:.*?),\s*description\s*=\s*)"([^"]*)"/);
     if (!descriptionMatch) {
       return declaration; // Keep as is if no match
     }
@@ -425,14 +462,44 @@ class QafToPlaywrightParser {
     const methodName = methodMatch[1];
     const paramsList = methodMatch[2];
     
-    // Process parameters
+    // Process parameters with improved type conversion
     let processedParams = '';
+    let paramTypes: string[] = [];
+    
     if (paramsList && paramsList.trim()) {
-      processedParams = paramsList
-        .split(',')
+      const params = paramsList.split(',');
+      processedParams = params
         .map(param => {
           const parts = param.trim().split(/\s+/);
-          return parts[parts.length - 1]; // Take the parameter name, not type
+          const paramType = parts[0];
+          const paramName = parts[parts.length - 1];
+          
+          // Store the parameter type for later use
+          paramTypes.push(paramType);
+          
+          // Convert Java types to TypeScript types
+          let tsType = '';
+          switch (paramType) {
+            case 'String':
+              tsType = 'string';
+              break;
+            case 'int':
+            case 'Integer':
+            case 'double':
+            case 'float':
+            case 'Double':
+            case 'Float':
+              tsType = 'number';
+              break;
+            case 'boolean':
+            case 'Boolean':
+              tsType = 'boolean';
+              break;
+            default:
+              tsType = 'any';
+          }
+          
+          return `${paramName}: ${tsType}`;
         })
         .join(', ');
     }
@@ -456,7 +523,8 @@ class QafToPlaywrightParser {
     // Convert common method calls
     body = body
       .replace(/\.sendKeys\(/g, '.fill(')
-      .replace(/\.click\(\)/g, 'await page.click()')
+      .replace(/\.click\(\)/g, '.click()')
+      .replace(/\.isDisplayed\(\)/g, '.isVisible()')
       .replace(/Assert\.assertTrue\(([^)]+)\.isDisplayed\(\)\)/g, 'await expect($1).toBeVisible()')
       .replace(/Assert\.assertTrue\(([^)]+)\)/g, 'expect($1).toBeTruthy()')
       .replace(/Assert\.assertEquals\(([^,]+),\s*([^)]+)\)/g, 'expect($1).toEqual($2)');
@@ -464,8 +532,11 @@ class QafToPlaywrightParser {
     // Add await to common method calls if not already there
     body = body.replace(/(?<!await\s+)(\w+)\.(click|type|fill|check|uncheck|selectOption|press)\(/g, 'await $1.$2(');
     
+    // Replace any remaining CSWebElement references
+    body = body.replace(/CSWebElement/g, 'Locator');
+    
     // Prepare the result
-    let result = `  ${stepType}('${description}', async function(${processedParams}) {\n`;
+    let result = `  /**\n   * ${description}\n   */\n  async ${methodName}(${processedParams}) {\n`;
     
     // Clean up body lines and add them
     body.split('\n').forEach(line => {
@@ -474,10 +545,46 @@ class QafToPlaywrightParser {
       }
     });
     
-    result += '  });';
+    result += '  }';
     this.stepsConverted++;
     
     return result;
+  }
+
+  /**
+   * Clean up any remaining Java elements that might have been missed
+   */
+  private cleanupRemainingJavaElements(content: string): string {
+    let result = content;
+    
+    // Replace any remaining annotations
+    result = result.replace(/@FindBy\s*\([^)]*\)/g, '');
+    result = result.replace(/@QAFTestStep\s*\([^)]*\)/g, '');
+    
+    // Replace any remaining CSWebElement declarations
+    result = result.replace(/(?:public|private|protected)?\s*CSWebElement\s+(\w+)\s*;/g, 
+                          '  private readonly $1 = this.page.locator(\'xpath=//MISSING_LOCATOR\'); // TODO: Add correct locator');
+    
+    // Replace Java-style modifiers
+    result = result.replace(/\b(?:public|private|protected)\s+/g, '  ');
+    
+    // Replace void return type
+    result = result.replace(/\bvoid\s+/g, '');
+    
+    // Clean up blank lines and fix indentation
+    const lines = result.split('\n');
+    const cleanedLines = lines
+      .filter(line => line.trim() !== '')
+      .map(line => {
+        if (line.trim() === '') return '';
+        // Fix indentation by ensuring each non-empty line has at least 2 spaces
+        if (!line.startsWith('  ') && !line.startsWith('\t')) {
+          return '  ' + line.trim();
+        }
+        return line;
+      });
+    
+    return cleanedLines.join('\n');
   }
 
   /**
