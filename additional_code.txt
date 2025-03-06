@@ -1,79 +1,265 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Command } from 'commander';
 
 /**
- * Focused QAF to Playwright Converter that handles specific patterns exactly
+ * Comprehensive QAF to Playwright Parser
+ * This parser handles conversion from QAF Selenium Java to Playwright TypeScript
  */
-function convertFile(inputFile: string, outputFile: string): void {
-  console.log(`Converting ${inputFile} to ${outputFile}`);
-  
-  try {
-    // Read the file content
-    const content = fs.readFileSync(inputFile, 'utf8');
-    
-    // Split into lines to handle multi-line declarations
-    const lines = content.split('\n');
-    let result = "import { Page } from '@playwright/test';\n\n";
-    
-    // Process class definition
-    const classMatch = content.match(/public\s+class\s+(\w+)/);
-    if (classMatch) {
-      const className = classMatch[1];
-      result += `export class ${className} {\n  constructor(private page: Page) {}\n\n`;
-    } else {
-      result += "export class PageObject {\n  constructor(private page: Page) {}\n\n";
-    }
-    
-    // Process file line by line
-    let i = 0;
-    while (i < lines.length) {
-      let line = lines[i];
+class QafToPlaywrightParser {
+  private filesProcessed = 0;
+  private elementsConverted = 0;
+  private methodsConverted = 0;
+  private stepsConverted = 0;
+
+  /**
+   * Convert a single Java file to TypeScript
+   */
+  public convertFile(inputPath: string, outputPath: string): void {
+    try {
+      console.log(`Processing: ${inputPath}`);
       
-      // Check for @FindBy
-      if (line.includes('@FindBy')) {
-        // Collect the complete declaration
-        let declaration = line;
-        let j = i + 1;
-        while (j < lines.length && !lines[j].includes(';')) {
-          declaration += '\n' + lines[j];
-          j++;
-        }
-        if (j < lines.length) {
-          declaration += '\n' + lines[j];
-        }
-        
-        // Extract element name
-        const elementNameMatch = declaration.match(/CSWebElement\s+(\w+)\s*;/);
-        if (elementNameMatch) {
-          const elementName = elementNameMatch[1];
-          
-          // Check for JSON format
-          if (declaration.includes('locator = "{\\') || declaration.includes('locator = "{"')) {
-            // Extract xpath from JSON
-            const xpathMatch = declaration.match(/"locator"(?:\\)?:(?:\\)?"xpath=([^"]+)(?:\\)?"/);
-            if (xpathMatch) {
-              const xpathValue = xpathMatch[1];
-              result += `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);\n`;
-            }
-          } 
-          // Check for direct xpath format
-          else if (declaration.includes('locator="xpath=')) {
-            const xpathMatch = declaration.match(/locator="xpath=([^"]+)"/);
-            if (xpathMatch) {
-              const xpathValue = xpathMatch[1];
-              result += `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);\n`;
-            }
-          }
-        }
-        
-        // Skip processed lines
-        i = j + 1;
-        continue;
+      // Read the file content
+      const content = fs.readFileSync(inputPath, 'utf8');
+      let result = '';
+      
+      // Process the content
+      result = this.processContent(content);
+      
+      // Ensure output directory exists
+      const outputDir = path.dirname(outputPath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
       }
       
-      // Check for method-style declaration
-      if (line.includes('public CSWebElement')) {
-        // Collect the complete method
+      // Write the output file
+      fs.writeFileSync(outputPath, result);
+      this.filesProcessed++;
+      
+      console.log(`Converted: ${outputPath}`);
+    } catch (error) {
+      console.error(`Error processing file ${inputPath}:`, error);
+    }
+  }
+
+  /**
+   * Process the content of a Java file
+   */
+  private processContent(content: string): string {
+    // Add TypeScript imports
+    let result = "import { Page, Locator, expect } from '@playwright/test';\n\n";
+    
+    // Remove comments
+    content = this.removeComments(content);
+    
+    // Remove package and import statements
+    content = this.removePackageAndImports(content);
+    
+    // Process class definition
+    const { className, processedContent } = this.processClassDefinition(content);
+    content = processedContent;
+    
+    if (className) {
+      result += `export class ${className} {\n`;
+      result += `  constructor(private page: Page) {}\n\n`;
+    } else {
+      result += `export class PageObject {\n`;
+      result += `  constructor(private page: Page) {}\n\n`;
+    }
+    
+    // Process @FindBy declarations with clean content
+    content = this.processFindByDeclarations(content);
+    
+    // Process method-style element declarations
+    content = this.processMethodStyleDeclarations(content);
+    
+    // Process step definitions
+    content = this.processStepDefinitions(content);
+    
+    // Add processed content to result
+    result += content;
+    
+    // Close the class
+    result += '}\n';
+    
+    return result;
+  }
+
+  /**
+   * Remove comments from the code
+   */
+  private removeComments(content: string): string {
+    // Remove single line comments
+    let result = content.replace(/\/\/.*$/gm, '');
+    
+    // Remove multi-line comments
+    result = result.replace(/\/\*[\s\S]*?\*\//g, '');
+    
+    return result;
+  }
+
+  /**
+   * Remove package and import statements
+   */
+  private removePackageAndImports(content: string): string {
+    // Remove package declarations
+    let result = content.replace(/package\s+[\w.]+;/g, '');
+    
+    // Remove import statements
+    result = result.replace(/import\s+[\w.]+;/g, '');
+    
+    return result;
+  }
+
+  /**
+   * Process class definition
+   */
+  private processClassDefinition(content: string): { className: string | null, processedContent: string } {
+    const classMatch = content.match(/public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/);
+    
+    if (classMatch) {
+      const className = classMatch[1];
+      const baseClassName = classMatch[2] || null;
+      
+      let processedContent = content.replace(
+        /public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/,
+        ''
+      );
+      
+      // Remove the closing brace of the class
+      const lastBraceIndex = processedContent.lastIndexOf('}');
+      if (lastBraceIndex !== -1) {
+        processedContent = processedContent.substring(0, lastBraceIndex);
+      }
+      
+      return { className, processedContent };
+    }
+    
+    return { className: null, processedContent: content };
+  }
+
+  /**
+   * Process @FindBy declarations
+   */
+  private processFindByDeclarations(content: string): string {
+    let result = content;
+    
+    // Process multi-line content by examining line by line
+    const lines = result.split('\n');
+    let processedLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes('@FindBy')) {
+        // Collect the entire declaration that might span multiple lines
+        let declaration = lines[i];
+        let j = i + 1;
+        
+        // Continue collecting lines until we hit a semicolon
+        while (j < lines.length && !lines[j].includes(';')) {
+          declaration += ' ' + lines[j].trim();
+          j++;
+        }
+        
+        // Add the line with the semicolon if found
+        if (j < lines.length) {
+          declaration += ' ' + lines[j].trim();
+        }
+        
+        // Now we have the complete declaration, let's process it
+        const processedDeclaration = this.processFindByDeclaration(declaration);
+        processedLines.push(processedDeclaration);
+        
+        // Skip the lines we've already processed
+        i = j;
+      } else {
+        processedLines.push(lines[i]);
+      }
+    }
+    
+    result = processedLines.join('\n');
+    return result;
+  }
+
+  /**
+   * Process a single @FindBy declaration
+   */
+  private processFindByDeclaration(declaration: string): string {
+    // Extract element name
+    const elementNameMatch = declaration.match(/\bCSWebElement\s+(\w+)\s*;/);
+    if (!elementNameMatch) {
+      return declaration; // Keep as is if no match
+    }
+    
+    const elementName = elementNameMatch[1];
+    
+    // Check for JSON format with locator
+    const jsonLocatorMatch = declaration.match(/locator\s*=\s*"(\{.*?"locator"\s*:\s*"([^"]+)".*?\})"/);
+    if (jsonLocatorMatch) {
+      const fullJson = jsonLocatorMatch[1];
+      const locatorValue = jsonLocatorMatch[2];
+      
+      // Extract the xpath value
+      if (locatorValue.startsWith('xpath=')) {
+        const xpathValue = locatorValue.substring(6);
+        this.elementsConverted++;
+        return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
+      }
+      
+      // Handle other locator types
+      if (locatorValue.startsWith('css=')) {
+        const cssValue = locatorValue.substring(4);
+        this.elementsConverted++;
+        return `  private readonly ${elementName} = this.page.locator('${cssValue}');`;
+      }
+      
+      if (locatorValue.startsWith('id=')) {
+        const idValue = locatorValue.substring(3);
+        this.elementsConverted++;
+        return `  private readonly ${elementName} = this.page.locator('#${idValue}');`;
+      }
+    }
+    
+    // Check for direct locator format
+    const directLocatorMatch = declaration.match(/locator\s*=\s*"([^"]+)"/);
+    if (directLocatorMatch) {
+      const locatorValue = directLocatorMatch[1];
+      
+      if (locatorValue.startsWith('xpath=')) {
+        const xpathValue = locatorValue.substring(6);
+        this.elementsConverted++;
+        return `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
+      }
+      
+      if (locatorValue.startsWith('css=')) {
+        const cssValue = locatorValue.substring(4);
+        this.elementsConverted++;
+        return `  private readonly ${elementName} = this.page.locator('${cssValue}');`;
+      }
+      
+      if (locatorValue.startsWith('id=')) {
+        const idValue = locatorValue.substring(3);
+        this.elementsConverted++;
+        return `  private readonly ${elementName} = this.page.locator('#${idValue}');`;
+      }
+    }
+    
+    // If no match found, keep the original line
+    return declaration;
+  }
+
+  /**
+   * Process method-style element declarations
+   */
+  private processMethodStyleDeclarations(content: string): string {
+    const lines = content.split('\n');
+    let processedLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Check if line might be the start of a method-style declaration
+      if (line.includes('public CSWebElement') && line.includes('(String ')) {
+        // Collect the entire method
         let methodDeclaration = line;
         let braceCount = line.split('{').length - line.split('}').length;
         let j = i + 1;
@@ -84,137 +270,299 @@ function convertFile(inputFile: string, outputFile: string): void {
           j++;
         }
         
-        // Extract method name and parameter
-        const methodMatch = methodDeclaration.match(/public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)/);
-        if (methodMatch) {
-          const methodName = methodMatch[1];
-          const paramName = methodMatch[2];
-          
-          // Check for different xpath patterns in method
-          // 1. JSON format with concatenation
-          const jsonXpathMatch = methodDeclaration.match(/"locator"(?:\\)?:(?:\\)?"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)(?:\\)?"/);
-          if (jsonXpathMatch) {
-            const prefix = jsonXpathMatch[1];
-            const suffix = jsonXpathMatch[3];
-            result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);\n`;
-          } 
-          // 2. Direct xpath with concatenation
-          else if (methodDeclaration.includes('xpath=')) {
-            const directXpathMatch = methodDeclaration.match(/xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)/);
-            if (directXpathMatch) {
-              const prefix = directXpathMatch[1];
-              const suffix = directXpathMatch[3];
-              result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);\n`;
-            }
-          }
-          // 3. Simple ID concatenation
-          else if (methodDeclaration.includes('id="')) {
-            result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`#\${${paramName}}\`);\n`;
-          }
+        // Process the method declaration
+        const processedMethod = this.processMethodDeclaration(methodDeclaration);
+        processedLines.push(processedMethod);
+        
+        // Skip the lines we've already processed
+        i = j - 1;
+      } else {
+        processedLines.push(line);
+      }
+    }
+    
+    return processedLines.join('\n');
+  }
+
+  /**
+   * Process a single method-style declaration
+   */
+  private processMethodDeclaration(declaration: string): string {
+    // Extract method name and parameter name
+    const methodInfoMatch = declaration.match(/public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)/);
+    if (!methodInfoMatch) {
+      return declaration; // Keep as is if no match
+    }
+    
+    const methodName = methodInfoMatch[1];
+    const paramName = methodInfoMatch[2];
+    
+    // Look for the return statement with locator
+    const lines = declaration.split('\n');
+    let returnLine = '';
+    
+    for (const line of lines) {
+      if (line.includes('return') && line.includes('new CSWebElement')) {
+        returnLine = line;
+        break;
+      }
+    }
+    
+    if (!returnLine) {
+      return declaration; // Keep as is if no return line found
+    }
+    
+    // Try to extract the locator value
+    let processedDeclaration = '';
+    
+    // Check for JSON format with xpath
+    const jsonXpathMatch = returnLine.match(/\{\s*"locator"\s*:\s*"xpath=([^']+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)"/);
+    if (jsonXpathMatch) {
+      const prefix = jsonXpathMatch[1];
+      const suffix = jsonXpathMatch[3];
+      this.methodsConverted++;
+      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+    }
+    
+    // Check for direct xpath format
+    const directXpathMatch = returnLine.match(/xpath=([^']+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)/);
+    if (directXpathMatch) {
+      const prefix = directXpathMatch[1];
+      const suffix = directXpathMatch[3];
+      this.methodsConverted++;
+      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
+    }
+    
+    // Check for id, css or other simple locators
+    const simpleLocatorMatch = returnLine.match(/"([^=]+)="\s*\+\s*(\w+)/);
+    if (simpleLocatorMatch) {
+      const locatorType = simpleLocatorMatch[1];
+      
+      if (locatorType === 'id') {
+        this.methodsConverted++;
+        return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`#\${${paramName}}\`);`;
+      }
+      
+      if (locatorType === 'css') {
+        this.methodsConverted++;
+        return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`\${${paramName}}\`);`;
+      }
+    }
+    
+    // Default case if we couldn't specifically match the locator format
+    return declaration;
+  }
+
+  /**
+   * Process step definitions
+   */
+  private processStepDefinitions(content: string): string {
+    const lines = content.split('\n');
+    let processedLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      // Check if line might be the start of a step definition
+      if (line.includes('@QAFTestStep')) {
+        // Collect the entire step definition
+        let stepDeclaration = line;
+        let j = i + 1;
+        
+        // Look for the method declaration line
+        while (j < lines.length && !lines[j].includes('public void')) {
+          stepDeclaration += '\n' + lines[j];
+          j++;
         }
         
-        // Skip processed lines
-        i = j;
-        continue;
-      }
-      
-      i++;
-    }
-    
-    // Close class
-    result += '}\n';
-    
-    // Create output directory if it doesn't exist
-    const outputDir = path.dirname(outputFile);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    // Write output file
-    fs.writeFileSync(outputFile, result);
-    console.log(`Successfully converted: ${outputFile}`);
-    
-  } catch (error) {
-    console.error(`Error converting file ${inputFile}:`, error);
-  }
-}
-
-/**
- * Process a directory of files
- */
-function processDirectory(inputDir: string, outputDir: string): void {
-  try {
-    // Get all Java files
-    const files = getJavaFiles(inputDir);
-    console.log(`Found ${files.length} Java files to process`);
-    
-    // Create output directory if it doesn't exist
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    // Process each file
-    for (const file of files) {
-      const relativePath = path.relative(inputDir, file);
-      const outputFile = path.join(outputDir, relativePath.replace('.java', '.ts'));
-      convertFile(file, outputFile);
-    }
-    
-    console.log('Conversion completed successfully!');
-  } catch (error) {
-    console.error('Error processing directory:', error);
-  }
-}
-
-/**
- * Get all Java files in a directory and its subdirectories
- */
-function getJavaFiles(dir: string): string[] {
-  const files: string[] = [];
-  
-  try {
-    const items = fs.readdirSync(dir);
-    
-    for (const item of items) {
-      const fullPath = path.join(dir, item);
-      const stat = fs.statSync(fullPath);
-      
-      if (stat.isDirectory()) {
-        files.push(...getJavaFiles(fullPath));
-      } else if (item.endsWith('.java')) {
-        files.push(fullPath);
+        // Add the method declaration line
+        if (j < lines.length) {
+          stepDeclaration += '\n' + lines[j];
+        }
+        
+        // Now collect the method body
+        let braceCount = stepDeclaration.split('{').length - stepDeclaration.split('}').length;
+        j++;
+        
+        while (j < lines.length && braceCount > 0) {
+          stepDeclaration += '\n' + lines[j];
+          braceCount += lines[j].split('{').length - lines[j].split('}').length;
+          j++;
+        }
+        
+        // Process the step definition
+        const processedStep = this.processStepDefinition(stepDeclaration);
+        processedLines.push(processedStep);
+        
+        // Skip the lines we've already processed
+        i = j - 1;
+      } else {
+        processedLines.push(line);
       }
     }
-  } catch (error) {
-    console.error(`Error reading directory ${dir}:`, error);
+    
+    return processedLines.join('\n');
   }
-  
-  return files;
+
+  /**
+   * Process a single step definition
+   */
+  private processStepDefinition(declaration: string): string {
+    // Extract step description
+    const descriptionMatch = declaration.match(/@QAFTestStep\s*\(\s*description\s*=\s*"([^"]*)"/);
+    if (!descriptionMatch) {
+      return declaration; // Keep as is if no match
+    }
+    
+    const description = descriptionMatch[1];
+    
+    // Extract method name and parameters
+    const methodMatch = declaration.match(/public\s+void\s+(\w+)\s*\(([^)]*)\)/);
+    if (!methodMatch) {
+      return declaration; // Keep as is if no match
+    }
+    
+    const methodName = methodMatch[1];
+    const paramsList = methodMatch[2];
+    
+    // Process parameters
+    let processedParams = '';
+    if (paramsList && paramsList.trim()) {
+      processedParams = paramsList
+        .split(',')
+        .map(param => {
+          const parts = param.trim().split(/\s+/);
+          return parts[parts.length - 1]; // Take the parameter name, not type
+        })
+        .join(', ');
+    }
+    
+    // Determine step type based on description
+    let stepType = 'Given';
+    if (description.toLowerCase().startsWith('when')) {
+      stepType = 'When';
+    } else if (description.toLowerCase().startsWith('then')) {
+      stepType = 'Then';
+    }
+    
+    // Extract method body
+    const bodyMatch = declaration.match(/\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)?\}/s);
+    if (!bodyMatch) {
+      return declaration; // Keep as is if no match
+    }
+    
+    let body = bodyMatch[1] || '';
+    
+    // Convert common method calls
+    body = body
+      .replace(/\.sendKeys\(/g, '.fill(')
+      .replace(/\.click\(\)/g, 'await page.click()')
+      .replace(/Assert\.assertTrue\(([^)]+)\.isDisplayed\(\)\)/g, 'await expect($1).toBeVisible()')
+      .replace(/Assert\.assertTrue\(([^)]+)\)/g, 'expect($1).toBeTruthy()')
+      .replace(/Assert\.assertEquals\(([^,]+),\s*([^)]+)\)/g, 'expect($1).toEqual($2)');
+    
+    // Add await to common method calls if not already there
+    body = body.replace(/(?<!await\s+)(\w+)\.(click|type|fill|check|uncheck|selectOption|press)\(/g, 'await $1.$2(');
+    
+    // Prepare the result
+    let result = `  ${stepType}('${description}', async function(${processedParams}) {\n`;
+    
+    // Clean up body lines and add them
+    body.split('\n').forEach(line => {
+      if (line.trim()) {
+        result += `    ${line.trim()}\n`;
+      }
+    });
+    
+    result += '  });';
+    this.stepsConverted++;
+    
+    return result;
+  }
+
+  /**
+   * Process a directory of Java files
+   */
+  public processDirectory(inputDir: string, outputDir: string): void {
+    try {
+      // Get all Java files
+      const files = this.getJavaFiles(inputDir);
+      console.log(`Found ${files.length} Java files to process`);
+      
+      // Create output directory if it doesn't exist
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+      
+      // Process each file
+      for (const file of files) {
+        const relativePath = path.relative(inputDir, file);
+        const outputPath = path.join(outputDir, relativePath.replace('.java', '.ts'));
+        this.convertFile(file, outputPath);
+      }
+      
+      console.log('\nConversion completed successfully!');
+      console.log(`Files processed: ${this.filesProcessed}`);
+      console.log(`Elements converted: ${this.elementsConverted}`);
+      console.log(`Methods converted: ${this.methodsConverted}`);
+      console.log(`Steps converted: ${this.stepsConverted}`);
+    } catch (error) {
+      console.error('Error processing directory:', error);
+    }
+  }
+
+  /**
+   * Get all Java files in a directory and its subdirectories
+   */
+  private getJavaFiles(dir: string): string[] {
+    const files: string[] = [];
+    
+    try {
+      const items = fs.readdirSync(dir);
+      
+      for (const item of items) {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+        
+        if (stat.isDirectory()) {
+          files.push(...this.getJavaFiles(fullPath));
+        } else if (item.endsWith('.java')) {
+          files.push(fullPath);
+        }
+      }
+    } catch (error) {
+      console.error(`Error reading directory ${dir}:`, error);
+    }
+    
+    return files;
+  }
 }
 
-/**
- * Main function
- */
-function main(): void {
-  try {
-    // Get command line arguments
-    const args = process.argv.slice(2);
-    const inputDir = args[0];
-    const outputDir = args[1];
-    
-    if (!inputDir || !outputDir) {
-      console.error('Usage: npx ts-node qaf-converter.ts <input-directory> <output-directory>');
+// Set up command-line interface
+const program = new Command();
+
+program
+  .name('qaf-to-playwright')
+  .description('Comprehensive converter for QAF Java code to Playwright TypeScript')
+  .version('1.0.0')
+  .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
+  .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
+  .action(async (options) => {
+    try {
+      console.log('\n🔄 QAF to Playwright Converter');
+      console.log('============================');
+      
+      console.log(`Input directory: ${options.input}`);
+      console.log(`Output directory: ${options.output}`);
+      console.log('----------------------------');
+      
+      const parser = new QafToPlaywrightParser();
+      parser.processDirectory(options.input, options.output);
+      
+    } catch (error) {
+      console.error('❌ Conversion failed:', error);
       process.exit(1);
     }
-    
-    console.log(`Converting QAF files from ${inputDir} to ${outputDir}`);
-    processDirectory(inputDir, outputDir);
-    
-  } catch (error) {
-    console.error('Error:', error);
-    process.exit(1);
-  }
-}
+  });
 
-// Run the program
-main();
+program.parse();
