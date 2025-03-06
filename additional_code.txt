@@ -1,123 +1,137 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as readline from 'readline';
 
 /**
- * QAF to Playwright Converter that targets exact patterns specified
+ * Focused QAF to Playwright Converter that handles specific patterns exactly
  */
-async function convertFile(inputFile: string, outputFile: string): Promise<void> {
+function convertFile(inputFile: string, outputFile: string): void {
   console.log(`Converting ${inputFile} to ${outputFile}`);
   
   try {
+    // Read the file content
+    const content = fs.readFileSync(inputFile, 'utf8');
+    
+    // Split into lines to handle multi-line declarations
+    const lines = content.split('\n');
+    let result = "import { Page } from '@playwright/test';\n\n";
+    
+    // Process class definition
+    const classMatch = content.match(/public\s+class\s+(\w+)/);
+    if (classMatch) {
+      const className = classMatch[1];
+      result += `export class ${className} {\n  constructor(private page: Page) {}\n\n`;
+    } else {
+      result += "export class PageObject {\n  constructor(private page: Page) {}\n\n";
+    }
+    
+    // Process file line by line
+    let i = 0;
+    while (i < lines.length) {
+      let line = lines[i];
+      
+      // Check for @FindBy
+      if (line.includes('@FindBy')) {
+        // Collect the complete declaration
+        let declaration = line;
+        let j = i + 1;
+        while (j < lines.length && !lines[j].includes(';')) {
+          declaration += '\n' + lines[j];
+          j++;
+        }
+        if (j < lines.length) {
+          declaration += '\n' + lines[j];
+        }
+        
+        // Extract element name
+        const elementNameMatch = declaration.match(/CSWebElement\s+(\w+)\s*;/);
+        if (elementNameMatch) {
+          const elementName = elementNameMatch[1];
+          
+          // Check for JSON format
+          if (declaration.includes('locator = "{\\') || declaration.includes('locator = "{"')) {
+            // Extract xpath from JSON
+            const xpathMatch = declaration.match(/"locator"(?:\\)?:(?:\\)?"xpath=([^"]+)(?:\\)?"/);
+            if (xpathMatch) {
+              const xpathValue = xpathMatch[1];
+              result += `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);\n`;
+            }
+          } 
+          // Check for direct xpath format
+          else if (declaration.includes('locator="xpath=')) {
+            const xpathMatch = declaration.match(/locator="xpath=([^"]+)"/);
+            if (xpathMatch) {
+              const xpathValue = xpathMatch[1];
+              result += `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);\n`;
+            }
+          }
+        }
+        
+        // Skip processed lines
+        i = j + 1;
+        continue;
+      }
+      
+      // Check for method-style declaration
+      if (line.includes('public CSWebElement')) {
+        // Collect the complete method
+        let methodDeclaration = line;
+        let braceCount = line.split('{').length - line.split('}').length;
+        let j = i + 1;
+        
+        while (j < lines.length && braceCount > 0) {
+          methodDeclaration += '\n' + lines[j];
+          braceCount += lines[j].split('{').length - lines[j].split('}').length;
+          j++;
+        }
+        
+        // Extract method name and parameter
+        const methodMatch = methodDeclaration.match(/public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)/);
+        if (methodMatch) {
+          const methodName = methodMatch[1];
+          const paramName = methodMatch[2];
+          
+          // Check for different xpath patterns in method
+          // 1. JSON format with concatenation
+          const jsonXpathMatch = methodDeclaration.match(/"locator"(?:\\)?:(?:\\)?"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)(?:\\)?"/);
+          if (jsonXpathMatch) {
+            const prefix = jsonXpathMatch[1];
+            const suffix = jsonXpathMatch[3];
+            result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);\n`;
+          } 
+          // 2. Direct xpath with concatenation
+          else if (methodDeclaration.includes('xpath=')) {
+            const directXpathMatch = methodDeclaration.match(/xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)/);
+            if (directXpathMatch) {
+              const prefix = directXpathMatch[1];
+              const suffix = directXpathMatch[3];
+              result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);\n`;
+            }
+          }
+          // 3. Simple ID concatenation
+          else if (methodDeclaration.includes('id="')) {
+            result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`#\${${paramName}}\`);\n`;
+          }
+        }
+        
+        // Skip processed lines
+        i = j;
+        continue;
+      }
+      
+      i++;
+    }
+    
+    // Close class
+    result += '}\n';
+    
     // Create output directory if it doesn't exist
     const outputDir = path.dirname(outputFile);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    // Create input stream for reading the file line by line
-    const fileStream = fs.createReadStream(inputFile);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
-    
-    // Prepare output content
-    let outputContent = "import { Page } from '@playwright/test';\n\n";
-    
-    // Variables to track multi-line patterns
-    let inClass = false;
-    let className = "PageObject";
-    let inFindBy = false;
-    let findByBuffer = "";
-    let inMethod = false;
-    let methodBuffer = "";
-    let braceCount = 0;
-    
-    // Process line by line
-    for await (const line of rl) {
-      // Detect class definition
-      if (!inClass && line.includes("public class")) {
-        const match = line.match(/public\s+class\s+(\w+)/);
-        if (match) {
-          className = match[1];
-          inClass = true;
-          outputContent += `export class ${className} {\n  constructor(private page: Page) {}\n\n`;
-        }
-        continue;
-      }
-      
-      // Start of @FindBy
-      if (line.includes("@FindBy") && !inFindBy && !inMethod) {
-        inFindBy = true;
-        findByBuffer = line;
-        continue;
-      }
-      
-      // Continuation of @FindBy
-      if (inFindBy) {
-        findByBuffer += line;
-        
-        // If this line completes the @FindBy declaration
-        if (line.includes(";")) {
-          inFindBy = false;
-          
-          // Process the complete @FindBy declaration
-          let processed = processFindBy(findByBuffer);
-          if (processed) {
-            outputContent += `  ${processed}\n`;
-          }
-          
-          findByBuffer = "";
-        }
-        continue;
-      }
-      
-      // Start of method-style declaration
-      if (line.includes("public CSWebElement") || line.includes("public WebElement")) {
-        inMethod = true;
-        methodBuffer = line;
-        braceCount = (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
-        
-        // If the method is complete on a single line (unlikely but possible)
-        if (braceCount === 0 && line.includes("}")) {
-          inMethod = false;
-          let processed = processMethodDeclaration(methodBuffer);
-          if (processed) {
-            outputContent += `  ${processed}\n`;
-          }
-          methodBuffer = "";
-        }
-        
-        continue;
-      }
-      
-      // Continuation of method
-      if (inMethod) {
-        methodBuffer += line;
-        braceCount += (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
-        
-        // If method is complete
-        if (braceCount === 0 && line.includes("}")) {
-          inMethod = false;
-          let processed = processMethodDeclaration(methodBuffer);
-          if (processed) {
-            outputContent += `  ${processed}\n`;
-          }
-          methodBuffer = "";
-        }
-        
-        continue;
-      }
-    }
-    
-    // Add closing brace for class if needed
-    if (inClass) {
-      outputContent += "}\n";
-    }
-    
-    // Write the output file
-    fs.writeFileSync(outputFile, outputContent);
+    // Write output file
+    fs.writeFileSync(outputFile, result);
     console.log(`Successfully converted: ${outputFile}`);
     
   } catch (error) {
@@ -126,68 +140,9 @@ async function convertFile(inputFile: string, outputFile: string): Promise<void>
 }
 
 /**
- * Process @FindBy declarations
- */
-function processFindBy(findByText: string): string | null {
-  // Normalize the text (remove extra whitespace)
-  findByText = findByText.replace(/\s+/g, ' ').trim();
-  
-  // Pattern 1: JSON format with locator and desc
-  // @FindBy(locator = "{\"locator\":\"xpath=//button[@sometype='somename']\",\"desc\":\"some description\"}") public CSWebElement someElementName;
-  let match = findByText.match(/@FindBy\s*\(\s*locator\s*=\s*"(\{[^}]*locator[^}]*\})"\s*\)\s*public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*;/);
-  
-  if (match) {
-    const jsonStr = match[1];
-    const elementName = match[2];
-    
-    // Extract xpath from JSON
-    const xpathMatch = jsonStr.match(/locator[^:]*:[^"]*"xpath=([^"]+)"/);
-    if (xpathMatch) {
-      const xpathValue = xpathMatch[1];
-      return `private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
-    }
-  }
-  
-  // Pattern 2: Direct xpath
-  // @FindBy(locator="xpath=//somexpath") public CSWebElement someElementName;
-  match = findByText.match(/@FindBy\s*\(\s*locator\s*=\s*"xpath=([^"]+)"\s*\)\s*public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*;/);
-  
-  if (match) {
-    const xpathValue = match[1];
-    const elementName = match[2];
-    return `private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);`;
-  }
-  
-  return null;
-}
-
-/**
- * Process method-style element declarations
- */
-function processMethodDeclaration(methodText: string): string | null {
-  // Normalize the text (remove extra whitespace and newlines)
-  methodText = methodText.replace(/\s+/g, ' ').trim();
-  
-  // Pattern: Method with JSON locator containing xpath and buttonName parameter
-  // public CSWebElement getMyButtonElement(String buttonName) { return new CSWebElement( "{\"locator\":\"xpath=//button[@sometype='"+buttonName+"']\",\"desc\":\"some description\"}"); }
-  const match = methodText.match(/public\s+(?:CSWebElement|WebElement)\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{[^}]*new\s+(?:CSWebElement|WebElement)\s*\(\s*"[^"]*xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]*)"/);
-  
-  if (match) {
-    const methodName = match[1];
-    const paramName = match[2];
-    const prefix = match[3];
-    const suffix = match[5];
-    
-    return `private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
-  }
-  
-  return null;
-}
-
-/**
  * Process a directory of files
  */
-async function processDirectory(inputDir: string, outputDir: string): Promise<void> {
+function processDirectory(inputDir: string, outputDir: string): void {
   try {
     // Get all Java files
     const files = getJavaFiles(inputDir);
@@ -202,7 +157,7 @@ async function processDirectory(inputDir: string, outputDir: string): Promise<vo
     for (const file of files) {
       const relativePath = path.relative(inputDir, file);
       const outputFile = path.join(outputDir, relativePath.replace('.java', '.ts'));
-      await convertFile(file, outputFile);
+      convertFile(file, outputFile);
     }
     
     console.log('Conversion completed successfully!');
@@ -240,7 +195,7 @@ function getJavaFiles(dir: string): string[] {
 /**
  * Main function
  */
-async function main(): Promise<void> {
+function main(): void {
   try {
     // Get command line arguments
     const args = process.argv.slice(2);
@@ -253,7 +208,7 @@ async function main(): Promise<void> {
     }
     
     console.log(`Converting QAF files from ${inputDir} to ${outputDir}`);
-    await processDirectory(inputDir, outputDir);
+    processDirectory(inputDir, outputDir);
     
   } catch (error) {
     console.error('Error:', error);
@@ -262,4 +217,4 @@ async function main(): Promise<void> {
 }
 
 // Run the program
-main().catch(console.error);
+main();
