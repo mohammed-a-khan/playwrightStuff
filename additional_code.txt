@@ -11,6 +11,7 @@ class QafToPlaywrightParser {
   private elementsConverted = 0;
   private methodsConverted = 0;
   private stepsConverted = 0;
+  private bddScenariosConverted = 0;
 
   /**
    * Convert a single Java file to TypeScript
@@ -23,8 +24,15 @@ class QafToPlaywrightParser {
       const content = fs.readFileSync(inputPath, 'utf8');
       let result = '';
       
-      // Process the content
-      result = this.processContent(content);
+      // Check if this is a BDD file or a Java class file
+      if (inputPath.endsWith('.bdd') || inputPath.endsWith('.feature')) {
+        result = this.processBddContent(content);
+        // Update file extension for BDD files
+        outputPath = outputPath.replace(/\.bdd$|\.feature$/, '.spec.ts');
+      } else {
+        // Process the content
+        result = this.processContent(content);
+      }
       
       // Ensure output directory exists
       const outputDir = path.dirname(outputPath);
@@ -76,6 +84,12 @@ class QafToPlaywrightParser {
     // Process step definitions
     content = this.processStepDefinitions(content);
     
+    // Process TestNG annotations
+    content = this.processTestNGAnnotations(content);
+    
+    // Process common Java methods
+    content = this.processJavaMethodsAndSyntax(content);
+    
     // Additional clean-up for any remaining Java elements
     content = this.cleanupRemainingJavaElements(content);
     
@@ -85,6 +99,55 @@ class QafToPlaywrightParser {
     // Close the class
     result += '}\n';
     
+    return result;
+  }
+
+  /**
+   * Process BDD content (QAF scenario or feature file)
+   */
+  private processBddContent(content: string): string {
+    // Add necessary imports for test file
+    let result = `
+import { test, expect } from '@playwright/test';
+import { step } from '@playwright/test-annotation';
+
+// Auto-generated from QAF BDD scenario
+`;
+
+    // Extract scenario information
+    const scenarioMatch = content.match(/SCENARIO\\s*(?::|=)\\s*['"](.+?)['"]/i);
+    const scenarioName = scenarioMatch ? scenarioMatch[1] : 'Converted Scenario';
+    
+    // Start test definition
+    result += `test('${scenarioName}', async ({ page }) => {\n`;
+    
+    // Parse steps
+    const stepMatches = [...content.matchAll(/(?:GIVEN|WHEN|THEN|AND)\\s*(?::|=)\\s*['"](.+?)['"]/gi)];
+    
+    // Process each step
+    for (const stepMatch of stepMatches) {
+      const stepType = stepMatch[0].split(/\s+/)[0].toLowerCase();
+      const stepText = stepMatch[1].trim();
+      
+      // Convert step type to Playwright step
+      result += `  await step('${stepType} ${stepText}', async () => {\n`;
+      
+      // Add placeholder for step implementation
+      result += `    // TODO: Implement step: ${stepText}\n`;
+      
+      // Find parameters if any
+      const paramMatches = [...stepText.matchAll(/'([^']+)'/g)];
+      if (paramMatches.length > 0) {
+        result += `    // Parameters detected: ${paramMatches.map(m => m[1]).join(', ')}\n`;
+      }
+      
+      result += `  });\n\n`;
+    }
+    
+    // Close test definition
+    result += `});\n`;
+    
+    this.bddScenariosConverted++;
     return result;
   }
 
@@ -197,7 +260,7 @@ class QafToPlaywrightParser {
   }
 
   /**
-   * Convert @FindBy annotation to Playwright locator - completely new approach
+   * Convert @FindBy annotation to Playwright locator - direct and efficient implementation
    */
   private convertFindByToLocator(declaration: string): string | null {
     // First, extract the element name from CSWebElement declaration
@@ -208,69 +271,73 @@ class QafToPlaywrightParser {
     
     const elementName = elementMatch[1];
     
-    // Handle complex quote escaping in locator strings
-    let locatorValue: string | null = null;
-    let locatorType: string | null = null;
+    // Extract the locator string between quotes
+    let locatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"(.*?)"\s*\)/);
     
-    // Try to match different locator formats
-    
-    // Format 1: @FindBy(locator="xpath=//div[@id='something']")
-    const simpleLocatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"([^"]*?)"\s*\)/);
-    if (simpleLocatorMatch) {
-      locatorValue = simpleLocatorMatch[1];
-    }
-    
-    // Format 2: @FindBy(locator="{\"locator\":\"xpath=//div[@id='something']\"}")
-    const jsonLocatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"(\{.*?\"locator\"(?:\\"|:|\")\s*\"(.*?)\".*?\})"\s*\)/);
-    if (jsonLocatorMatch) {
-      locatorValue = jsonLocatorMatch[2];
-    }
-    
-    // Format 3: @FindBy(locator="\"locator\":\"xpath=//div[@id='something']\"")
-    const nestedQuotesMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"\\+"locator\\+"(?:\\"|:)\\+"(.*?)\\+"\s*\)/);
-    if (nestedQuotesMatch) {
-      locatorValue = nestedQuotesMatch[1];
-    }
-    
-    // If we couldn't extract a locator value, try a more general approach
-    if (!locatorValue) {
-      // Look for any pattern that might contain xpath=, css=, or id=
-      const generalMatch = declaration.match(/(?:xpath|css|id)=([^"']+?)(?:\\"|\\',|\s|"|')/);
-      if (generalMatch) {
-        locatorValue = generalMatch[0];
+    if (locatorMatch) {
+      const locator = locatorMatch[1];
+      
+      try {
+        // Try parsing as JSON with escaped quotes replaced
+        const jsonString = JSON.parse(locator.replace(/\\"/g, '"'));
+        const xpValue = jsonString.locator ? jsonString.locator.replace("xpath=", "") : locator;
+        
+        // Check if we have an empty locator
+        if (xpValue === '') {
+          return `  private readonly ${elementName} = this.page.locator('xpath=//TODO-FIX-EMPTY-LOCATOR'); // TODO: This locator was empty in the source`;
+        }
+        
+        // Determine the locator type and create appropriate Playwright locator
+        if (jsonString.locator && jsonString.locator.startsWith("css=")) {
+          const cssValue = jsonString.locator.replace("css=", "");
+          return `  private readonly ${elementName} = this.page.locator('${cssValue.replace(/'/g, "\\'")}');`;
+        } else if (jsonString.locator && jsonString.locator.startsWith("id=")) {
+          const idValue = jsonString.locator.replace("id=", "");
+          return `  private readonly ${elementName} = this.page.locator('#${idValue.replace(/'/g, "\\'")}');`;
+        } else {
+          // Default to xpath
+          return `  private readonly ${elementName} = this.page.locator('xpath=${xpValue.replace(/'/g, "\\'")}');`;
+        }
+      } catch (e) {
+        // JSON parsing failed, handle as regular string
+        if (locator.startsWith("xpath=")) {
+          const xpValue = locator.replace("xpath=", "");
+          if (xpValue === '') {
+            return `  private readonly ${elementName} = this.page.locator('xpath=//TODO-FIX-EMPTY-LOCATOR'); // TODO: This locator was empty in the source`;
+          }
+          return `  private readonly ${elementName} = this.page.locator('xpath=${xpValue.replace(/'/g, "\\'")}');`;
+        } else if (locator.startsWith("css=")) {
+          return `  private readonly ${elementName} = this.page.locator('${locator.replace("css=", "").replace(/'/g, "\\'")}');`;
+        } else if (locator.startsWith("id=")) {
+          return `  private readonly ${elementName} = this.page.locator('#${locator.replace("id=", "").replace(/'/g, "\\'")}');`;
+        } else {
+          // If no prefix and not JSON, assume it's css
+          return `  private readonly ${elementName} = this.page.locator('${locator.replace(/'/g, "\\'")}');`;
+        }
       }
-    }
-    
-    // If we still couldn't extract, return null
-    if (!locatorValue) {
-      return null;
-    }
-    
-    // Determine locator type
-    if (locatorValue.includes('xpath=')) {
-      locatorType = 'xpath';
-      locatorValue = locatorValue.replace('xpath=', '');
-    } else if (locatorValue.includes('css=')) {
-      locatorType = 'css';
-      locatorValue = locatorValue.replace('css=', '');
-    } else if (locatorValue.includes('id=')) {
-      locatorType = 'id';
-      locatorValue = locatorValue.replace('id=', '');
     } else {
-      // Default to CSS if no prefix is found
-      locatorType = 'css';
-    }
-    
-    // Clean up the locator value - remove any escaped quotes
-    locatorValue = locatorValue.replace(/\\"/g, '"').replace(/\\'/g, "'");
-    
-    // Create the Playwright locator
-    if (locatorType === 'xpath') {
-      return `  private readonly ${elementName} = this.page.locator('xpath=${locatorValue}');`;
-    } else if (locatorType === 'id') {
-      return `  private readonly ${elementName} = this.page.locator('#${locatorValue}');`;
-    } else {
-      return `  private readonly ${elementName} = this.page.locator('${locatorValue}');`;
+      // Try direct attribute format: @FindBy(xpath="//div[@id='something']")
+      locatorMatch = declaration.match(/@FindBy\s*\(\s*(xpath|css|id)\s*=\s*"(.*?)"\s*\)/);
+      
+      if (locatorMatch) {
+        const locatorType = locatorMatch[1];
+        const locatorValue = locatorMatch[2];
+        
+        if (locatorValue === '') {
+          return `  private readonly ${elementName} = this.page.locator('xpath=//TODO-FIX-EMPTY-LOCATOR'); // TODO: This locator was empty in the source`;
+        }
+        
+        if (locatorType === 'xpath') {
+          return `  private readonly ${elementName} = this.page.locator('xpath=${locatorValue.replace(/'/g, "\\'")}');`;
+        } else if (locatorType === 'id') {
+          return `  private readonly ${elementName} = this.page.locator('#${locatorValue.replace(/'/g, "\\'")}');`;
+        } else {
+          return `  private readonly ${elementName} = this.page.locator('${locatorValue.replace(/'/g, "\\'")}');`;
+        }
+      } else {
+        // If no match found with any pattern, return a placeholder
+        return `  private readonly ${elementName} = this.page.locator('xpath=//TODO-FIX-LOCATOR'); // TODO: Fix this locator`;
+      }
     }
   }
 
@@ -386,8 +453,121 @@ class QafToPlaywrightParser {
     if (hasInterpolation) {
       return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator(\`${locatorTemplate}\`);`;
     } else {
-      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator('${locatorTemplate}');`;
+      return `  private ${methodName} = (${paramName}: string): Locator => this.page.locator('${locatorTemplate.replace(/'/g, "\\'")}');`;
     }
+  }
+
+  /**
+   * Process TestNG annotations and convert to Playwright test structure
+   */
+  private processTestNGAnnotations(content: string): string {
+    const lines = content.split('\n');
+    const processedLines: string[] = [];
+    
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+      
+      // Check for TestNG annotations
+      if (line.includes('@Test') || line.includes('@BeforeMethod') || 
+          line.includes('@AfterMethod') || line.includes('@BeforeClass') || 
+          line.includes('@AfterClass')) {
+        
+        // Determine the annotation type
+        let annotationType = '';
+        if (line.includes('@Test')) annotationType = 'test';
+        else if (line.includes('@BeforeMethod')) annotationType = 'beforeEach';
+        else if (line.includes('@AfterMethod')) annotationType = 'afterEach';
+        else if (line.includes('@BeforeClass')) annotationType = 'beforeAll';
+        else if (line.includes('@AfterClass')) annotationType = 'afterAll';
+        
+        // Skip the annotation line
+        i++;
+        
+        // Look for the method declaration
+        while (i < lines.length && !lines[i].includes('public void')) {
+          i++;
+        }
+        
+        if (i < lines.length) {
+          // Extract the method name and parameters
+          const methodLine = lines[i];
+          const methodMatch = methodLine.match(/public\s+void\s+(\w+)\s*\(([^)]*)\)/);
+          
+          if (methodMatch) {
+            const methodName = methodMatch[1];
+            const params = methodMatch[2].trim();
+            
+            // Collect method body
+            let methodBody = '';
+            let braceCount = 1; // Assume the opening brace is on this line or next
+            let j = i + 1;
+            
+            // Skip until we find the opening brace
+            while (j < lines.length && !lines[j].includes('{')) {
+              j++;
+            }
+            
+            j++; // Move past the opening brace
+            
+            // Collect until matching closing brace
+            while (j < lines.length && braceCount > 0) {
+              const bodyLine = lines[j];
+              if (bodyLine.includes('{')) braceCount++;
+              if (bodyLine.includes('}')) braceCount--;
+              
+              if (braceCount > 0) { // Don't include the final closing brace
+                methodBody += bodyLine + '\n';
+              }
+              j++;
+            }
+            
+            // Convert to Playwright test format
+            if (annotationType === 'test') {
+              processedLines.push(`  async ${methodName}() {`);
+              processedLines.push(`    // Converted from @Test`);
+              // Add method body with proper indentation
+              methodBody.split('\n').forEach(line => {
+                if (line.trim()) {
+                  processedLines.push(`    ${line.trim()}`);
+                }
+              });
+              processedLines.push(`  }`);
+            } else {
+              // For hooks, add comment about conversion
+              processedLines.push(`  /* TODO: This was a ${annotationType} hook in TestNG`);
+              processedLines.push(`     Method: ${methodName}`);
+              processedLines.push(`     Convert to appropriate Playwright hook in your test file:`);
+              processedLines.push(`     ${annotationType}(() => {`);
+              // Add method body as comment
+              methodBody.split('\n').forEach(line => {
+                if (line.trim()) {
+                  processedLines.push(`       ${line.trim()}`);
+                }
+              });
+              processedLines.push(`     });`);
+              processedLines.push(`  */`);
+            }
+            
+            // Skip to after the method body
+            i = j;
+          } else {
+            // If method pattern not found, just keep the line
+            processedLines.push(lines[i]);
+            i++;
+          }
+        } else {
+          // If we reached the end without finding method, just keep the line
+          i = lines.length;
+        }
+      } else {
+        // Keep non-annotation lines
+        processedLines.push(lines[i]);
+        i++;
+      }
+    }
+    
+    return processedLines.join('\n');
   }
 
   /**
@@ -521,19 +701,7 @@ class QafToPlaywrightParser {
     let body = bodyMatch[1] || '';
     
     // Convert common method calls
-    body = body
-      .replace(/\.sendKeys\(/g, '.fill(')
-      .replace(/\.click\(\)/g, '.click()')
-      .replace(/\.isDisplayed\(\)/g, '.isVisible()')
-      .replace(/Assert\.assertTrue\(([^)]+)\.isDisplayed\(\)\)/g, 'await expect($1).toBeVisible()')
-      .replace(/Assert\.assertTrue\(([^)]+)\)/g, 'expect($1).toBeTruthy()')
-      .replace(/Assert\.assertEquals\(([^,]+),\s*([^)]+)\)/g, 'expect($1).toEqual($2)');
-    
-    // Add await to common method calls if not already there
-    body = body.replace(/(?<!await\s+)(\w+)\.(click|type|fill|check|uncheck|selectOption|press)\(/g, 'await $1.$2(');
-    
-    // Replace any remaining CSWebElement references
-    body = body.replace(/CSWebElement/g, 'Locator');
+    body = this.convertJavaSeleniumMethodsToPlaywright(body);
     
     // Prepare the result
     let result = `  /**\n   * ${description}\n   */\n  async ${methodName}(${processedParams}) {\n`;
@@ -550,6 +718,274 @@ class QafToPlaywrightParser {
     
     return result;
   }
+  
+  /**
+   * Process common Java methods and syntax
+   */
+  private processJavaMethodsAndSyntax(content: string): string {
+    // Process each line to catch various Java patterns
+    return content.split('\n').map(line => {
+      // Convert Java string concatenation to template literals
+      if (line.includes(" + ") && (line.includes("\"") || line.includes("'"))) {
+        line = this.convertStringConcatenationToTemplate(line);
+      }
+      
+      // Convert System.out.println to console.log
+      line = line.replace(/System\.out\.println\((.*?)\);/g, 'console.log($1);');
+      
+      // Convert Assert statements that weren't handled in step definitions
+      line = line.replace(/Assert\.assertEquals\((.*?),\s*(.*?)\);/g, 'expect($1).toEqual($2);');
+      line = line.replace(/Assert\.assertTrue\((.*?)\);/g, 'expect($1).toBeTruthy();');
+      line = line.replace(/Assert\.assertFalse\((.*?)\);/g, 'expect($1).toBeFalsy();');
+      line = line.replace(/Assert\.assertNull\((.*?)\);/g, 'expect($1).toBeNull();');
+      line = line.replace(/Assert\.assertNotNull\((.*?)\);/g, 'expect($1).not.toBeNull();');
+      
+      // Convert common QAF-specific methods
+      line = line.replace(/getDriver\(\)/g, 'this.page');
+      line = line.replace(/getTestBase\(\)/g, '/* getTestBase() converted */');
+      
+      // Convert Java exception handling
+      if (line.includes("try {")) {
+        line = line.replace("try {", "try {");
+      } else if (line.includes("catch")) {
+        line = line.replace(/catch\s*\(\s*(\w+)\s+(\w+)\s*\)\s*\{/g, 'catch (error) {');
+      } else if (line.includes("finally {")) {
+        line = line.replace("finally {", "finally {");
+      }
+      
+      // Convert Java if/else syntax if needed
+      if (line.match(/\bif\s*\(.+\)\s*\{/)) {
+        // Already proper format, no change needed
+      } else if (line.match(/\bif\s*\(.+\)/)) {
+        line = line.replace(/(\bif\s*\(.+\))([^{]*)$/, '$1 {$2');
+      }
+      
+      // Convert for loops
+      const forLoopMatch = line.match(/for\s*\(\s*int\s+(\w+)\s*=\s*(\d+)\s*;\s*(\w+)\s*(<|<=|>|>=)\s*(\d+|\w+)\s*;\s*(\w+)(\+\+|\-\-|.*)\s*\)/);
+      if (forLoopMatch) {
+        const [_, varName, startVal, loopVar, comparison, endVal, incrVar, increment] = forLoopMatch;
+        line = `for (let ${varName} = ${startVal}; ${loopVar} ${comparison} ${endVal}; ${incrVar}${increment})`;
+      }
+      
+      // Convert enhanced for loops (for-each)
+      const forEachMatch = line.match(/for\s*\(\s*(\w+)\s+(\w+)\s*:\s*(\w+)\s*\)/);
+      if (forEachMatch) {
+        const [_, type, varName, collection] = forEachMatch;
+        line = `for (const ${varName} of ${collection})`;
+      }
+      
+      // Convert Java list declarations
+      if (line.includes("List<") || line.includes("ArrayList<")) {
+        line = line.replace(/List<(\w+)>\s+(\w+)\s*=\s*new\s+ArrayList<\1>\(\);/g, 'const $2: $1[] = [];');
+        line = line.replace(/ArrayList<(\w+)>\s+(\w+)\s*=\s*new\s+ArrayList<\1>\(\);/g, 'const $2: $1[] = [];');
+      }
+      
+      // Convert Java map declarations
+      if (line.includes("Map<") || line.includes("HashMap<")) {
+        line = line.replace(/Map<(\w+),\s*(\w+)>\s+(\w+)\s*=\s*new\s+HashMap<\1,\s*\2>\(\);/g, 
+                            'const $3: Map<$1, $2> = new Map();');
+        line = line.replace(/HashMap<(\w+),\s*(\w+)>\s+(\w+)\s*=\s*new\s+HashMap<\1,\s*\2>\(\);/g, 
+                            'const $3: Map<$1, $2> = new Map();');
+      }
+      
+      // Convert method declarations
+      const methodMatch = line.match(/\b(public|private|protected)\s+(\w+)\s+(\w+)\s*\(([^)]*)\)\s*\{?/);
+      if (methodMatch && !line.includes("class")) {
+        const [_, access, returnType, methodName, params] = methodMatch;
+        
+        // Skip if this is a constructor
+        if (returnType !== "void" && !line.includes("CSWebElement")) {
+          // Convert return type to TypeScript
+          let tsReturnType = this.convertJavaTypeToTypeScript(returnType);
+          
+          // Convert parameters to TypeScript
+          let tsParams = "";
+          if (params.trim()) {
+            tsParams = params.split(",").map(param => {
+              const parts = param.trim().split(/\s+/);
+              const paramType = parts[0];
+              const paramName = parts[parts.length - 1];
+              return `${paramName}: ${this.convertJavaTypeToTypeScript(paramType)}`;
+            }).join(", ");
+          }
+          
+          line = `  ${methodName}(${tsParams}): ${tsReturnType} {`;
+        }
+      }
+      
+      return line;
+    }).join('\n');
+  }
+  
+  /**
+   * Convert Java Selenium methods to Playwright equivalents
+   */
+  private convertJavaSeleniumMethodsToPlaywright(content: string): string {
+    let result = content;
+    
+    // Convert common Selenium/QAF methods to Playwright
+    result = result
+      // Click operations
+      .replace(/\.click\(\)/g, '.click()')
+      .replace(/\.doubleClick\(\)/g, '.dblclick()')
+      
+      // Form interactions
+      .replace(/\.sendKeys\(([^)]+)\)/g, '.fill($1)')
+      .replace(/\.clear\(\)/g, '.clear()')
+      .replace(/\.select\(([^)]+)\)/g, '.selectOption($1)')
+      .replace(/\.isSelected\(\)/g, '.isChecked()')
+      .replace(/\.setSelected\(true\)/g, '.check()')
+      .replace(/\.setSelected\(false\)/g, '.uncheck()')
+      
+      // Element state verification
+      .replace(/\.isDisplayed\(\)/g, '.isVisible()')
+      .replace(/\.isEnabled\(\)/g, '.isEnabled()')
+      .replace(/\.isPresent\(\)/g, '.isVisible()')
+      .replace(/\.isVisible\(\)/g, '.isVisible()')
+      
+      // Element properties and attributes
+      .replace(/\.getText\(\)/g, '.textContent()')
+      .replace(/\.getAttribute\(([^)]+)\)/g, '.getAttribute($1)')
+      .replace(/\.getCssValue\(([^)]+)\)/g, '.evaluate((el, prop) => getComputedStyle(el)[prop], $1)')
+      
+      // Browser operations
+      .replace(/getDriver\(\)\.navigate\(\)\.to\(([^)]+)\)/g, 'this.page.goto($1)')
+      .replace(/getDriver\(\)\.get\(([^)]+)\)/g, 'this.page.goto($1)')
+      .replace(/getDriver\(\)\.getTitle\(\)/g, 'this.page.title()')
+      .replace(/getDriver\(\)\.getCurrentUrl\(\)/g, 'this.page.url()')
+      .replace(/getDriver\(\)\.navigate\(\)\.refresh\(\)/g, 'this.page.reload()')
+      .replace(/getDriver\(\)\.navigate\(\)\.back\(\)/g, 'this.page.goBack()')
+      .replace(/getDriver\(\)\.navigate\(\)\.forward\(\)/g, 'this.page.goForward()')
+      
+      // Waiting
+      .replace(/\.waitForVisible\(([^)]*)\)/g, '.waitFor({ state: "visible" $1})')
+      .replace(/\.waitForInvisible\(([^)]*)\)/g, '.waitFor({ state: "hidden" $1})')
+      .replace(/\.waitForPresent\(([^)]*)\)/g, '.waitFor($1)')
+      .replace(/getDriver\(\)\.manage\(\)\.timeouts\(\)\.implicitlyWait\(([^)]+)\)/g, '// No implicit wait in Playwright: $1')
+      
+      // Assertions with TestNG/JUnit
+      .replace(/Assert\.assertTrue\(([^)]+)\.isDisplayed\(\)\)/g, 'await expect($1).toBeVisible()')
+      .replace(/Assert\.assertTrue\(([^)]+)\.isEnabled\(\)\)/g, 'await expect($1).toBeEnabled()')
+      .replace(/Assert\.assertTrue\(([^)]+)\.isSelected\(\)\)/g, 'await expect($1).toBeChecked()')
+      .replace(/Assert\.assertEquals\(([^,]+),\s*([^)]+)\)/g, 'expect($1).toEqual($2)')
+      .replace(/Assert\.assertTrue\(([^)]+)\)/g, 'expect($1).toBeTruthy()')
+      .replace(/Assert\.assertFalse\(([^)]+)\)/g, 'expect($1).toBeFalsy()')
+      
+      // Add await to common async methods
+      .replace(/(?<!await\s+)(\w+)\.(click|dblclick|fill|type|check|uncheck|selectOption|press)\(/g, 'await $1.$2(')
+      .replace(/(?<!await\s+)this\.page\.(goto|reload|goBack|goForward)\(/g, 'await this.page.$1(')
+      .replace(/(?<!await\s+)(\w+)\.(textContent|getAttribute|isVisible|isEnabled)\(/g, 'await $1.$2(')
+      
+      // Replace any remaining CSWebElement references
+      .replace(/CSWebElement/g, 'Locator');
+    
+    return result;
+  }
+  
+  /**
+   * Convert Java string concatenation to template literals
+   */
+  private convertStringConcatenationToTemplate(line: string): string {
+    // Check if the line contains string concatenation
+    if (line.includes(" + ") && (line.includes("\"") || line.includes("'"))) {
+      // Replace simple cases of string concatenation
+      if (line.includes("=")) {
+        const parts = line.split("=");
+        const variableAssignment = parts[0].trim();
+        let expression = parts.slice(1).join("=").trim();
+        
+        // Check if it's a string concatenation case
+        if ((expression.includes("\"") || expression.includes("'")) && expression.includes(" + ")) {
+          // Replace all string literals with their content
+          const elements = expression.split(" + ").map(elem => elem.trim());
+          
+          // Detect if all elements are string literals or if there are variables
+          const hasVariables = elements.some(elem => !elem.startsWith("\"") && !elem.startsWith("'") && 
+                                                    !elem.endsWith("\"") && !elem.endsWith("'"));
+          
+          if (hasVariables) {
+            // Convert to template literal
+            let templateString = "`";
+            for (let i = 0; i < elements.length; i++) {
+              const elem = elements[i].trim();
+              if (elem.startsWith("\"") || elem.startsWith("'")) {
+                // It's a string literal, extract content without quotes
+                templateString += elem.substring(1, elem.length - 1);
+              } else {
+                // It's a variable, add template syntax
+                templateString += "${" + elem + "}";
+              }
+            }
+            templateString += "`";
+            
+            // Replace the semicolon if it was in the original line
+            if (expression.endsWith(";")) {
+              templateString += ";";
+            }
+            
+            line = `${variableAssignment} = ${templateString}`;
+          }
+        }
+      }
+    }
+    
+    return line;
+  }
+  
+  /**
+   * Convert Java types to TypeScript types
+   */
+  private convertJavaTypeToTypeScript(javaType: string): string {
+    switch (javaType) {
+      case 'String':
+        return 'string';
+      case 'Integer':
+      case 'int':
+      case 'double':
+      case 'float':
+      case 'Double':
+      case 'Float':
+      case 'long':
+      case 'Long':
+        return 'number';
+      case 'boolean':
+      case 'Boolean':
+        return 'boolean';
+      case 'void':
+        return 'void';
+      case 'Object':
+        return 'any';
+      case 'List':
+      case 'ArrayList':
+        return 'Array<any>';
+      case 'Map':
+      case 'HashMap':
+        return 'Map<any, any>';
+      case 'CSWebElement':
+        return 'Locator';
+      default:
+        // If it's a generic type, try to parse it
+        if (javaType.includes('<') && javaType.includes('>')) {
+          const match = javaType.match(/(\w+)<(.+)>/);
+          if (match) {
+            const container = match[1];
+            const typeParam = match[2];
+            
+            if (container === 'List' || container === 'ArrayList') {
+              return `${this.convertJavaTypeToTypeScript(typeParam)}[]`;
+            } else if (container === 'Map' || container === 'HashMap') {
+              const mapTypes = typeParam.split(',').map(t => t.trim());
+              if (mapTypes.length === 2) {
+                return `Map<${this.convertJavaTypeToTypeScript(mapTypes[0])}, ${this.convertJavaTypeToTypeScript(mapTypes[1])}>`;
+              }
+            }
+          }
+        }
+        
+        // For unknown types, return as is but with lowercase first letter for TypeScript convention
+        return javaType.charAt(0).toLowerCase() + javaType.slice(1);
+    }
+  }
 
   /**
    * Clean up any remaining Java elements that might have been missed
@@ -560,6 +996,11 @@ class QafToPlaywrightParser {
     // Replace any remaining annotations
     result = result.replace(/@FindBy\s*\([^)]*\)/g, '');
     result = result.replace(/@QAFTestStep\s*\([^)]*\)/g, '');
+    result = result.replace(/@Test\s*(?:\([^)]*\))?/g, '');
+    result = result.replace(/@BeforeMethod\s*(?:\([^)]*\))?/g, '');
+    result = result.replace(/@AfterMethod\s*(?:\([^)]*\))?/g, '');
+    result = result.replace(/@BeforeClass\s*(?:\([^)]*\))?/g, '');
+    result = result.replace(/@AfterClass\s*(?:\([^)]*\))?/g, '');
     
     // Replace any remaining CSWebElement declarations
     result = result.replace(/(?:public|private|protected)?\s*CSWebElement\s+(\w+)\s*;/g, 
@@ -588,31 +1029,143 @@ class QafToPlaywrightParser {
   }
 
   /**
+   * Generate a Playwright configuration file
+   */
+  public generatePlaywrightConfig(outputDir: string): void {
+    const configContent = `
+import { defineConfig, devices } from '@playwright/test';
+
+/**
+ * Auto-generated Playwright configuration
+ * Converted from QAF test framework
+ */
+export default defineConfig({
+  testDir: './tests',
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  workers: process.env.CI ? 1 : undefined,
+  reporter: 'html',
+  
+  use: {
+    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+  },
+
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
+    },
+    /* Test against mobile viewports. */
+    {
+      name: 'Mobile Chrome',
+      use: { ...devices['Pixel 5'] },
+    },
+    {
+      name: 'Mobile Safari',
+      use: { ...devices['iPhone 12'] },
+    },
+  ],
+});
+`;
+    
+    const configPath = path.join(outputDir, 'playwright.config.ts');
+    fs.writeFileSync(configPath, configContent);
+    console.log(`Playwright configuration generated: ${configPath}`);
+  }
+  
+  /**
+   * Generate a typical Playwright test file structure
+   */
+  public generateTestExample(outputDir: string): void {
+    const exampleContent = `
+import { test, expect } from '@playwright/test';
+import { ExamplePage } from '../pages/example-page';
+
+test.describe('Example Test Suite', () => {
+  test('should demonstrate how to use page objects', async ({ page }) => {
+    const examplePage = new ExamplePage(page);
+    
+    // Navigate to page
+    await page.goto('/example');
+    
+    // Use page object methods
+    await examplePage.fillUsername('testuser');
+    await examplePage.fillPassword('password');
+    await examplePage.clickLogin();
+    
+    // Assert using Playwright's expect
+    await expect(examplePage.welcomeMessage).toBeVisible();
+    await expect(examplePage.welcomeMessage).toContainText('Welcome');
+  });
+});
+`;
+    
+    // Ensure directory exists
+    const testsDir = path.join(outputDir, 'tests');
+    if (!fs.existsSync(testsDir)) {
+      fs.mkdirSync(testsDir, { recursive: true });
+    }
+    
+    const examplePath = path.join(testsDir, 'example.spec.ts');
+    fs.writeFileSync(examplePath, exampleContent);
+    console.log(`Example test file generated: ${examplePath}`);
+  }
+
+  /**
    * Process a directory of Java files
    */
   public processDirectory(inputDir: string, outputDir: string): void {
     try {
-      // Get all Java files
-      const files = this.getJavaFiles(inputDir);
-      console.log(`Found ${files.length} Java files to process`);
+      // Get all Java and BDD files
+      const javaFiles = this.getJavaFiles(inputDir);
+      const bddFiles = this.getBddFiles(inputDir);
+      console.log(`Found ${javaFiles.length} Java files and ${bddFiles.length} BDD files to process`);
       
       // Create output directory if it doesn't exist
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
       
-      // Process each file
-      for (const file of files) {
+      // Process each Java file
+      for (const file of javaFiles) {
         const relativePath = path.relative(inputDir, file);
         const outputPath = path.join(outputDir, relativePath.replace('.java', '.ts'));
         this.convertFile(file, outputPath);
       }
+      
+      // Process each BDD file
+      for (const file of bddFiles) {
+        const relativePath = path.relative(inputDir, file);
+        let outputPath = path.join(outputDir, relativePath);
+        if (outputPath.endsWith('.bdd')) {
+          outputPath = outputPath.replace('.bdd', '.spec.ts');
+        } else if (outputPath.endsWith('.feature')) {
+          outputPath = outputPath.replace('.feature', '.spec.ts');
+        }
+        this.convertFile(file, outputPath);
+      }
+      
+      // Generate Playwright config and examples
+      this.generatePlaywrightConfig(outputDir);
+      this.generateTestExample(outputDir);
       
       console.log('\nConversion completed successfully!');
       console.log(`Files processed: ${this.filesProcessed}`);
       console.log(`Elements converted: ${this.elementsConverted}`);
       console.log(`Methods converted: ${this.methodsConverted}`);
       console.log(`Steps converted: ${this.stepsConverted}`);
+      console.log(`BDD scenarios converted: ${this.bddScenariosConverted}`);
     } catch (error) {
       console.error('Error processing directory:', error);
     }
@@ -634,6 +1187,32 @@ class QafToPlaywrightParser {
         if (stat.isDirectory()) {
           files.push(...this.getJavaFiles(fullPath));
         } else if (item.endsWith('.java')) {
+          files.push(fullPath);
+        }
+      }
+    } catch (error) {
+      console.error(`Error reading directory ${dir}:`, error);
+    }
+    
+    return files;
+  }
+  
+  /**
+   * Get all BDD files in a directory and its subdirectories
+   */
+  private getBddFiles(dir: string): string[] {
+    const files: string[] = [];
+    
+    try {
+      const items = fs.readdirSync(dir);
+      
+      for (const item of items) {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+        
+        if (stat.isDirectory()) {
+          files.push(...this.getBddFiles(fullPath));
+        } else if (item.endsWith('.bdd') || item.endsWith('.feature')) {
           files.push(fullPath);
         }
       }
