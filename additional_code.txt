@@ -1,947 +1,305 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { Command } from 'commander';
+const fs = require('fs');
+const path = require('path');
 
 /**
- * Enhanced QAF to Playwright Converter
- * Specifically designed to handle complex locator formats in QAF Java files
+ * Direct QAF to Playwright converter
+ * Converts QAF elements and methods to the exact format requested
  */
-class EnhancedQafToPlaywrightConverter {
-  private filesProcessed = 0;
-  private elementsConverted = 0;
-  private methodsConverted = 0;
-  private debugMode = false;
-
-  constructor(debugMode = false) {
-    this.debugMode = debugMode;
+function convertFile(inputPath, outputPath) {
+  console.log(`Processing: ${inputPath}`);
+  
+  // Read input file
+  const content = fs.readFileSync(inputPath, 'utf8');
+  
+  // Start output content
+  let output = `import { Page, Locator } from '@playwright/test';\n\n`;
+  output += `export class ${path.basename(inputPath, '.java')} {\n`;
+  output += `  constructor(private page: Page) {}\n\n`;
+  
+  // Extract and convert all FindBy elements
+  const elements = extractElements(content);
+  for (const element of elements) {
+    output += `  private readonly ${element.name} = "${element.locator}";\n`;
   }
-
-  /**
-   * Convert a single Java file to TypeScript
-   */
-  public convertFile(inputPath: string, outputPath: string): void {
-    try {
-      console.log(`Processing: ${inputPath}`);
-      
-      // Read the file content
-      const content = fs.readFileSync(inputPath, 'utf8');
-      
-      // Pre-process content to fix common syntax issues
-      const cleanedContent = this.preProcessContent(content);
-      
-      // Process the content
-      const result = this.processContent(cleanedContent);
-      
-      // Ensure output directory exists
-      const outputDir = path.dirname(outputPath);
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-      }
-      
-      // Write the output file
-      fs.writeFileSync(outputPath, result);
-      this.filesProcessed++;
-      
-      console.log(`Converted: ${outputPath}`);
-    } catch (error) {
-      console.error(`Error processing file ${inputPath}:`, error);
-    }
+  
+  output += '\n';
+  
+  // Extract and convert all methods
+  const methods = extractMethods(content);
+  for (const method of methods) {
+    output += `  private readonly ${method.name} = (${method.params}) => \`${method.locator}\`;\n\n`;
   }
-
-  /**
-   * Pre-process content to fix common syntax issues
-   */
-  private preProcessContent(content: string): string {
-    let cleanedContent = content;
-    
-    // Fix 1: Fix "Sring" typo to "String"
-    cleanedContent = cleanedContent.replace(/\bSring\b/g, 'String');
-    
-    // Fix 2: Fix parameters in quotes (like "buttonName")
-    cleanedContent = cleanedContent.replace(/\((?:\w+\s+)?["'](\w+)["']\s*\)/g, '($1)');
-    
-    // Fix 3: Fix unclosed quotes in method parameter strings
-    cleanedContent = cleanedContent.replace(/\+\s*"([^"]*?)$/gm, '+"$1"');
-    
-    // Fix 4: Fix missing semicolons
-    const lines = cleanedContent.split('\n');
-    const fixedLines = lines.map(line => {
-      if (line.trim() && !line.trim().endsWith(';') && !line.trim().endsWith('{') && 
-          !line.trim().endsWith('}') && !line.trim().startsWith('//') && 
-          !line.trim().startsWith('/*') && !line.trim().startsWith('*') && 
-          !line.trim().startsWith('@') && !line.trim().startsWith('import ') && 
-          !line.trim().startsWith('package ')) {
-        
-        if (line.includes('=') || line.includes('.') || line.match(/\b\w+\s+\w+\b/)) {
-          return line + ';';
-        }
-      }
-      return line;
-    });
-    
-    return fixedLines.join('\n');
+  
+  // Convert business methods
+  const businessMethods = extractBusinessMethods(content);
+  for (const method of businessMethods) {
+    output += method.converted;
+    output += '\n\n';
   }
-
-  /**
-   * Process the content of a Java file
-   */
-  private processContent(content: string): string {
-    // Add TypeScript imports
-    let result = "import { Page, Locator, expect } from '@playwright/test';\nimport * as fs from 'fs';\nimport * as path from 'path';\n\n";
-    
-    // Remove comments
-    content = this.removeComments(content);
-    
-    // Remove package and import statements
-    content = this.removePackageAndImports(content);
-    
-    // Process class definition
-    const { className, processedContent } = this.processClassDefinition(content);
-    content = processedContent;
-    
-    if (className) {
-      result += `export class ${className} {\n`;
-      result += `  protected page: Page;\n\n`;
-      result += `  constructor(page: Page) {\n`;
-      result += `    this.page = page;\n`;
-    } else {
-      result += `export class PageObject {\n`;
-      result += `  protected page: Page;\n\n`;
-      result += `  constructor(page: Page) {\n`;
-      result += `    this.page = page;\n`;
-    }
-    
-    // Process @FindBy declarations to initialize elements in constructor
-    const { constructorContent, remainingContent } = this.processFindByDeclarations(content);
-    result += constructorContent;
-    result += `  }\n\n`;  // Close constructor
-    
-    // Process remaining content including methods
-    content = this.processMethodDeclarations(remainingContent);
-    
-    // Add processed content to result
-    result += content;
-    
-    // Close the class
-    result += '}\n';
-    
-    return result;
+  
+  // Close class
+  output += `}\n`;
+  
+  // Create output directory if it doesn't exist
+  const dir = path.dirname(outputPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
+  
+  // Write to output file
+  fs.writeFileSync(outputPath, output);
+  console.log(`Wrote: ${outputPath}`);
+}
 
-  /**
-   * Remove comments from the code
-   */
-  private removeComments(content: string): string {
-    // Remove single line comments
-    let result = content.replace(/\/\/.*$/gm, '');
+/**
+ * Extract all FindBy elements from content
+ */
+function extractElements(content) {
+  const elements = [];
+  const regex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*CSWebElement\s+(\w+)\s*;/gs;
+  
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const locatorStr = match[1];
+    const elementName = match[2].charAt(0).toLowerCase() + match[2].slice(1);
     
-    // Remove multi-line comments
-    result = result.replace(/\/\*[\s\S]*?\*\//g, '');
-    
-    return result;
-  }
-
-  /**
-   * Remove package and import statements
-   */
-  private removePackageAndImports(content: string): string {
-    // Remove package declarations
-    let result = content.replace(/package\s+[\w.]+;/g, '');
-    
-    // Remove import statements
-    result = result.replace(/import\s+[\w.]+(?:\.\*)?;/g, '');
-    
-    return result;
-  }
-
-  /**
-   * Process class definition
-   */
-  private processClassDefinition(content: string): { className: string | null, processedContent: string } {
-    const classMatch = content.match(/public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/);
-    
-    if (classMatch) {
-      const className = classMatch[1];
-      const baseClassName = classMatch[2] || null;
-      
-      let processedContent = content.replace(
-        /public\s+class\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{/,
-        ''
-      );
-      
-      // Remove the closing brace of the class
-      const lastBraceIndex = processedContent.lastIndexOf('}');
-      if (lastBraceIndex !== -1) {
-        processedContent = processedContent.substring(0, lastBraceIndex);
-      }
-      
-      return { className, processedContent };
-    }
-    
-    return { className: null, processedContent: content };
-  }
-
-  /**
-   * Process @FindBy declarations and extract them for constructor initialization
-   * Enhanced version to handle complex locator formats and multi-line declarations
-   */
-  private processFindByDeclarations(content: string): { constructorContent: string, remainingContent: string } {
-    let constructorContent = '';
-    let elementDeclarations = '';
-    const lines = content.split('\n');
-    const processedLines: string[] = [];
-    
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i].trim();
-      
-      // Check if line contains @FindBy
-      if (line.includes('@FindBy')) {
-        // Start collecting the full declaration that may span multiple lines
-        let fullDeclaration = line;
-        let j = i + 1;
-        
-        // Keep collecting lines until we find one with a semicolon
-        while (j < lines.length && !lines[j].includes(';')) {
-          fullDeclaration += ' ' + lines[j].trim();
-          j++;
-        }
-        
-        // Include the line with semicolon
-        if (j < lines.length) {
-          fullDeclaration += ' ' + lines[j].trim();
-        }
-        
-        // Extract the element information
-        const elementInfo = this.extractElementInfo(fullDeclaration);
-        if (elementInfo) {
-          // Add element declaration
-          elementDeclarations += `  readonly ${elementInfo.name}: Locator;\n`;
-          
-          // Add constructor initialization with description comment if available
-          if (elementInfo.description) {
-            constructorContent += `    // ${elementInfo.description}\n`;
-          }
-          constructorContent += `    this.${elementInfo.name} = page.locator('${elementInfo.locator}');\n`;
-          
-          this.elementsConverted++;
-        } else {
-          // If extraction failed, add a TODO comment
-          const nameMatch = fullDeclaration.match(/\w+Element\s+(\w+)\s*;/);
-          if (nameMatch) {
-            const elementName = nameMatch[1];
-            elementDeclarations += `  readonly ${elementName}: Locator;\n`;
-            constructorContent += `    // TODO: Fix locator extraction\n`;
-            constructorContent += `    this.${elementName} = page.locator('//TODO-FIX-LOCATOR-FOR-${elementName}');\n`;
-          }
-        }
-        
-        // Skip ahead to after the semicolon
-        i = j + 1;
-      } else {
-        processedLines.push(lines[i]);
-        i++;
-      }
-    }
-    
-    // Combine processed lines, but put them after element declarations
-    return { 
-      constructorContent, 
-      remainingContent: elementDeclarations + processedLines.join('\n') 
-    };
-  }
-
-  /**
-   * Extract element information from a @FindBy declaration with improved parsing
-   * This version is specially designed for your codebase's locator formats
-   */
-  private extractElementInfo(declaration: string): { name: string, locator: string, description?: string } | null {
-    // First, extract the element name from CSWebElement declaration
-    const elementMatch = declaration.match(/\b(?:private|public|protected)?\s*(?:CS\w+Element)\s+(\w+)\s*;/);
-    if (!elementMatch) {
-      return null;
-    }
-    
-    const elementName = elementMatch[1];
-    let locatorValue = "";
-    let locatorDescription = "";
-
-    // Handle the JSON locator format with {"locator":"path=//selector", "desc":"description"}
-    if (declaration.includes('{"locator":')) {
+    // Extract locator
+    let locator = '';
+    if (locatorStr.includes('{"locator"')) {
+      // JSON format locator
       try {
-        // Extract the JSON string
-        const jsonMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"(.*?)"\s*\)/s);
-        
-        if (jsonMatch) {
-          // Get the raw JSON string and clean it up
-          let jsonStr = jsonMatch[1];
-          
-          // Handle concatenated strings with + operator
-          if (jsonStr.includes('"') && jsonStr.includes('+')) {
-            // Replace the concatenation with just the content
-            jsonStr = jsonStr.replace(/"\s*\+\s*"/g, '');
-          }
-          
-          // Replace escaped quotes
-          jsonStr = jsonStr.replace(/\\"/g, '"');
-          
-          try {
-            // Try to parse as JSON
-            const jsonObj = JSON.parse(jsonStr);
-            
-            if (jsonObj.locator) {
-              // Extract the actual locator value and prefix
-              if (jsonObj.locator.startsWith("xpath=")) {
-                locatorValue = jsonObj.locator.substring(6);
-              } else if (jsonObj.locator.startsWith("path=")) {
-                // Some codebases use "path=" as an alias for "xpath="
-                locatorValue = jsonObj.locator.substring(5);
-              } else if (jsonObj.locator.startsWith("css=")) {
-                locatorValue = jsonObj.locator.substring(4);
-              } else if (jsonObj.locator.startsWith("id=")) {
-                locatorValue = `#${jsonObj.locator.substring(3)}`;
-              } else {
-                locatorValue = jsonObj.locator;
-              }
-              
-              // Get the description if available
-              if (jsonObj.desc) {
-                locatorDescription = jsonObj.desc;
-              }
-            }
-          } catch (e) {
-            // If JSON parsing fails, try direct extraction with regex
-            const locatorPattern = /"locator"\s*:\s*"([^"]+)"/;
-            const descPattern = /"desc"\s*:\s*"([^"]+)"/;
-            
-            const locatorMatch = jsonStr.match(locatorPattern);
-            const descMatch = jsonStr.match(descPattern);
-            
-            if (locatorMatch) {
-              const locator = locatorMatch[1];
-              
-              if (locator.startsWith("xpath=")) {
-                locatorValue = locator.substring(6);
-              } else if (locator.startsWith("path=")) {
-                locatorValue = locator.substring(5);
-              } else if (locator.startsWith("css=")) {
-                locatorValue = locator.substring(4);
-              } else if (locator.startsWith("id=")) {
-                locatorValue = `#${locator.substring(3)}`;
-              } else {
-                locatorValue = locator;
-              }
-            }
-            
-            if (descMatch) {
-              locatorDescription = descMatch[1];
-            }
+        // Fix JSON string by replacing escaped quotes
+        const fixedJson = locatorStr.replace(/\\"/g, '"');
+        // Try to parse as JSON
+        const jsonObj = JSON.parse(fixedJson);
+        if (jsonObj.locator) {
+          // Get locator and remove prefix
+          if (jsonObj.locator.startsWith('xpath=')) {
+            locator = jsonObj.locator.substring(6);
+          } else if (jsonObj.locator.startsWith('path=')) {
+            locator = jsonObj.locator.substring(5);
+          } else if (jsonObj.locator.startsWith('css=')) {
+            locator = jsonObj.locator.substring(4);
+          } else {
+            locator = jsonObj.locator;
           }
         }
       } catch (e) {
-        if (this.debugMode) {
-          console.error(`Error processing JSON locator for ${elementName}:`, e);
-        }
-      }
-    } else {
-      // Handle direct locator format: @FindBy(locator = "xpath=//div")
-      const directLocatorMatch = declaration.match(/@FindBy\s*\(\s*locator\s*=\s*"(xpath|css|id)=([^"]+)"\s*\)/);
-      
-      if (directLocatorMatch) {
-        const locatorType = directLocatorMatch[1];
-        const locatorPath = directLocatorMatch[2];
-        
-        if (locatorType === 'xpath') {
-          locatorValue = locatorPath;
-        } else if (locatorType === 'css') {
-          locatorValue = locatorPath;
-        } else if (locatorType === 'id') {
-          locatorValue = `#${locatorPath}`;
-        }
-      } else {
-        // Try attribute format: @FindBy(xpath="//div")
-        const attributeMatch = declaration.match(/@FindBy\s*\(\s*(xpath|css|id)\s*=\s*"([^"]+)"\s*\)/);
-        
-        if (attributeMatch) {
-          const locatorType = attributeMatch[1];
-          const locatorPath = attributeMatch[2];
-          
-          if (locatorType === 'xpath') {
-            locatorValue = locatorPath;
-          } else if (locatorType === 'css') {
-            locatorValue = locatorPath;
-          } else if (locatorType === 'id') {
-            locatorValue = `#${locatorPath}`;
-          }
-        }
-      }
-    }
-    
-    // If no locator was found, use a placeholder
-    if (!locatorValue) {
-      locatorValue = `//TODO-FIX-LOCATOR-FOR-${elementName}`;
-    }
-    
-    if (locatorDescription) {
-      return { name: elementName, locator: locatorValue, description: locatorDescription };
-    } else {
-      return { name: elementName, locator: locatorValue };
-    }
-  }
-
-  /**
-   * Process method declarations and convert Java syntax to TypeScript
-   */
-  private processMethodDeclarations(content: string): string {
-    const lines = content.split('\n');
-    const processedLines: string[] = [];
-    
-    // Process dynamic locator methods first
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      
-      // Check if it's a dynamic locator method (returns CSWebElement or similar)
-      if ((line.includes('public') || line.includes('private') || line.includes('protected')) && 
-          (line.includes('CSWebElement') || line.includes('DropDownListWebElement')) && line.includes('(')) {
-        // Start of method declaration
-        let methodDeclaration = line;
-        let braceCount = line.split('{').length - line.split('}').length;
-        let j = i + 1;
-        
-        // Collect the entire method
-        while (j < lines.length && braceCount > 0) {
-          methodDeclaration += '\n' + lines[j];
-          braceCount += lines[j].split('{').length - lines[j].split('}').length;
-          j++;
-        }
-        
-        // Convert the dynamic locator method
-        const convertedMethod = this.convertDynamicLocatorMethod(methodDeclaration);
-        processedLines.push(convertedMethod);
-        this.methodsConverted++;
-        
-        // Skip to after the method
-        i = j;
-      } else {
-        // Regular business methods
-        if ((line.includes('public') || line.includes('private') || line.includes('protected')) && 
-            line.includes('void') && line.includes('(')) {
-          // Start of business method declaration
-          let methodDeclaration = line;
-          let braceCount = line.split('{').length - line.split('}').length;
-          let j = i + 1;
-          
-          // Collect the entire method
-          while (j < lines.length && braceCount > 0) {
-            methodDeclaration += '\n' + lines[j];
-            braceCount += lines[j].split('{').length - lines[j].split('}').length;
-            j++;
-          }
-          
-          // Convert the business method
-          const convertedMethod = this.convertBusinessMethod(methodDeclaration);
-          processedLines.push(convertedMethod);
-          this.methodsConverted++;
-          
-          // Skip to after the method
-          i = j;
-        } else {
-          // Other lines (properties, etc.)
-          processedLines.push(this.convertPropertyDeclaration(line));
-          i++;
-        }
-      }
-    }
-    
-    return processedLines.join('\n');
-  }
-
-  /**
-   * Convert a property declaration
-   */
-  private convertPropertyDeclaration(line: string): string {
-    // Skip WebDriver declarations (handled in constructor)
-    if (line.includes('WebDriver')) {
-      return '';
-    }
-    
-    // Convert Java logger to console.log comment
-    if (line.includes('Logger')) {
-      return '  // Logger is replaced with console.log in TypeScript';
-    }
-    
-    // Other property declarations
-    return line;
-  }
-
-  /**
-   * Convert a dynamic locator method that returns CSWebElement or similar
-   */
-  private convertDynamicLocatorMethod(methodDeclaration: string): string {
-    try {
-      // Extract method info
-      const methodInfoMatch = methodDeclaration.match(/(?:public|private|protected)\s+(CS\w+Element)\s+(\w+)\s*\((.*?)\)\s*\{/);
-      if (!methodInfoMatch) {
-        return methodDeclaration; // Return as-is if no match
-      }
-      
-      const returnType = methodInfoMatch[1];
-      const methodName = methodInfoMatch[2];
-      const params = methodInfoMatch[3];
-      
-      // Process parameters
-      const processedParams = this.convertMethodParameters(params);
-      
-      // Extract method body
-      const bodyMatch = methodDeclaration.match(/\{([\s\S]*)\}/);
-      const methodBody = bodyMatch ? bodyMatch[1] : '';
-      
-      // Build the converted method
-      let convertedMethod = `  /**\n   * ${methodName} - Dynamic locator method\n   */\n`;
-      convertedMethod += `  ${methodName}(${processedParams}): Locator {\n`;
-      
-      // For very complex dynamic locators, implement a special parsing strategy
-      if (methodBody.includes("return new") && methodBody.includes("locator")) {
-        // Try to extract the locator pattern
-        const newElementMatch = methodBody.match(/return\s+new\s+\w+\s*\(\s*"(.+?)"\s*\)/s);
-        const newElementWithVarsMatch = methodBody.match(/return\s+new\s+\w+\s*\(\s*"(.+?)"\s*\+\s*([^)]+)\s*\+\s*"(.+?)"\s*\)/s);
-        
-        if (newElementWithVarsMatch) {
-          // Handle dynamic string with variables
-          const prefix = newElementWithVarsMatch[1] || '';
-          const variable = newElementWithVarsMatch[2] || '';
-          const suffix = newElementWithVarsMatch[3] || '';
-          
-          // Extract the variable name from the parameters
-          const paramNames = processedParams.split(',').map(p => p.split(':')[0].trim());
-          
-          // Create template literal with parameter interpolation
-          convertedMethod += `    return this.page.locator(\`${this.extractLocatorFromJsonString(prefix)}\${${variable}}${this.extractLocatorFromJsonString(suffix)}\`);\n`;
-        } else if (newElementMatch) {
-          // Static locator string
-          convertedMethod += `    return this.page.locator('${this.extractLocatorFromJsonString(newElementMatch[1])}');\n`;
-        } else {
-          // More complex logic - try to extract from method calls
-          const xpathMethodMatch = methodBody.match(/getFilterExpandedOrCollapsedSectionXpath\(([^)]+)\)/);
-          
-          if (xpathMethodMatch) {
-            // Method uses helper function to build XPath
-            const xpathParam = xpathMethodMatch[1];
-            convertedMethod += `    const xpathBase = this.getFilterExpandedOrCollapsedSectionXpath(${xpathParam});\n`;
-            
-            // Look for buttonName parameter if it exists
-            const buttonNameMatch = methodBody.match(/\+\s*([^+]+?)\s*\+/);
-            if (buttonNameMatch && processedParams.includes('buttonName')) {
-              convertedMethod += `    return this.page.locator(\`xpath=\${xpathBase}//span[text()="\${buttonName}"]/ancestor::button\`);\n`;
-            } else {
-              convertedMethod += `    return this.page.locator(\`xpath=\${xpathBase}\`);\n`;
-            }
-          } else {
-            // Fallback - generic implementation
-            convertedMethod += `    // TODO: Implement locator strategy\n`;
-            convertedMethod += `    return this.page.locator('//TODO-IMPLEMENT-${methodName}');\n`;
-          }
-        }
-      } else {
-        // Fallback for other patterns
-        convertedMethod += `    // TODO: Implement locator strategy\n`;
-        convertedMethod += `    return this.page.locator('//TODO-IMPLEMENT-${methodName}');\n`;
-      }
-      
-      convertedMethod += `  }`;
-      
-      return convertedMethod;
-    } catch (error) {
-      if (this.debugMode) {
-        console.error(`Error converting dynamic locator method:`, error);
-      }
-      return methodDeclaration; // Return original on error
-    }
-  }
-
-  /**
-   * Extract locator from JSON string in dynamic method
-   */
-  private extractLocatorFromJsonString(jsonStr: string): string {
-    if (!jsonStr) return '';
-    
-    // Check if it's a JSON string with locator
-    if (jsonStr.includes('"locator"')) {
-      try {
-        // Try to extract the locator part using regex
-        const locatorMatch = jsonStr.match(/"locator"\s*:\s*"([^"]+)"/);
+        // If JSON parsing fails, try regex
+        const locatorMatch = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
         if (locatorMatch) {
-          const locator = locatorMatch[1];
-          
-          if (locator.startsWith("xpath=")) {
-            return locator.substring(6);
-          } else if (locator.startsWith("path=")) {
-            return locator.substring(5);
-          } else if (locator.startsWith("css=")) {
-            return locator.substring(4);
-          } else if (locator.startsWith("id=")) {
-            return `#${locator.substring(3)}`;
+          const fullLocator = locatorMatch[1];
+          if (fullLocator.startsWith('xpath=')) {
+            locator = fullLocator.substring(6);
+          } else if (fullLocator.startsWith('path=')) {
+            locator = fullLocator.substring(5);
+          } else if (fullLocator.startsWith('css=')) {
+            locator = fullLocator.substring(4);
           } else {
-            return locator;
+            locator = fullLocator;
           }
         }
-      } catch (e) {
-        // If extraction fails, return the original string
-        if (this.debugMode) {
-          console.error("Error extracting locator from JSON string:", e);
+      }
+    } else if (locatorStr.startsWith('xpath=')) {
+      // Direct xpath format
+      locator = locatorStr.substring(6);
+    } else if (locatorStr.startsWith('css=')) {
+      locator = locatorStr.substring(4);
+    } else {
+      locator = locatorStr;
+    }
+    
+    elements.push({
+      name: elementName,
+      locator: locator
+    });
+  }
+  
+  return elements;
+}
+
+/**
+ * Extract all dynamic locator methods
+ */
+function extractMethods(content) {
+  const methods = [];
+  
+  // Regex to find method declarations that return CSWebElement
+  const regex = /public\s+CSWebElement\s+(\w+)\s*\(([^)]*)\)\s*\{([\s\S]*?)return\s+new\s+CSWebElement\s*\(([\s\S]*?)\);([\s\S]*?)\}/g;
+  
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const methodName = match[1];
+    const params = match[2];
+    const methodBody = match[3];
+    const returnStmt = match[4];
+    
+    // Process parameters - remove type declarations
+    const processedParams = params.split(',')
+      .map(p => {
+        const parts = p.trim().split(/\s+/);
+        return parts[parts.length - 1]; // Just take parameter name
+      })
+      .join(', ');
+    
+    // Extract the locator from return statement
+    let locator = '';
+    
+    // Check if return has string concatenation with variables
+    if (returnStmt.includes('+')) {
+      // For complex locator with string concatenation
+      if (returnStmt.includes('{"locator"')) {
+        // Try to extract from JSON format
+        try {
+          // Get all parts separated by +
+          const parts = returnStmt.split('+').map(p => p.trim());
+          let locatorParts = [];
+          
+          for (let i = 0; i < parts.length; i++) {
+            let part = parts[i];
+            if (part.startsWith('"') && part.includes('locator')) {
+              // JSON part - extract locator
+              const locatorMatch = part.match(/"locator"\s*:\s*"([^"]+)/);
+              if (locatorMatch) {
+                // Get the locator prefix and remove xpath= if present
+                let locatorPrefix = locatorMatch[1];
+                if (locatorPrefix.startsWith('xpath=')) {
+                  locatorPrefix = locatorPrefix.substring(6);
+                }
+                locatorParts.push(locatorPrefix);
+              }
+            } else if (part.startsWith('"') && part.endsWith('"')) {
+              // String literal part
+              locatorParts.push(part.replace(/^"|"$/g, ''));
+            } else {
+              // Variable part or combined part
+              // Extract just variable name
+              const varMatch = part.match(/([a-zA-Z0-9_]+)/);
+              if (varMatch) {
+                locatorParts.push(`\${${varMatch[1]}}`);
+              }
+            }
+          }
+          
+          locator = locatorParts.join('');
+        } catch (e) {
+          // Fallback to simple concatenation
+          locator = "Could not extract locator, please fix manually";
         }
+      } else {
+        // Simple string concatenation
+        locator = returnStmt.replace(/"/g, '').replace(/\s*\+\s*/g, '');
       }
+    } else {
+      // Simple string locator
+      locator = returnStmt.replace(/^"|"$/g, '');
     }
     
-    // If not a JSON string or extraction failed, return as is
-    return jsonStr;
+    methods.push({
+      name: methodName,
+      params: processedParams,
+      locator: locator
+    });
   }
-
-  /**
-   * Convert Java method parameters to TypeScript
-   */
-  private convertMethodParameters(params: string): string {
-    if (!params.trim()) {
-      return '';
-    }
-    
-    return params.split(',').map(param => {
-      const parts = param.trim().split(/\s+/);
-      if (parts.length < 2) {
-        return param.trim(); // Return as-is if unusual format
-      }
-      
-      const paramType = parts[0];
-      const paramName = parts[parts.length - 1];
-      
-      // Convert Java types to TypeScript
-      let tsType: string;
-      switch (paramType) {
-        case 'String':
-          tsType = 'string';
-          break;
-        case 'int':
-        case 'double':
-        case 'float':
-        case 'Integer':
-        case 'Double':
-        case 'Float':
-          tsType = 'number';
-          break;
-        case 'boolean':
-        case 'Boolean':
-          tsType = 'boolean';
-          break;
-        default:
-          tsType = 'any';
-      }
-      
-      return `${paramName}: ${tsType}`;
-    }).join(', ');
-  }
-
-  /**
-   * Convert a Java business method to TypeScript async method
-   */
-  private convertBusinessMethod(methodDeclaration: string): string {
-    try {
-      // Extract method info
-      const methodInfoMatch = methodDeclaration.match(/(?:public|private|protected)\s+void\s+(\w+)\s*\((.*?)\)\s*(?:throws\s+[\w,\s]+)?\s*\{/);
-      if (!methodInfoMatch) {
-        return methodDeclaration; // Return as-is if no match
-      }
-      
-      const methodName = methodInfoMatch[1];
-      const params = methodInfoMatch[2];
-      
-      // Process parameters
-      const processedParams = this.convertMethodParameters(params);
-      
-      // Extract method body
-      const bodyMatch = methodDeclaration.match(/\{([\s\S]*)\}/);
-      let methodBody = bodyMatch ? bodyMatch[1] : '';
-      
-      // Convert Java method calls to Playwright equivalents
-      methodBody = this.convertMethodBody(methodBody);
-      
-      // Build the converted method
-      let convertedMethod = `  /**\n   * ${methodName}\n   */\n`;
-      convertedMethod += `  async ${methodName}(${processedParams}): Promise<void> {\n`;
-      
-      // Add method body with proper indentation
-      methodBody.split('\n').forEach(line => {
-        if (line.trim()) {
-          convertedMethod += `    ${line.trim()}\n`;
-        }
-      });
-      
-      convertedMethod += `  }`;
-      
-      return convertedMethod;
-    } catch (error) {
-      if (this.debugMode) {
-        console.error(`Error converting business method:`, error);
-      }
-      return methodDeclaration; // Return original on error
-    }
-  }
-
-  /**
-   * Convert Java method body to Playwright TypeScript
-   */
-  private convertMethodBody(body: string): string {
-    let result = body;
-    
-    // Replace Java Properties with Node.js approach
-    result = result.replace(/Properties\s+(\w+)\s*=\s*new\s+Properties\(\);/g, 
-                           'const $1: Record<string, string> = {};');
-    result = result.replace(/FileInputStream\s+(\w+)\s*=\s*new\s+FileInputStream\(([^)]+)\);/g,
-                           '// FileInputStream replaced with fs.readFileSync\n' +
-                           'const $1Content = fs.readFileSync($2, \'utf8\');');
-    result = result.replace(/(\w+)\.load\((\w+)\);/g,
-                           '$1 = this.parseProperties($2Content);');
-    
-    // Convert Selenium waits to Playwright
-    result = result.replace(/syncUtil\.sleep\((\d+)\);/g, 'await this.page.waitForTimeout($1);');
-    result = result.replace(/waitForPageToLoad\(\);/g, 'await this.page.waitForLoadState(\'domcontentloaded\');');
-    
-    // Convert element interactions
-    result = result.replace(/(\w+)\.getText\(\)/g, 'await $1.textContent() || \'\'');
-    result = result.replace(/(\w+)\.isVisible\(\)/g, 'await $1.isVisible()');
-    result = result.replace(/(\w+)\.click\(\);/g, 'await $1.click();');
-    result = result.replace(/(\w+)\.clear\(\);/g, 'await $1.clear();');
-    result = result.replace(/(\w+)\.sendKeys\(([^)]+)\);/g, 'await $1.fill($2);');
-    result = result.replace(/(\w+)\.sendkeys\(([^)]+)\);/g, 'await $1.fill($2);');
-    
-    // Convert QAF Reporter to console.log
-    result = result.replace(/Reporter\.log\(([^,]+),\s*\w+\);/g, 'console.log($1);');
-    
-    // Convert System.out.println to console.log
-    result = result.replace(/System\.out\.println\(([^)]+)\);/g, 'console.log($1);');
-    
-    // Convert String declarations
-    result = result.replace(/String\s+(\w+)\s*=\s*([^;]+);/g, 'const $1 = $2;');
-    
-    // Convert for-each loop
-    result = result.replace(/for\s*\(\s*String\s+(\w+)\s*:\s*(\w+)\s*\)\s*\{/g, 'for (const $1 of $2) {');
-    
-    // Convert while loop
-    result = result.replace(/while\s*\(\s*true\s*\)\s*\{/g, '// Original had infinite loop\nlet breakCounter = 0;\nwhile (breakCounter < 10) {\n  breakCounter++;');
-    
-    // Keyboard operations
-    result = result.replace(/Keys\.CONTROL\s*\+\s*"A"\s*\+\s*Keys\.DELETE/g, 
-                           '\'Control+a Delete\'');
-    
-    // Fix property access for properties object
-    result = result.replace(/(\w+)\.getProperty\(([^)]+)\)/g, '$1[$2]');
-    
-    // Convert custom wait methods
-    result = result.replace(/commonFunctions\.waitForCashLogLoaderToDisappear\(\);/g, 
-                           'await this.waitForLoaderToDisappear();');
-    
-    return result;
-  }
-
-  /**
-   * Process a directory of Java files
-   */
-  public processDirectory(inputDir: string, outputDir: string): void {
-    try {
-      // Get all Java files
-      const files = this.getJavaFiles(inputDir);
-      console.log(`Found ${files.length} Java files to process`);
-      
-      // Create output directory if it doesn't exist
-      if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-      }
-      
-      // Process each file
-      for (const file of files) {
-        const relativePath = path.relative(inputDir, file);
-        const outputPath = path.join(outputDir, relativePath.replace('.java', '.ts'));
-        this.convertFile(file, outputPath);
-      }
-      
-      // Generate helper utilities needed by the converted files
-      this.generateHelperUtilities(outputDir);
-      
-      console.log('\nConversion completed successfully!');
-      console.log(`Files processed: ${this.filesProcessed}`);
-      console.log(`Elements converted: ${this.elementsConverted}`);
-      console.log(`Methods converted: ${this.methodsConverted}`);
-    } catch (error) {
-      console.error('Error processing directory:', error);
-    }
-  }
-
-  /**
-   * Get all Java files in a directory and its subdirectories
-   */
-  private getJavaFiles(dir: string): string[] {
-    const files: string[] = [];
-    
-    try {
-      const items = fs.readdirSync(dir);
-      
-      for (const item of items) {
-        const fullPath = path.join(dir, item);
-        const stat = fs.statSync(fullPath);
-        
-        if (stat.isDirectory()) {
-          files.push(...this.getJavaFiles(fullPath));
-        } else if (item.endsWith('.java')) {
-          files.push(fullPath);
-        }
-      }
-    } catch (error) {
-      console.error(`Error reading directory ${dir}:`, error);
-    }
-    
-    return files;
-  }
-
-  /**
-   * Generate helper utilities needed by the converted files
-   */
-  private generateHelperUtilities(outputDir: string): void {
-    // Generate a utilities file with helper functions used by converted code
-    const utilsContent = `/**
- * Utility functions for converted QAF tests
- */
-
-import * as fs from 'fs';
-
-/**
- * Parse a properties file content
- */
-export function parseProperties(content: string): Record<string, string> {
-  const properties: Record<string, string> = {};
   
-  content.split('\\n').forEach(line => {
-    line = line.trim();
-    if (line && !line.startsWith('#')) {
-      const separatorIndex = line.indexOf('=');
-      if (separatorIndex > 0) {
-        const key = line.substring(0, separatorIndex).trim();
-        const value = line.substring(separatorIndex + 1).trim();
-        properties[key] = value;
-      }
-    }
-  });
-  
-  return properties;
+  return methods;
 }
 
 /**
- * Wait for an element to be hidden
+ * Extract and convert business methods
  */
-export async function waitForElementToBeHidden(locator: any, timeout = 30000): Promise<void> {
-  await locator.waitFor({ state: 'hidden', timeout });
-}
-
-/**
- * Wait for a timeout
- */
-export async function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-`;
-
-    const utilsPath = path.join(outputDir, 'utils.ts');
-    fs.writeFileSync(utilsPath, utilsContent);
-    console.log(`Utilities file generated: ${utilsPath}`);
+function extractBusinessMethods(content) {
+  const methods = [];
+  
+  // Regex to find void methods
+  const regex = /public\s+void\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{([\s\S]*?)\}/g;
+  
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const methodName = match[1];
+    const params = match[2];
+    let methodBody = match[3];
     
-    // Generate a Playwright config file
-    const configContent = `import { defineConfig, devices } from '@playwright/test';
-
-/**
- * Auto-generated Playwright configuration
- * Converted from QAF framework
- */
-export default defineConfig({
-  testDir: './tests',
-  timeout: 60000,
-  expect: {
-    timeout: 10000,
-  },
-  
-  // Run tests in files in parallel
-  fullyParallel: false,
-  
-  // Retry on CI only
-  retries: process.env.CI ? 2 : 0,
-  
-  // Limit parallel workers on CI, use default locally
-  workers: process.env.CI ? 1 : undefined,
-  
-  // Reporter to use
-  reporter: [['html', { open: 'never' }]],
-  
-  // Configure projects for different browsers
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
-    {
-      name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
-    },
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-    },
-  ],
-  
-  // Configure the base URL and other options for all tests
-  use: {
-    // Base URL to use in tests
-    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    // Process parameters - remove type declarations
+    const processedParams = params.split(',')
+      .map(p => {
+        if (!p.trim()) return '';
+        const parts = p.trim().split(/\s+/);
+        const paramName = parts[parts.length - 1];
+        return paramName + ': any'; // Simple typing for now
+      })
+      .filter(p => p)
+      .join(', ');
     
-    // Collect trace when retrying the failed test
-    trace: 'on-first-retry',
+    // Convert Java syntax to TypeScript
+    methodBody = convertJavaToTypeScript(methodBody);
     
-    // Capture screenshot on failure
-    screenshot: 'only-on-failure',
-  },
-});
-`;
-
-    const configPath = path.join(outputDir, 'playwright.config.ts');
-    fs.writeFileSync(configPath, configContent);
-    console.log(`Playwright config generated: ${configPath}`);
+    // Format the converted method
+    const converted = `  async ${methodName}(${processedParams}) {\n${methodBody}\n  }`;
+    
+    methods.push({
+      name: methodName,
+      params: processedParams,
+      body: methodBody,
+      converted: converted
+    });
   }
+  
+  return methods;
 }
 
-// Set up command-line interface
-const program = new Command();
+/**
+ * Convert Java syntax to TypeScript
+ */
+function convertJavaToTypeScript(javaCode) {
+  let tsCode = javaCode;
+  
+  // Replace common Java patterns
+  tsCode = tsCode
+    // Add awaits to element interactions
+    .replace(/(\w+)\.click\(\)/g, 'await this.page.locator(this.$1).click()')
+    .replace(/(\w+)\.sendKeys\(([^)]+)\)/g, 'await this.page.locator(this.$1).fill($2)')
+    .replace(/(\w+)\.clear\(\)/g, 'await this.page.locator(this.$1).clear()')
+    .replace(/(\w+)\.getText\(\)/g, 'await this.page.locator(this.$1).textContent()')
+    .replace(/(\w+)\.isDisplayed\(\)/g, 'await this.page.locator(this.$1).isVisible()')
+    
+    // Replace method calls
+    .replace(/getFilterSectiondropdoen\(([^)]+)\)/g, 'this.getFilterSectiondropdoen($1)')
+    
+    // Java file operations
+    .replace(/FileInputStream\s+(\w+)\s*=\s*new\s*FileInputStream\(([^)]+)\);/g, 
+             'const $1 = fs.readFileSync($2, "utf8");')
+    
+    // Property operations
+    .replace(/Properties\s+(\w+)\s*=\s*new\s*Properties\(\);/g, 'const $1 = {};')
+    .replace(/(\w+)\.load\((\w+)\);/g, '// load properties from $2')
+    .replace(/(\w+)\.getProperty\(([^)]+)\)/g, '$1[$2]')
+    
+    // System.out.println
+    .replace(/System\.out\.println\(([^)]+)\);/g, 'console.log($1);')
+    
+    // Fix common Java constructs
+    .replace(/String\s+(\w+)\s*=\s*/g, 'const $1 = ')
+    
+    // Enhanced for loop
+    .replace(/for\s*\(\s*String\s+(\w+)\s*:\s*(\w+)\s*\)\s*\{/g, 'for (const $1 of $2) {')
+    
+    // Add proper indentation
+    .split('\n')
+    .map(line => '    ' + line.trim())
+    .join('\n');
+  
+  return tsCode;
+}
 
-program
-  .name('qaf-to-playwright')
-  .description('Enhanced converter for QAF Java code to Playwright TypeScript')
-  .version('1.0.0')
-  .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
-  .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
-  .option('-d, --debug', 'Enable debug mode for detailed error logging')
-  .action((options) => {
-    try {
-      console.log('\n🔄 Enhanced QAF to Playwright Converter');
-      console.log('======================================');
-      
-      console.log(`Input directory: ${options.input}`);
-      console.log(`Output directory: ${options.output}`);
-      console.log(`Debug mode: ${options.debug ? 'Enabled' : 'Disabled'}`);
-      console.log('--------------------------------------');
-      
-      const converter = new EnhancedQafToPlaywrightConverter(options.debug);
-      converter.processDirectory(options.input, options.output);
-      
-    } catch (error) {
-      console.error('❌ Conversion failed:', error);
-      process.exit(1);
-    }
-  });
+// Parse command line arguments
+if (process.argv.length < 4) {
+  console.log('Usage: node direct-converter.js <input-file> <output-file>');
+  process.exit(1);
+}
 
-program.parse();
+const inputFile = process.argv[2];
+const outputFile = process.argv[3];
+
+// Run converter
+convertFile(inputFile, outputFile);
