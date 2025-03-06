@@ -1,110 +1,166 @@
-const fs = require('fs');
-const path = require('path');
+import * as fs from 'fs';
+import * as path from 'path';
 
-// Very simple converter focusing on what worked before
-function convertFile(inputFile, outputFile) {
+/**
+ * Reliable QAF to Playwright TypeScript Converter
+ */
+function convertFile(inputFile: string, outputFile: string): void {
   console.log(`Converting ${inputFile} to ${outputFile}`);
   
   try {
-    // Read the file
+    // Read the file content
     let content = fs.readFileSync(inputFile, 'utf8');
     
-    // Add Playwright imports
+    // Create result content with imports
     let result = "import { Page } from '@playwright/test';\n\n";
     
-    // Convert class
-    result += content.replace(/public class (\w+)[\s\S]*?\{/, 'export class $1 {\n  constructor(private page: Page) {}\n');
-    
-    // Convert @FindBy simple format (this worked before)
-    result = result.replace(
-      /@FindBy\(locator="xpath=([^"]+)"\)\s*public\s+CSWebElement\s+(\w+);/g,
-      '  private readonly $2 = this.page.locator(`$1`);'
-    );
-    
-    // Convert @FindBy JSON format (this worked before)
-    result = result.replace(
-      /@FindBy\(locator = "\{.*?"locator":\s*"xpath=([^"]+)".*?\}"\)\s*public\s+CSWebElement\s+(\w+);/g,
-      '  private readonly $2 = this.page.locator(`$1`);'
-    );
-    
-    // Convert method-style element declarations
-    const methodRegex = /public\s+CSWebElement\s+(\w+)\(String\s+(\w+)\)\s*\{[\s\S]*?return new CSWebElement\(.*?"xpath=([^']+)'"\s*\+\s*(\w+)\s*\+\s*"'([^"]+)".*?\);\s*\}/g;
-    
-    // Extract method declarations and convert them one by one
-    let match;
-    while ((match = methodRegex.exec(content)) !== null) {
-      const [fullMatch, methodName, paramName, prefix, param, suffix] = match;
-      const converted = `  private ${methodName} = (${paramName}) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);`;
-      
-      // Replace the method declaration in the result
-      result = result.replace(fullMatch, converted);
+    // Convert class definition
+    const classMatch = content.match(/public\s+class\s+(\w+)/);
+    if (classMatch) {
+      const className = classMatch[1];
+      result += `export class ${className} {\n  constructor(private page: Page) {}\n\n`;
+    } else {
+      // If no class match found, use a default class name
+      result += "export class PageObject {\n  constructor(private page: Page) {}\n\n";
     }
     
-    // Clean up Java imports and package declarations
-    result = result.replace(/import\s+[^;]+;/g, '');
-    result = result.replace(/package\s+[^;]+;/g, '');
+    // Find all @FindBy declarations
+    const findByRegex = /@FindBy\(locator\s*=\s*(?:"([^"]+)"|"(\{[^}]+\})")\)\s*public\s+CSWebElement\s+(\w+)\s*;/g;
+    let findByMatch;
     
-    // Clean up any multiple line breaks
-    result = result.replace(/\n\s*\n\s*\n/g, '\n\n');
+    while ((findByMatch = findByRegex.exec(content)) !== null) {
+      const [fullMatch, simpleLocator, jsonLocator, elementName] = findByMatch;
+      
+      if (simpleLocator && simpleLocator.startsWith('xpath=')) {
+        // Simple xpath locator
+        const xpathValue = simpleLocator.substring(6); // Remove 'xpath='
+        result += `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);\n`;
+      } else if (jsonLocator) {
+        // JSON format locator
+        const locatorMatch = jsonLocator.match(/"locator":\s*"xpath=([^"]+)"/);
+        if (locatorMatch) {
+          const xpathValue = locatorMatch[1];
+          result += `  private readonly ${elementName} = this.page.locator(\`${xpathValue}\`);\n`;
+        }
+      }
+    }
     
-    // Write the output file
+    // Find all method-style element declarations
+    const methodRegex = /public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)\s*\)\s*\{[\s\S]*?return\s+new\s+CSWebElement\s*\(\s*(?:"([^"]+)"\s*\+\s*\w+|"(?:\{[^}]+\})")\s*\);[\s\S]*?\}/g;
+    let methodMatch;
+    
+    while ((methodMatch = methodRegex.exec(content)) !== null) {
+      const [fullMethod, methodName, paramName] = methodMatch;
+      
+      // Look for xpath pattern within the method
+      const xpathPrefixMatch = fullMethod.match(/xpath=([^']+)'\s*\+\s*(\w+)\s*\+\s*'([^"]+)/);
+      
+      if (xpathPrefixMatch) {
+        const [_, prefix, param, suffix] = xpathPrefixMatch;
+        result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`${prefix}\${${paramName}}${suffix}\`);\n`;
+      } else {
+        // Handle id= case
+        const idMatch = fullMethod.match(/id="\s*\+\s*(\w+)/);
+        if (idMatch) {
+          result += `  private ${methodName} = (${paramName}: string) => this.page.locator(\`#\${${paramName}}\`);\n`;
+        }
+      }
+    }
+    
+    // Close the class
+    result += "}\n";
+    
+    // Create output directory if it doesn't exist
     const outputDir = path.dirname(outputFile);
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
     
+    // Write output file
     fs.writeFileSync(outputFile, result);
-    console.log(`Conversion completed: ${outputFile}`);
+    console.log(`Successfully converted: ${outputFile}`);
     
   } catch (error) {
-    console.error(`Error converting file: ${error.message}`);
+    console.error(`Error converting file ${inputFile}:`, error);
   }
 }
 
-// Process a directory
-function processDirectory(inputDir, outputDir) {
-  const files = getJavaFiles(inputDir);
-  console.log(`Found ${files.length} Java files to process`);
-  
-  files.forEach(file => {
-    const relativePath = path.relative(inputDir, file);
-    const outputFile = path.join(outputDir, relativePath.replace('.java', '.ts'));
-    convertFile(file, outputFile);
-  });
-  
-  console.log('Conversion process completed.');
+/**
+ * Process a directory of files
+ */
+function processDirectory(inputDir: string, outputDir: string): void {
+  try {
+    // Get all Java files
+    const files = getJavaFiles(inputDir);
+    console.log(`Found ${files.length} Java files to process`);
+    
+    // Create output directory if it doesn't exist
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    // Process each file
+    for (const file of files) {
+      const relativePath = path.relative(inputDir, file);
+      const outputFile = path.join(outputDir, relativePath.replace('.java', '.ts'));
+      convertFile(file, outputFile);
+    }
+    
+    console.log('Conversion completed successfully!');
+  } catch (error) {
+    console.error('Error processing directory:', error);
+  }
 }
 
-// Get all Java files in a directory and its subdirectories
-function getJavaFiles(dir) {
-  const files = [];
+/**
+ * Get all Java files in a directory and its subdirectories
+ */
+function getJavaFiles(dir: string): string[] {
+  const files: string[] = [];
   
-  const items = fs.readdirSync(dir);
-  
-  items.forEach(item => {
-    const fullPath = path.join(dir, item);
-    const stat = fs.statSync(fullPath);
+  try {
+    const items = fs.readdirSync(dir);
     
-    if (stat.isDirectory()) {
-      files.push(...getJavaFiles(fullPath));
-    } else if (item.endsWith('.java')) {
-      files.push(fullPath);
+    for (const item of items) {
+      const fullPath = path.join(dir, item);
+      const stat = fs.statSync(fullPath);
+      
+      if (stat.isDirectory()) {
+        files.push(...getJavaFiles(fullPath));
+      } else if (item.endsWith('.java')) {
+        files.push(fullPath);
+      }
     }
-  });
+  } catch (error) {
+    console.error(`Error reading directory ${dir}:`, error);
+  }
   
   return files;
 }
 
-// Get command line arguments
-const args = process.argv.slice(2);
-const inputDir = args[0];
-const outputDir = args[1];
-
-if (!inputDir || !outputDir) {
-  console.error('Usage: node simple-converter.js <input-directory> <output-directory>');
-  process.exit(1);
+/**
+ * Main function
+ */
+function main(): void {
+  try {
+    // Get command line arguments
+    const args = process.argv.slice(2);
+    const inputDir = args[0];
+    const outputDir = args[1];
+    
+    if (!inputDir || !outputDir) {
+      console.error('Usage: npx ts-node qaf-converter.ts <input-directory> <output-directory>');
+      process.exit(1);
+    }
+    
+    console.log(`Converting QAF files from ${inputDir} to ${outputDir}`);
+    processDirectory(inputDir, outputDir);
+    
+  } catch (error) {
+    console.error('Error:', error);
+    process.exit(1);
+  }
 }
 
-// Run the conversion
-console.log(`Converting files from ${inputDir} to ${outputDir}`);
-processDirectory(inputDir, outputDir);
+// Run the program
+main();
