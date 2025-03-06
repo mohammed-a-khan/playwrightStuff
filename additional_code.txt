@@ -4,70 +4,147 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Simple focused converter that directly addresses your example
+ * Main conversion function that handles the entire process
  */
 function convertFile(inputFile, outputFile) {
-  console.log(`Reading ${inputFile}...`);
-  const content = fs.readFileSync(inputFile, 'utf8');
-  
-  // First convert all element declarations
-  let convertedContent = convertElements(content);
-  
-  // Then convert the dynamic locator methods
-  convertedContent = convertMethods(content, convertedContent);
-  
-  // Create basic class structure
-  const className = path.basename(inputFile, '.java');
-  let finalOutput = `import { Page, Locator } from '@playwright/test';\n\n`;
-  finalOutput += `export class ${className} {\n`;
-  finalOutput += `  constructor(private page: Page) {}\n\n`;
-  finalOutput += convertedContent;
-  finalOutput += `}\n`;
-  
-  // Write the result
-  const outputDir = path.dirname(outputFile);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+  try {
+    console.log(`Reading ${inputFile}...`);
+    if (!fs.existsSync(inputFile)) {
+      console.error(`Error: Input file ${inputFile} does not exist`);
+      process.exit(1);
+    }
+    
+    const content = fs.readFileSync(inputFile, 'utf8');
+    
+    // Extract class name from the file content
+    const className = extractClassName(content) || path.basename(inputFile, '.java');
+    
+    // Process elements and methods
+    const elements = extractAndConvertElements(content);
+    const methods = extractAndConvertMethods(content);
+    
+    // Generate the final TypeScript output
+    const finalOutput = generateTypeScriptOutput(className, elements, methods);
+    
+    // Write the result
+    const outputDir = path.dirname(outputFile);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(outputFile, finalOutput);
+    console.log(`Converted file successfully written to ${outputFile}`);
+  } catch (error) {
+    console.error(`Error converting file: ${error.message}`);
+    process.exit(1);
   }
-  
-  fs.writeFileSync(outputFile, finalOutput);
-  console.log(`Converted file written to ${outputFile}`);
 }
 
 /**
- * Convert @FindBy elements to the requested format
+ * Extract the class name from Java content
  */
-function convertElements(content) {
-  // Extract all @FindBy elements
-  const elementRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*CSWebElement\s+(\w+)\s*;/gs;
-  
-  let convertedContent = content;
-  let elements = [];
-  
-  // Find all element declarations
-  let match;
-  while ((match = elementRegex.exec(content)) !== null) {
-    const locatorStr = match[1];
-    const elementName = match[2];
-    const fullMatch = match[0];
-    
-    // Extract the locator value
-    let locatorValue = extractLocatorValue(locatorStr);
-    
-    // Create the new declaration in typescript format
-    const newElement = `  private readonly ${elementName.charAt(0).toLowerCase() + elementName.slice(1)} = "${locatorValue}";\n`;
-    elements.push(newElement);
-    
-    // Remove the original declaration
-    convertedContent = convertedContent.replace(fullMatch, '');
-  }
-  
-  // Return just the element declarations
-  return elements.join('\n');
+function extractClassName(content) {
+  const classMatch = content.match(/public\s+class\s+(\w+)/);
+  return classMatch ? classMatch[1] : null;
 }
 
 /**
- * Extract the actual locator value from the locator string
+ * Extract and convert all @FindBy elements from Java to Playwright format
+ */
+function extractAndConvertElements(content) {
+  const elementsList = [];
+  
+  // Various patterns for element declarations
+  const patterns = [
+    // Standard @FindBy pattern
+    {
+      regex: /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*CSWebElement\s+(\w+)\s*;/gs,
+      process: (match) => {
+        const locatorStr = match[1];
+        const elementName = match[2];
+        const locatorValue = extractLocatorValue(locatorStr);
+        return {
+          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+          locator: locatorValue
+        };
+      }
+    },
+    // Alternative @FindBy pattern with different attribute names
+    {
+      regex: /@FindBy\((?:xpath|css|id|name|className|tagName)\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:WebElement|CSWebElement)\s+(\w+)\s*;/gs,
+      process: (match) => {
+        const locatorStr = match[1];
+        const elementName = match[2];
+        return {
+          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+          locator: locatorStr // Direct locator value
+        };
+      }
+    },
+    // Look for elements initialized in constructors or methods
+    {
+      regex: /(?:this\.)?(\w+)\s*=\s*new\s+CSWebElement\s*\(\s*"(.*?)"\s*\)/gs,
+      process: (match) => {
+        const elementName = match[1];
+        const locatorStr = match[2];
+        const locatorValue = extractLocatorValue(locatorStr);
+        return {
+          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+          locator: locatorValue
+        };
+      }
+    }
+  ];
+  
+  // Process each pattern
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.regex.exec(content)) !== null) {
+      const element = pattern.process(match);
+      elementsList.push(`  private readonly ${element.name} = "${element.locator}";`);
+    }
+  }
+  
+  return elementsList;
+}
+
+/**
+ * Extract and convert all dynamic locator methods
+ */
+function extractAndConvertMethods(content) {
+  const methodsList = [];
+  
+  // Find all methods that return CSWebElement
+  const methodRegex = /(?:public|private|protected)\s+CSWebElement\s+(\w+)\s*\(\s*((?:String|int|boolean|[\w<>[\]]+)\s+\w+(?:\s*,\s*(?:String|int|boolean|[\w<>[\]]+)\s+\w+)*)\s*\)\s*\{([\s\S]*?)return\s+new\s+CSWebElement\s*\(([\s\S]*?)\)\s*;\s*\}/gs;
+  
+  let methodMatch;
+  while ((methodMatch = methodRegex.exec(content)) !== null) {
+    const methodName = methodMatch[1];
+    const params = methodMatch[2];
+    const methodBody = methodMatch[3];
+    const constructorArgs = methodMatch[4];
+    
+    // Extract parameter information
+    const paramsList = params.split(',').map(param => {
+      const parts = param.trim().split(/\s+/);
+      return parts[parts.length - 1]; // Get the parameter name
+    });
+    
+    // Try to extract locator pattern
+    const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
+    
+    // Format parameters for TS function
+    const formattedParams = paramsList.join(', ');
+    
+    // Create the converted method
+    methodsList.push(`  private readonly ${methodName} = (${formattedParams}) => \`${locator}\`;`);
+  }
+  
+  return methodsList;
+}
+
+/**
+ * Extract locator value from various formats
  */
 function extractLocatorValue(locatorStr) {
   // Handle JSON format with {"locator":"xpath=..."}
@@ -111,80 +188,158 @@ function extractLocatorValue(locatorStr) {
 }
 
 /**
- * Convert dynamic locator methods
- * @param {string} content - The original file content
- * @param {string} elementsOutput - The already converted elements output
+ * Extract dynamic locator from method body and constructor args
  */
-function convertMethods(content, elementsOutput) {
-  // Find and convert methods from the actual file content
-  let methodsOut = '';
+function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
+  let locator = "";
   
-  // Find all function declarations that return CSWebElement
-  const methodRegex = /public\s+CSWebElement\s+(\w+)\s*\(\s*String\s+(\w+)(?:,\s*String\s+(\w+))?\s*\)\s*\{[\s\S]*?return\s+new\s+CSWebElement\s*\([\s\S]*?\)\s*;\s*\}/gs;
+  // Common patterns for locator construction
   
-  let methodMatch;
-  while ((methodMatch = methodRegex.exec(content)) !== null) {
-    const fullMethod = methodMatch[0];
-    const methodName = methodMatch[1];
-    const paramName = methodMatch[2];
-    const param2Name = methodMatch[3]; // Optional second parameter
-    
-    console.log(`Found method: ${methodName} with param: ${paramName} ${param2Name ? 'and ' + param2Name : ''}`);
-    
-    // Try to extract locator parts
-    let locator = "";
-    
-    // Look for JSON locator with xpath= in it
-    const jsonMatch = fullMethod.match(/return\s+new\s+CSWebElement\s*\(\s*".*?locator.*?xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/s);
-    
-    if (jsonMatch) {
-      const prefix = jsonMatch[1] || '';
-      const variable = jsonMatch[2] || '';
-      const suffix = jsonMatch[3] || '';
-      
-      console.log(`Found locator parts: prefix=${prefix}, var=${variable}, suffix=${suffix}`);
-      
-      // Create the template literal format
-      locator = `${prefix}\${${variable}}${suffix}`;
-    } else {
-      // Try other patterns like double concatenation with two variables
-      const complexMatch = fullMethod.match(/return\s+new\s+CSWebElement\s*\(\s*".*?locator.*?xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/s);
-      
-      if (complexMatch) {
-        const prefix = complexMatch[1] || '';
-        const var1 = complexMatch[2] || '';
-        const middle = complexMatch[3] || '';
-        const var2 = complexMatch[4] || '';
-        const suffix = complexMatch[5] || '';
-        
-        console.log(`Found complex locator: prefix=${prefix}, var1=${var1}, middle=${middle}, var2=${var2}, suffix=${suffix}`);
-        
-        // Create template literal with both variables
-        locator = `${prefix}\${${var1}}${middle}\${${var2}}${suffix}`;
-      } else {
-        // Fallback - just use a placeholder
-        locator = `//TODO-FIX-LOCATOR-FOR-${methodName}`;
-      }
-    }
-    
-    // Create the converted method with parameter list matching the original
-    let convertedMethod;
-    if (param2Name) {
-      convertedMethod = `  private readonly ${methodName} = (${paramName}, ${param2Name}) => \`${locator}\`;\n\n`;
-    } else {
-      convertedMethod = `  private readonly ${methodName} = (${paramName}) => \`${locator}\`;\n\n`;
-    }
-    
-    methodsOut += convertedMethod;
+  // Pattern 1: JSON locator with single parameter
+  const jsonSinglePattern = /"locator"\s*:\s*"xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
+  const match1 = constructorArgs.match(jsonSinglePattern);
+  if (match1) {
+    const prefix = match1[1] || '';
+    const variable = match1[2] || '';
+    const suffix = match1[3] || '';
+    locator = `${prefix}\${${variable}}${suffix}`;
+    return locator;
   }
   
-  return elementsOutput + '\n' + methodsOut;
+  // Pattern 2: JSON locator with multiple parameters
+  const jsonMultiPattern = /"locator"\s*:\s*"xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
+  const match2 = constructorArgs.match(jsonMultiPattern);
+  if (match2) {
+    const prefix = match2[1] || '';
+    const var1 = match2[2] || '';
+    const middle = match2[3] || '';
+    const var2 = match2[4] || '';
+    const suffix = match2[5] || '';
+    locator = `${prefix}\${${var1}}${middle}\${${var2}}${suffix}`;
+    return locator;
+  }
+  
+  // Pattern 3: Method call in the locator
+  const methodCallPattern = /getPath\((\w+)\)/;
+  const match3 = constructorArgs.match(methodCallPattern);
+  if (match3) {
+    const methodParam = match3[1];
+    // Look for the method definition
+    const methodDefPattern = new RegExp(`String\\s+getPath\\s*\\(\\s*String\\s+${methodParam}\\s*\\)\\s*\\{([\\s\\S]*?)\\}`, 'g');
+    const methodDefMatch = methodDefPattern.exec(methodBody);
+    if (methodDefMatch) {
+      const methodDefBody = methodDefMatch[1];
+      // Try to extract the logic
+      const returnPattern = /return\s+"([^"]*)"\s*\+\s*(\w+)\s*\+\s*"([^"]*)"/;
+      const returnMatch = methodDefBody.match(returnPattern);
+      if (returnMatch) {
+        const prefix = returnMatch[1] || '';
+        const variable = returnMatch[2] || '';
+        const suffix = returnMatch[3] || '';
+        locator = `${prefix}\${${variable}}${suffix}`;
+        return locator;
+      }
+    }
+  }
+  
+  // Pattern 4: Complex string concatenation
+  const complexConcatPattern = /"([^"]*)"\s*\+(?:\s*\+)?\s*(\w+)(?:\s*\+\s*"([^"]*)")?/g;
+  let stringParts = [];
+  let variableParts = [];
+  let match4;
+  let fullString = constructorArgs;
+  
+  while ((match4 = complexConcatPattern.exec(fullString)) !== null) {
+    if (match4[1]) stringParts.push(match4[1]);
+    if (match4[2] && paramsList.includes(match4[2])) {
+      variableParts.push(match4[2]);
+      stringParts.push(`\${${match4[2]}}`);
+    } else if (match4[2]) {
+      // It's a variable but not a parameter
+      stringParts.push(`[VAR:${match4[2]}]`);
+    }
+    if (match4[3]) stringParts.push(match4[3]);
+  }
+  
+  if (stringParts.length > 0) {
+    locator = stringParts.join('');
+    
+    // Clean up the locator
+    locator = locator.replace(/xpath=/g, '');
+    locator = locator.replace(/\[VAR:(\w+)\]/g, (match, varName) => {
+      // Try to find variable value in the method body
+      const varPattern = new RegExp(`${varName}\\s*=\\s*"([^"]*)"`, 'g');
+      const varMatch = varPattern.exec(methodBody);
+      return varMatch ? varMatch[1] : `\${${varName}}`;
+    });
+    
+    return locator;
+  }
+  
+  // Fallback - create placeholder with parameter names
+  locator = `//TODO-CONVERT-LOCATOR-${paramsList.map(p => `\${${p}}`).join('-')}`;
+  return locator;
+}
+
+/**
+ * Generate the final TypeScript output
+ */
+function generateTypeScriptOutput(className, elements, methods) {
+  let output = `import { Page, Locator } from '@playwright/test';\n\n`;
+  output += `export class ${className} {\n`;
+  output += `  constructor(private page: Page) {}\n\n`;
+  
+  // Add elements
+  if (elements.length > 0) {
+    output += `  // Element Locators\n`;
+    output += elements.join('\n') + '\n\n';
+  }
+  
+  // Add methods
+  if (methods.length > 0) {
+    output += `  // Dynamic Locators\n`;
+    output += methods.join('\n\n') + '\n\n';
+  }
+  
+  // Add getter methods for each element
+  if (elements.length > 0) {
+    output += `  // Element Getters\n`;
+    elements.forEach(element => {
+      const match = element.match(/private readonly (\w+) = "([^"]*)";/);
+      if (match) {
+        const elementName = match[1];
+        const capitalizedName = elementName.charAt(0).toUpperCase() + elementName.slice(1);
+        output += `  get${capitalizedName}() {\n`;
+        output += `    return this.page.locator(this.${elementName});\n`;
+        output += `  }\n\n`;
+      }
+    });
+  }
+  
+  // Add getter methods for dynamic locators
+  if (methods.length > 0) {
+    output += `  // Dynamic Element Getters\n`;
+    methods.forEach(method => {
+      const match = method.match(/private readonly (\w+) = \(([^)]*)\)/);
+      if (match) {
+        const methodName = match[1];
+        const params = match[2];
+        const capitalizedName = methodName.charAt(0).toUpperCase() + methodName.slice(1);
+        output += `  get${capitalizedName}(${params}) {\n`;
+        output += `    return this.page.locator(this.${methodName}(${params.split(',').map(p => p.trim()).join(', ')}));\n`;
+        output += `  }\n\n`;
+      }
+    });
+  }
+  
+  output += `}\n`;
+  return output;
 }
 
 // Process command line arguments
 const args = process.argv.slice(2);
 if (args.length !== 2) {
-  console.log('Usage: node focused-converter.js <input-file> <output-file>');
+  console.log('Usage: node java-to-playwright-converter.js <input-file> <output-file>');
   process.exit(1);
 }
 
