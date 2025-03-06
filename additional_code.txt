@@ -1,410 +1,168 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Command } from 'commander';
+import QafToPlaywrightConverter from './qaf-to-playwright-converter';
+import QafToCucumberAdapter from './qaf-to-cucumber-adapter';
+
+// Set up command-line interface
+const program = new Command();
+
+program
+  .name('qaf-to-playwright')
+  .description('Comprehensive converter for QAF Java code to Playwright TypeScript')
+  .version('1.0.0')
+  .requiredOption('-i, --input <directory>', 'Input directory containing QAF Java files')
+  .requiredOption('-o, --output <directory>', 'Output directory for Playwright TypeScript files')
+  .option('--cucumber', 'Also generate Cucumber feature files and step definitions')
+  .option('--fix-syntax', 'Try to fix syntax errors in Java source files')
+  .action(async (options) => {
+    try {
+      console.log('\n🔄 QAF to Playwright Converter');
+      console.log('============================');
+      
+      console.log(`Input directory: ${options.input}`);
+      console.log(`Output directory: ${options.output}`);
+      console.log(`Generate Cucumber files: ${options.cucumber ? 'Yes' : 'No'}`);
+      console.log(`Fix syntax errors: ${options.fixSyntax ? 'Yes' : 'No'}`);
+      console.log('----------------------------');
+      
+      // Create output directory if it doesn't exist
+      if (!fs.existsSync(options.output)) {
+        fs.mkdirSync(options.output, { recursive: true });
+      }
+      
+      // Convert Java files to Playwright TypeScript
+      const converter = new QafToPlaywrightConverter();
+      
+      // Fix syntax errors if option is enabled
+      if (options.fixSyntax) {
+        console.log('Pre-processing Java files to fix syntax errors...');
+        fixSyntaxErrors(options.input);
+      }
+      
+      // Convert to Playwright
+      converter.processDirectory(options.input, options.output);
+      
+      // Generate Cucumber files if option is enabled
+      if (options.cucumber) {
+        console.log('\nGenerating Cucumber feature files and step definitions...');
+        const cucumberAdapter = new QafToCucumberAdapter();
+        cucumberAdapter.processDirectory(options.input, options.output);
+      }
+      
+      console.log('\n✅ Conversion completed successfully!');
+      
+    } catch (error) {
+      console.error('❌ Conversion failed:', error);
+      process.exit(1);
+    }
+  });
 
 /**
- * QAF to Cucumber Adapter
- * Converts QAF BDD files to Cucumber .feature files and step definitions
+ * Pre-process Java files to fix common syntax errors
  */
-class QafToCucumberAdapter {
-  private filesProcessed = 0;
-  private scenariosConverted = 0;
-  private stepsConverted = 0;
-
-  /**
-   * Process a directory containing QAF BDD files
-   */
-  public processDirectory(inputDir: string, outputDir: string): void {
+function fixSyntaxErrors(inputDir: string): void {
+  const javaFiles = getAllJavaFiles(inputDir);
+  
+  for (const file of javaFiles) {
     try {
-      // Find QAF BDD files
-      const bddFiles = this.getBddFiles(inputDir);
-      console.log(`Found ${bddFiles.length} BDD files to process`);
+      let content = fs.readFileSync(file, 'utf8');
+      let modified = false;
       
-      // Create output directory structure for Cucumber
-      const featuresDir = path.join(outputDir, 'features');
-      const stepsDir = path.join(outputDir, 'steps');
-      
-      if (!fs.existsSync(featuresDir)) {
-        fs.mkdirSync(featuresDir, { recursive: true });
+      // Fix 1: Fix "Sring" typo to "String"
+      if (content.includes('Sring')) {
+        content = content.replace(/\bSring\b/g, 'String');
+        modified = true;
       }
       
-      if (!fs.existsSync(stepsDir)) {
-        fs.mkdirSync(stepsDir, { recursive: true });
-      }
+      // Fix 2: Fix parameters in quotes (like "buttonName")
+      content = content.replace(/\((?:\w+\s+)?["'](\w+)["']\s*\)/g, '($1)');
       
-      // Process each BDD file
-      for (const file of bddFiles) {
-        this.processBddFile(file, featuresDir, stepsDir);
-      }
+      // Fix 3: Fix unclosed quotes in locator strings
+      content = fixUnclosedQuotes(content);
       
-      // Generate step definitions for Java step methods
-      this.generateStepDefinitions(inputDir, stepsDir);
+      // Fix 4: Fix typos in method names (like sendkeys to sendKeys)
+      content = content.replace(/\.sendkeys\(/g, '.sendKeys(');
       
-      console.log('\nBDD Conversion completed successfully!');
-      console.log(`Files processed: ${this.filesProcessed}`);
-      console.log(`Scenarios converted: ${this.scenariosConverted}`);
-      console.log(`Steps converted: ${this.stepsConverted}`);
-    } catch (error) {
-      console.error('Error processing BDD files:', error);
-    }
-  }
-
-  /**
-   * Find all QAF BDD files in a directory
-   */
-  private getBddFiles(dir: string): string[] {
-    const files: string[] = [];
-    
-    try {
-      const items = fs.readdirSync(dir);
+      // Fix 5: Fix missing semicolons 
+      content = fixMissingSemicolons(content);
       
-      for (const item of items) {
-        const fullPath = path.join(dir, item);
-        const stat = fs.statSync(fullPath);
-        
-        if (stat.isDirectory()) {
-          files.push(...this.getBddFiles(fullPath));
-        } else if (item.endsWith('.bdd') || item.endsWith('.scenario')) {
-          files.push(fullPath);
-        }
+      // Write back only if content was modified
+      if (modified) {
+        fs.writeFileSync(file, content);
+        console.log(`Fixed syntax errors in: ${file}`);
       }
     } catch (error) {
-      console.error(`Error reading directory ${dir}:`, error);
+      console.error(`Error fixing syntax in ${file}:`, error);
     }
-    
-    return files;
-  }
-
-  /**
-   * Process a single QAF BDD file
-   */
-  private processBddFile(filePath: string, featuresDir: string, stepsDir: string): void {
-    try {
-      console.log(`Processing BDD file: ${filePath}`);
-      
-      // Read file content
-      const content = fs.readFileSync(filePath, 'utf8');
-      
-      // Extract scenarios
-      const scenarios = this.extractScenarios(content);
-      
-      if (scenarios.length === 0) {
-        console.log(`No scenarios found in ${filePath}`);
-        return;
-      }
-      
-      // Create feature file name from original file name
-      const baseName = path.basename(filePath, path.extname(filePath));
-      const featureFileName = `${baseName}.feature`;
-      const featureFilePath = path.join(featuresDir, featureFileName);
-      
-      // Generate Cucumber feature file
-      const featureContent = this.generateFeatureFile(baseName, scenarios);
-      fs.writeFileSync(featureFilePath, featureContent);
-      
-      // Generate step definition file
-      const stepDefFileName = `${baseName}.steps.ts`;
-      const stepDefFilePath = path.join(stepsDir, stepDefFileName);
-      
-      // Extract unique steps from all scenarios
-      const allSteps = scenarios.flatMap(scenario => scenario.steps);
-      const uniqueSteps = [...new Set(allSteps.map(step => step.text))].map(text => {
-        const step = allSteps.find(s => s.text === text);
-        return step!;
-      });
-      
-      const stepDefContent = this.generateStepDefinitionsFile(baseName, uniqueSteps);
-      fs.writeFileSync(stepDefFilePath, stepDefContent);
-      
-      this.filesProcessed++;
-      this.scenariosConverted += scenarios.length;
-      this.stepsConverted += uniqueSteps.length;
-      
-      console.log(`Generated: ${featureFilePath}`);
-      console.log(`Generated: ${stepDefFilePath}`);
-    } catch (error) {
-      console.error(`Error processing BDD file ${filePath}:`, error);
-    }
-  }
-
-  /**
-   * Extract scenarios from QAF BDD content
-   */
-  private extractScenarios(content: string): any[] {
-    const scenarios: any[] = [];
-    
-    // QAF scenario pattern
-    const scenarioMatches = [...content.matchAll(/SCENARIO\s*(?:=|:)\s*(?:'|")(.+?)(?:'|")/gi)];
-    
-    for (const scenarioMatch of scenarioMatches) {
-      const scenarioName = scenarioMatch[1];
-      const scenarioStartIndex = scenarioMatch.index!;
-      
-      // Find the end of the scenario (either next SCENARIO or end of file)
-      const nextScenarioMatch = content.indexOf('SCENARIO', scenarioStartIndex + 1);
-      const scenarioEndIndex = nextScenarioMatch > 0 ? nextScenarioMatch : content.length;
-      
-      // Extract scenario content
-      const scenarioContent = content.substring(scenarioStartIndex, scenarioEndIndex);
-      
-      // Extract steps
-      const steps: any[] = [];
-      const stepMatches = [...scenarioContent.matchAll(/(GIVEN|WHEN|THEN|AND)\s*(?:=|:)\s*(?:'|")(.+?)(?:'|")/gi)];
-      
-      for (const stepMatch of stepMatches) {
-        const stepType = stepMatch[1].toLowerCase();
-        const stepText = stepMatch[2];
-        
-        steps.push({
-          type: stepType,
-          text: stepText
-        });
-      }
-      
-      scenarios.push({
-        name: scenarioName,
-        steps: steps
-      });
-    }
-    
-    return scenarios;
-  }
-
-  /**
-   * Generate a Cucumber feature file
-   */
-  private generateFeatureFile(featureName: string, scenarios: any[]): string {
-    // Format feature name with spaces
-    const formattedFeatureName = featureName
-      .replace(/([A-Z])/g, ' $1')
-      .replace(/^./, str => str.toUpperCase())
-      .trim();
-    
-    let content = `Feature: ${formattedFeatureName}\n\n`;
-    
-    // Add scenarios
-    for (const scenario of scenarios) {
-      content += `  Scenario: ${scenario.name}\n`;
-      
-      // Add steps
-      for (const step of scenario.steps) {
-        const stepType = step.type.charAt(0).toUpperCase() + step.type.slice(1).toLowerCase();
-        content += `    ${stepType} ${step.text}\n`;
-      }
-      
-      content += '\n';
-    }
-    
-    return content;
-  }
-
-  /**
-   * Generate step definitions file for Cucumber
-   */
-  private generateStepDefinitionsFile(featureName: string, steps: any[]): string {
-    let content = `import { Given, When, Then, Before } from '@cucumber/cucumber';\nimport { expect } from '@playwright/test';\n\n`;
-    
-    // Add imports for page objects
-    const pageObjectName = featureName.replace(/Test$/, '');
-    content += `// Import page objects\nimport { ${pageObjectName} } from '../pages/${pageObjectName.toLowerCase()}';\n\n`;
-    
-    // Add page object initialization
-    content += `// Initialize page objects\nlet ${pageObjectName.toLowerCase()}: ${pageObjectName};\n\n`;
-    
-    // Add Before hook
-    content += `// Hook to initialize page objects\nBefore(async function({ page }) {\n`;
-    content += `  ${pageObjectName.toLowerCase()} = new ${pageObjectName}(page);\n});\n\n`;
-    
-    // Add step definitions
-    for (const step of steps) {
-      const stepType = step.type.charAt(0).toUpperCase() + step.type.slice(1).toLowerCase();
-      const stepText = step.text;
-      
-      // Convert step text to a regex-safe string
-      const regexSafeText = stepText
-        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/'([^']+)'/g, "'([^']+)'");  // Replace quoted parameters with capture groups
-      
-      // Extract parameters from the step text
-      const params = [...stepText.matchAll(/'([^']+)'/g)].map(match => match[1]);
-      
-      // Generate parameter list
-      const paramList = params.map((_, i) => `param${i + 1}`).join(', ');
-      
-      // Add the step definition
-      content += `${stepType}('${regexSafeText}', async function(${paramList ? paramList : ''}) {\n`;
-      content += `  // TODO: Implement this step\n`;
-      
-      if (params.length > 0) {
-        content += `  // Parameters: ${params.join(', ')}\n`;
-      }
-      
-      content += `  await ${pageObjectName.toLowerCase()}.page.waitForTimeout(100);\n`;
-      content += `});\n\n`;
-    }
-    
-    return content;
-  }
-
-  /**
-   * Generate step definitions from Java classes with @QAFTestStep annotations
-   */
-  private generateStepDefinitions(inputDir: string, stepsDir: string): void {
-    try {
-      // Find Java files with @QAFTestStep annotations
-      const javaFiles = this.getJavaFiles(inputDir);
-      
-      for (const file of javaFiles) {
-        const content = fs.readFileSync(file, 'utf8');
-        
-        // Check if the file contains @QAFTestStep annotations
-        if (content.includes('@QAFTestStep')) {
-          this.processStepDefinitionFile(file, content, stepsDir);
-        }
-      }
-    } catch (error) {
-      console.error(`Error generating step definitions:`, error);
-    }
-  }
-
-  /**
-   * Find all Java files in a directory
-   */
-  private getJavaFiles(dir: string): string[] {
-    const files: string[] = [];
-    
-    try {
-      const items = fs.readdirSync(dir);
-      
-      for (const item of items) {
-        const fullPath = path.join(dir, item);
-        const stat = fs.statSync(fullPath);
-        
-        if (stat.isDirectory()) {
-          files.push(...this.getJavaFiles(fullPath));
-        } else if (item.endsWith('.java')) {
-          files.push(fullPath);
-        }
-      }
-    } catch (error) {
-      console.error(`Error reading directory ${dir}:`, error);
-    }
-    
-    return files;
-  }
-
-  /**
-   * Process a Java file containing @QAFTestStep annotations
-   */
-  private processStepDefinitionFile(filePath: string, content: string, stepsDir: string): void {
-    try {
-      console.log(`Processing step definitions from: ${filePath}`);
-      
-      // Extract class name
-      const classMatch = content.match(/public\s+class\s+(\w+)/);
-      if (!classMatch) {
-        console.log(`Could not determine class name in ${filePath}`);
-        return;
-      }
-      
-      const className = classMatch[1];
-      
-      // Extract @QAFTestStep methods
-      const stepMethods: any[] = [];
-      const stepMatches = [...content.matchAll(/@QAFTestStep\s*\(\s*(?:description\s*=\s*|injectableProcessor\s*=\s*(?:.*?),\s*description\s*=\s*)"([^"]*)"/g)];
-      
-      for (const stepMatch of stepMatches) {
-        const stepDescription = stepMatch[1];
-        const methodStart = content.indexOf('public void', stepMatch.index!);
-        
-        if (methodStart > 0) {
-          // Extract method name and params
-          const methodMatch = content.substring(methodStart).match(/public\s+void\s+(\w+)\s*\(([^)]*)\)/);
-          
-          if (methodMatch) {
-            const methodName = methodMatch[1];
-            const methodParams = methodMatch[2];
-            
-            stepMethods.push({
-              description: stepDescription,
-              methodName,
-              params: methodParams
-            });
-          }
-        }
-      }
-      
-      if (stepMethods.length === 0) {
-        console.log(`No step methods found in ${filePath}`);
-        return;
-      }
-      
-      // Generate step definition file
-      const stepDefFileName = `${className}.steps.ts`;
-      const stepDefFilePath = path.join(stepsDir, stepDefFileName);
-      
-      const stepDefContent = this.generateStepDefinitionsFromMethods(className, stepMethods);
-      fs.writeFileSync(stepDefFilePath, stepDefContent);
-      
-      this.stepsConverted += stepMethods.length;
-      
-      console.log(`Generated: ${stepDefFilePath}`);
-    } catch (error) {
-      console.error(`Error processing step definition file ${filePath}:`, error);
-    }
-  }
-
-  /**
-   * Generate step definitions from @QAFTestStep methods
-   */
-  private generateStepDefinitionsFromMethods(className: string, stepMethods: any[]): string {
-    let content = `import { Given, When, Then, Before } from '@cucumber/cucumber';\nimport { expect } from '@playwright/test';\n\n`;
-    
-    // Add imports for page objects
-    content += `// Import page objects\nimport { ${className} } from '../pages/${className.toLowerCase()}';\n\n`;
-    
-    // Add page object initialization
-    content += `// Initialize page objects\nlet ${className.toLowerCase()}: ${className};\n\n`;
-    
-    // Add Before hook
-    content += `// Hook to initialize page objects\nBefore(async function({ page }) {\n`;
-    content += `  ${className.toLowerCase()} = new ${className}(page);\n});\n\n`;
-    
-    // Add step definitions
-    for (const method of stepMethods) {
-      const description = method.description;
-      
-      // Determine step type (Given/When/Then) based on description
-      let stepType = 'Given';
-      if (description.toLowerCase().startsWith('when')) {
-        stepType = 'When';
-      } else if (description.toLowerCase().startsWith('then')) {
-        stepType = 'Then';
-      }
-      
-      // Convert step description to a regex-safe string
-      const regexSafeText = description
-        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        .replace(/'([^']+)'/g, "'([^']+)'");  // Replace quoted parameters with capture groups
-      
-      // Extract parameters from method
-      const params = method.params.split(',').filter((p: string) => p.trim());
-      const paramNames = params.map((param: string) => {
-        const parts = param.trim().split(/\s+/);
-        return parts[parts.length - 1];
-      });
-      
-      // Generate parameter list
-      const paramList = paramNames.join(', ');
-      
-      // Add the step definition
-      content += `${stepType}('${regexSafeText}', async function(${paramList}) {\n`;
-      content += `  // Call the page object method\n`;
-      content += `  await ${className.toLowerCase()}.${method.methodName}(${paramList});\n`;
-      content += `});\n\n`;
-    }
-    
-    return content;
   }
 }
 
-export default QafToCucumberAdapter;
+/**
+ * Fix unclosed quotes in locator strings
+ */
+function fixUnclosedQuotes(content: string): string {
+  // Regex to find JSON-like locator strings with unclosed quotes
+  const regex = /\{\s*"locator"\s*:\s*"([^"]*?)\+\s*([^)]+)\s*\+\s*"([^"]*?)"\s*,\s*"desc"\s*:\s*"([^"]*?)"\s*\}/g;
+  
+  return content.replace(regex, (match, prefix, variable, suffix, desc) => {
+    return `{"locator":"${prefix}"+${variable}+"${suffix}","desc":"${desc}"}`;
+  });
+}
+
+/**
+ * Fix missing semicolons in statements
+ */
+function fixMissingSemicolons(content: string): string {
+  const lines = content.split('\n');
+  const result: string[] = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    
+    // Check if the line might be missing a semicolon
+    if (line && !line.endsWith(';') && !line.endsWith('{') && !line.endsWith('}') && !line.startsWith('//') 
+        && !line.startsWith('/*') && !line.startsWith('*') && !line.startsWith('@') 
+        && !line.startsWith('import ') && !line.startsWith('package ')) {
+      
+      // Check if it's an assignment, method call, or variable declaration
+      if (line.includes('=') || line.includes('.') || line.match(/\b\w+\s+\w+\b/)) {
+        result.push(lines[i] + ';');
+        continue;
+      }
+    }
+    
+    result.push(lines[i]);
+  }
+  
+  return result.join('\n');
+}
+
+/**
+ * Get all Java files in a directory and its subdirectories
+ */
+function getAllJavaFiles(dir: string): string[] {
+  const files: string[] = [];
+  
+  try {
+    const items = fs.readdirSync(dir);
+    
+    for (const item of items) {
+      const fullPath = path.join(dir, item);
+      const stat = fs.statSync(fullPath);
+      
+      if (stat.isDirectory()) {
+        files.push(...getAllJavaFiles(fullPath));
+      } else if (item.endsWith('.java')) {
+        files.push(fullPath);
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading directory ${dir}:`, error);
+  }
+  
+  return files;
+}
+
+// Run the program
+program.parse();
