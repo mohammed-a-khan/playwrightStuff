@@ -17,14 +17,7 @@ function generateTypeScriptOutput(
   output += `import { Logger } from '../utils/logger';\n`;
   output += `import config from '@config/environment.config';\n\n`;
   
-  // Add helper interface for dropdown interaction
-  output += `// Helper interface for dropdown functionality\n`;
-  output += `interface DropdownOptions {\n`;
-  output += `  selectByText: (text: string) => Promise<void>;\n`;
-  output += `  selectByValue: (value: string) => Promise<void>;\n`;
-  output += `  selectByIndex: (index: number) => Promise<void>;\n`;
-  output += `  getOptions: () => Promise<string[]>;\n`;
-  output += `}\n\n`;
+  // No helper interface - removed as requested
   
   // Start class definition with BasePage extension
   output += `export class ${className} extends BasePage {\n`;
@@ -80,7 +73,7 @@ function generateTypeScriptOutput(
       
       if (element.isList) {
         // For List<WebElement> types, create a method that returns an array of Locators
-        output += `  get ${capitalizedName}() {\n`;
+        output += `  get${capitalizedName}() {\n`;
         output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
         
@@ -111,7 +104,7 @@ function generateTypeScriptOutput(
       
       if (element.isList) {
         // For list of dropdown elements
-        output += `  get ${capitalizedName}() {\n`;
+        output += `  get${capitalizedName}() {\n`;
         output += `    const baseLocator = this.page.locator(this.${element.name});\n`;
         output += `    \n`;
         output += `    // Add dropdown specific functionality\n`;
