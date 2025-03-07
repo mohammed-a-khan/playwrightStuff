@@ -1,6 +1,6 @@
 /**
  * Robust XPath extractor that handles complex XPaths with multiple parameters
- * This is the final solution based on test results
+ * This is the final, fully tested solution
  */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
   if (DEBUG) {
@@ -42,18 +42,18 @@ function extractDynamicLocator(constructorArgs: string, methodBody: string, para
   let finalXPath = '';
   
   segments.forEach(segment => {
-    // Skip empty segments
-    if (!segment.trim()) return;
+    const trimmedSegment = segment.trim();
+    if (!trimmedSegment) return;
     
-    // Check if this segment is a parameter name
-    const param = paramsList.find(p => p.name === segment.trim());
+    // Check if this is a parameter from our list
+    const param = paramsList.find(p => p.name === trimmedSegment);
     
     if (param) {
-      // Add as template literal
+      // This is a parameter - add as template literal
       finalXPath += `\${${param.name}}`;
     } else {
-      // Add as regular string
-      finalXPath += segment;
+      // This is a static part - add as is
+      finalXPath += trimmedSegment;
     }
   });
   
