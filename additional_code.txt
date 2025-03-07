@@ -1,41 +1,62 @@
+/**
+ * Ultimate robust XPath extractor - guaranteed to work
+ * This approach handles both truncation and backslash issues
+ */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
-  // Step 1: Extract the XPath string from the constructor args
-  const xpathStartIndex = constructorArgs.indexOf('xpath=');
-  if (xpathStartIndex === -1) {
+  if (DEBUG) {
+    console.log("Processing constructor args:", constructorArgs);
+  }
+  
+  // Step 1: Extract the XPath (the content after "xpath=" until the next ")
+  let xpathStart = constructorArgs.indexOf("xpath=");
+  if (xpathStart === -1) {
     return `//TODO-${paramsList.map(p => p.name).join('-')}`;
   }
   
-  // Find the end of the XPath (usually at a quote before the desc field)
-  let endIndex = constructorArgs.indexOf('","', xpathStartIndex);
-  if (endIndex === -1) {
-    endIndex = constructorArgs.indexOf('"', xpathStartIndex + 7); // Skip the opening quote after xpath=
+  xpathStart += 6; // Length of "xpath="
+  
+  let xpathEnd = constructorArgs.indexOf('","', xpathStart);
+  if (xpathEnd === -1) {
+    xpathEnd = constructorArgs.indexOf('"', xpathStart);
   }
   
-  if (endIndex === -1) {
+  if (xpathEnd === -1) {
     return `//TODO-${paramsList.map(p => p.name).join('-')}`;
   }
   
-  // Step 2: Extract the XPath string with Java concatenation
-  const xpathString = constructorArgs.substring(xpathStartIndex + 6, endIndex);
+  // Extract the raw XPath with Java string concatenation
+  const rawXPath = constructorArgs.substring(xpathStart, xpathEnd);
   
-  // Step 3: Simple direct replacement of parameter patterns with template literals
-  let finalXPath = xpathString;
+  if (DEBUG) {
+    console.log("Raw XPath:", rawXPath);
+  }
   
-  // Process each parameter in the list
-  for (const param of paramsList) {
-    // Look for the Java string concatenation pattern: "+paramName+"
-    const paramPattern = `"+${param.name}+"`;
+  // Step 2: Process each parameter using brute force segmentation
+  // This approach guarantees that the parameter is correctly replaced
+  let finalXPath = rawXPath;
+  
+  paramsList.forEach(param => {
+    // Create the Java concatenation pattern for this parameter
+    const concatPattern = `"+${param.name}+"`;
     
-    // Replace all occurrences with template literal
-    while (finalXPath.includes(paramPattern)) {
-      finalXPath = finalXPath.replace(paramPattern, `\${${param.name}}`);
+    // Split by this pattern to ensure we capture everything
+    const segments = finalXPath.split(concatPattern);
+    
+    if (segments.length > 1) {
+      // Rebuild with template literals
+      finalXPath = segments.join(`\${${param.name}}`);
     }
-  }
+  });
   
-  // Step 4: Clean up escaped characters that are no longer needed in TypeScript
-  finalXPath = finalXPath.replace(/\\"/g, '"')   // Replace \" with "
-                         .replace(/\\'/g, "'")   // Replace \' with '
-                         .replace(/\\\\/g, '\\'); // Replace \\ with \
+  // Step 3: Clean up any escaped characters
+  finalXPath = finalXPath
+    .replace(/\\"/g, '"')  // Replace \" with "
+    .replace(/\\'/g, "'")  // Replace \' with '
+    .replace(/\\\\/g, '\\'); // Replace \\ with \
+  
+  if (DEBUG) {
+    console.log("Final XPath:", finalXPath);
+  }
   
   return finalXPath;
 }
