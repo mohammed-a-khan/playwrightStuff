@@ -1,12 +1,4 @@
-/**
- * Robust XPath extractor with direct pattern replacement
- * This approach handles parameter substitution and cleans up escaped characters
- */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
-  if (DEBUG) {
-    console.log("Processing constructor args:", constructorArgs);
-  }
-  
   // Step 1: Extract the XPath string from the constructor args
   const xpathStartIndex = constructorArgs.indexOf('xpath=');
   if (xpathStartIndex === -1) {
@@ -26,10 +18,6 @@ function extractDynamicLocator(constructorArgs: string, methodBody: string, para
   // Step 2: Extract the XPath string with Java concatenation
   const xpathString = constructorArgs.substring(xpathStartIndex + 6, endIndex);
   
-  if (DEBUG) {
-    console.log("Raw XPath with Java concatenation:", xpathString);
-  }
-  
   // Step 3: Simple direct replacement of parameter patterns with template literals
   let finalXPath = xpathString;
   
@@ -48,10 +36,6 @@ function extractDynamicLocator(constructorArgs: string, methodBody: string, para
   finalXPath = finalXPath.replace(/\\"/g, '"')   // Replace \" with "
                          .replace(/\\'/g, "'")   // Replace \' with '
                          .replace(/\\\\/g, '\\'); // Replace \\ with \
-  
-  if (DEBUG) {
-    console.log("Final XPath with template literals:", finalXPath);
-  }
   
   return finalXPath;
 }
