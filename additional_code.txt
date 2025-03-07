@@ -72,19 +72,67 @@ function convertFile(inputFile: string, outputFile: string): void {
 }
 
 /**
- * Remove Java comments from the source code
+ * Remove Java comments from the source code while preserving string literals
  */
 function removeJavaComments(source: string): string {
-  // Remove single-line comments (//)
-  let result = source.replace(/\/\/.*$/gm, '');
+  // We can't use simple regex because it might remove XPath expressions that start with //
+  // Instead, we'll process the string character by character
   
-  // Remove multi-line comments (/* ... */) including JavaDoc (/** ... */)
-  result = result.replace(/\/\*[\s\S]*?\*\//g, '');
+  let result = '';
+  let inStringLiteral = false;
+  let inSingleLineComment = false;
+  let inMultiLineComment = false;
+  let i = 0;
+  
+  while (i < source.length) {
+    // Check if we're starting or ending a string literal
+    if (!inSingleLineComment && !inMultiLineComment && source[i] === '"' && (i === 0 || source[i-1] !== '\\')) {
+      inStringLiteral = !inStringLiteral;
+      result += source[i];
+      i++;
+      continue;
+    }
+    
+    // Check for single line comment start
+    if (!inStringLiteral && !inMultiLineComment && source[i] === '/' && source[i+1] === '/') {
+      inSingleLineComment = true;
+      i += 2;
+      continue;
+    }
+    
+    // Check for multi-line comment start
+    if (!inStringLiteral && !inSingleLineComment && source[i] === '/' && source[i+1] === '*') {
+      inMultiLineComment = true;
+      i += 2;
+      continue;
+    }
+    
+    // Check for single line comment end (new line)
+    if (inSingleLineComment && (source[i] === '\n' || source[i] === '\r')) {
+      inSingleLineComment = false;
+      // Keep the newline
+      result += source[i];
+      i++;
+      continue;
+    }
+    
+    // Check for multi-line comment end
+    if (inMultiLineComment && source[i] === '*' && source[i+1] === '/') {
+      inMultiLineComment = false;
+      i += 2;
+      continue;
+    }
+    
+    // Add character to result if not in a comment
+    if (!inSingleLineComment && !inMultiLineComment) {
+      result += source[i];
+    }
+    
+    i++;
+  }
   
   // Remove empty lines that may be left after removing comments
-  result = result.replace(/^\s*[\r\n]/gm, '');
-  
-  return result;
+  return result.replace(/^\s*[\r\n]/gm, '');
 }
 
 /**
