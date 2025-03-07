@@ -1,13 +1,13 @@
 /**
- * Robust XPath extractor that handles complex XPaths with multiple parameters
- * This is the final, fully tested solution
+ * Robust XPath extractor with direct pattern replacement
+ * This approach handles parameter substitution and cleans up escaped characters
  */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
   if (DEBUG) {
     console.log("Processing constructor args:", constructorArgs);
   }
   
-  // Extract the XPath string from the constructor args
+  // Step 1: Extract the XPath string from the constructor args
   const xpathStartIndex = constructorArgs.indexOf('xpath=');
   if (xpathStartIndex === -1) {
     return `//TODO-${paramsList.map(p => p.name).join('-')}`;
@@ -23,42 +23,34 @@ function extractDynamicLocator(constructorArgs: string, methodBody: string, para
     return `//TODO-${paramsList.map(p => p.name).join('-')}`;
   }
   
-  // Extract the XPath string with Java concatenation
+  // Step 2: Extract the XPath string with Java concatenation
   const xpathString = constructorArgs.substring(xpathStartIndex + 6, endIndex);
   
   if (DEBUG) {
-    console.log("XPath string with concatenation:", xpathString);
+    console.log("Raw XPath with Java concatenation:", xpathString);
   }
   
-  // Split the XPath string on Java concatenation markers
-  // This pattern matches both "+paramName+" and variations with whitespace
-  const segments = xpathString.split(/"\s*\+\s*|\s*\+\s*"/);
+  // Step 3: Simple direct replacement of parameter patterns with template literals
+  let finalXPath = xpathString;
   
-  if (DEBUG) {
-    console.log("Split segments:", segments);
-  }
-  
-  // Rebuild the XPath with template literals
-  let finalXPath = '';
-  
-  segments.forEach(segment => {
-    const trimmedSegment = segment.trim();
-    if (!trimmedSegment) return;
+  // Process each parameter in the list
+  for (const param of paramsList) {
+    // Look for the Java string concatenation pattern: "+paramName+"
+    const paramPattern = `"+${param.name}+"`;
     
-    // Check if this is a parameter from our list
-    const param = paramsList.find(p => p.name === trimmedSegment);
-    
-    if (param) {
-      // This is a parameter - add as template literal
-      finalXPath += `\${${param.name}}`;
-    } else {
-      // This is a static part - add as is
-      finalXPath += trimmedSegment;
+    // Replace all occurrences with template literal
+    while (finalXPath.includes(paramPattern)) {
+      finalXPath = finalXPath.replace(paramPattern, `\${${param.name}}`);
     }
-  });
+  }
+  
+  // Step 4: Clean up escaped characters that are no longer needed in TypeScript
+  finalXPath = finalXPath.replace(/\\"/g, '"')   // Replace \" with "
+                         .replace(/\\'/g, "'")   // Replace \' with '
+                         .replace(/\\\\/g, '\\'); // Replace \\ with \
   
   if (DEBUG) {
-    console.log("Final XPath:", finalXPath);
+    console.log("Final XPath with template literals:", finalXPath);
   }
   
   return finalXPath;
