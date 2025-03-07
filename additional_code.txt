@@ -1,349 +1,238 @@
 /**
- * Extract dynamic locator from constructor args
- * This improved version better handles complex XPaths with multiple parameters
+ * Pure algorithmic XPath extractor - no hardcoded examples
  */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
   if (DEBUG) {
     console.log("Processing constructor args:", constructorArgs);
+    console.log("Parameters:", paramsList.map(p => `${p.type} ${p.name}`).join(", "));
   }
   
-  // First, clean up the constructor args to make it easier to parse
-  const cleanConstructorArgs = constructorArgs
-    .replace(/\\"/g, '"')  // Replace escaped quotes
-    .replace(/\s+/g, ' '); // Normalize whitespace
-  
-  // Extract the raw XPath from the locator
-  const rawXPath = extractRawXPath(cleanConstructorArgs);
+  // Step 1: Extract the raw XPath from the constructor arguments
+  const rawXPath = extractRawXPathFromJSON(constructorArgs);
   
   if (!rawXPath) {
     return `//TODO-${paramsList.map(p => p.name).join('-')}`;
   }
   
   if (DEBUG) {
-    console.log("Raw XPath extracted:", rawXPath);
+    console.log("Raw XPath:", rawXPath);
   }
   
-  // Now substitute parameters
-  let processedXPath = rawXPath;
+  // Step 2: Analyze the constructor args to find parameter usage patterns
+  const paramPatterns = analyzeParameterUsage(constructorArgs, paramsList);
   
-  // Handle numeric parameters first - specifically look for position() expressions
-  for (const param of paramsList) {
-    if (param.type === 'int' || param.type === 'Integer' || param.type === 'number') {
-      // Check if this parameter is used in a position() expression
-      if (constructorArgs.includes(`position()="+${param.name}+"`)) {
-        // Look for position()= followed by a number
-        const positionRegex = /position\(\)\s*=\s*(\d+)/g;
-        const matches = Array.from(processedXPath.matchAll(positionRegex));
-        
-        // Replace the first match that hasn't been replaced yet
-        if (matches.length > 0) {
-          const match = matches[0];
-          processedXPath = processedXPath.replace(
-            match[0], 
-            `position()=\${${param.name}}`
-          );
-        }
-      }
-    }
+  if (DEBUG) {
+    console.log("Parameter usage patterns:", paramPatterns);
   }
   
-  // Handle string parameters
-  for (const param of paramsList) {
-    if (param.type === 'String' || param.type === 'string') {
-      // Check for text() usage
-      if (constructorArgs.includes(`text()='"+${param.name}+"'`)) {
-        processedXPath = processedXPath.replace(
-          /text\(\)\s*=\s*'([^']*)'/,
-          `text()='\${${param.name}}'`
-        );
-      }
-      
-      // Check for contains(@class, ...) usage - more careful to preserve the class name
-      if (constructorArgs.includes(`contains(@class, '`) && constructorArgs.includes(`+${param.name}+`)) {
-        // This is more complex - we normally wouldn't want to replace this
-        // But we'll check the specific pattern in the constructor args
-      }
-    }
-  }
+  // Step 3: Apply the patterns to substitute parameters in the XPath
+  const processedXPath = substituteParametersInXPath(rawXPath, paramPatterns);
   
-  // Remove any unexpected portions from the XPath (like desc sections)
-  processedXPath = cleanupXPath(processedXPath);
+  if (DEBUG) {
+    console.log("Processed XPath:", processedXPath);
+  }
   
   return processedXPath;
 }
 
 /**
- * Extract the raw XPath from constructor args
+ * Extract the raw XPath from JSON in constructor args
  */
-function extractRawXPath(constructorArgs: string): string | null {
-  // Try to match the XPath pattern directly
-  const xpathMatch = constructorArgs.match(/"locator"\s*:\s*"xpath=([^"]+)"/);
-  if (xpathMatch && xpathMatch[1]) {
-    return xpathMatch[1];
+function extractRawXPathFromJSON(constructorArgs: string): string | null {
+  // First try to handle the standard JSON format with "locator":"xpath=..."
+  const jsonXPathMatch = constructorArgs.match(/"locator"\s*:\s*"xpath=([^"]+)"/);
+  if (jsonXPathMatch && jsonXPathMatch[1]) {
+    return jsonXPathMatch[1];
   }
   
-  // If that fails, try a more manual approach
+  // Try escaped version
+  const escapedJsonXPathMatch = constructorArgs.match(/\\"locator\\"\\s*:\\s*\\"xpath=([^"]+)\\"/);
+  if (escapedJsonXPathMatch && escapedJsonXPathMatch[1]) {
+    return escapedJsonXPathMatch[1];
+  }
+  
+  // More general approach - just find the xpath= and extract until a closing quote or other terminator
   const xpathIndex = constructorArgs.indexOf('xpath=');
   if (xpathIndex >= 0) {
     let xpath = constructorArgs.substring(xpathIndex + 6); // 6 is length of 'xpath='
-    const endIndex = xpath.indexOf('","desc"');
-    if (endIndex >= 0) {
-      return xpath.substring(0, endIndex);
+    
+    // Look for terminators like a closing quote, comma, or the start of the desc field
+    const terminators = ['","', '",', '"}', '"'];
+    for (const terminator of terminators) {
+      const terminatorIndex = xpath.indexOf(terminator);
+      if (terminatorIndex >= 0) {
+        return xpath.substring(0, terminatorIndex);
+      }
     }
     
-    // If no desc, try looking for the next quote
-    const quoteIndex = xpath.indexOf('"');
-    if (quoteIndex >= 0) {
-      return xpath.substring(0, quoteIndex);
-    }
-    
+    // If we can't find a clear terminator, just return what we have
     return xpath;
   }
   
   return null;
 }
 
-/**
- * Clean up XPath by removing extra parts that shouldn't be in the XPath
- */
-function cleanupXPath(xpath: string): string {
-  // Remove any part after a closing quote + comma (usually the start of a desc section)
-  const descIndex = xpath.indexOf('","');
-  if (descIndex >= 0) {
-    return xpath.substring(0, descIndex);
-  }
-  
-  return xpath;
+interface ParameterUsagePattern {
+  param: MethodParam;
+  patternType: 'position' | 'text' | 'contains' | 'attribute' | 'unknown';
+  // The text immediately before the parameter reference
+  before: string;
+  // The text immediately after the parameter reference
+  after: string;
+  // The complete pattern string (including before, param, and after)
+  fullPattern: string;
 }
 
 /**
- * Specialized function to handle the specific examples you've provided
+ * Analyze the constructor args to determine how each parameter is used
  */
-function handleSpecificExamples(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string | null {
-  // For the UWTableSelectedRowCellInputAutoCompleteOptionElement example
-  if (constructorArgs.includes("childrow") && 
-      constructorArgs.includes("autocomplete") &&
-      constructorArgs.includes("position()="+colNumber+") && 
-      constructorArgs.includes("text()='"+strContent+"'")) {
-    
-    // Map the parameters to their correct positions
-    const rowParam = paramsList.find(p => p.name === "rowNumber");
-    const colParam = paramsList.find(p => p.name === "colNumber");
-    const strCellNameParam = paramsList.find(p => p.name === "strCellName");
-    const strContentParam = paramsList.find(p => p.name === "strContent");
-    
-    if (rowParam && colParam && strContentParam) {
-      return `//table//tbody/tr[not(contains(@class, 'childrow'))][position()=\${${rowParam.name}}]/td[position()=\${${colParam.name}}]/div[contains(@class, 'cell-content')]//div[contains(@class, 'ctsjv-autocompleteballoon')]//span[text()='\${${strContentParam.name}}']/ancestor::li[position()=1]`;
-    }
-  }
-  
-  // Similar handling for the other example
-  // (add more cases if needed)
-  
-  return null;
-}
-
-/**
- * Simplified direct extractor for complex XPaths
- */
-function directExtractor(constructorArgs: string, paramsList: MethodParam[]): string | null {
-  // First, find the XPath portion
-  const xpathMatch = constructorArgs.match(/xpath=([^"]+)/);
-  if (!xpathMatch || !xpathMatch[1]) return null;
-  
-  let xpath = xpathMatch[1];
-  
-  // For each parameter, map its actual usage in the constructor args
-  // to the correct position in the XPath
+function analyzeParameterUsage(constructorArgs: string, paramsList: MethodParam[]): ParameterUsagePattern[] {
+  const patterns: ParameterUsagePattern[] = [];
   
   for (const param of paramsList) {
-    // For numeric parameters (usually used in position expressions)
-    if (param.type === 'int' || param.type === 'Integer') {
-      // Look for position()=X patterns and replace them
-      if (constructorArgs.includes(`position()="+${param.name}+"`)) {
-        // Find next position expression in the XPath
-        const posMatch = xpath.match(/position\(\)\s*=\s*\d+/);
-        if (posMatch) {
-          xpath = xpath.replace(posMatch[0], `position()=\${${param.name}}`);
-        }
-      }
-    }
+    // Look for the parameter name surrounded by + operators (Java string concatenation)
+    const paramRegex = new RegExp(`([^+]*)\\+\\s*${param.name}\\s*\\+([^+]*)`);
+    const match = constructorArgs.match(paramRegex);
     
-    // For string parameters (usually used in text or contains expressions)
-    if (param.type === 'String') {
-      // Look for text()='X' patterns and replace them
-      if (constructorArgs.includes(`text()='"+${param.name}+"'`)) {
-        // Find next text expression in the XPath
-        const textMatch = xpath.match(/text\(\)\s*=\s*'[^']*'/);
-        if (textMatch) {
-          xpath = xpath.replace(textMatch[0], `text()='\${${param.name}}'`);
-        }
+    if (match) {
+      const before = match[1].trim();
+      const after = match[2].trim();
+      const fullPattern = match[0];
+      
+      let patternType: 'position' | 'text' | 'contains' | 'attribute' | 'unknown' = 'unknown';
+      
+      // Determine the pattern type based on the surrounding text
+      if (before.includes('position()=')) {
+        patternType = 'position';
+      } else if (before.includes('text()=\'')) {
+        patternType = 'text';
+      } else if (before.includes('contains(')) {
+        patternType = 'contains';
+      } else if (before.includes('@')) {
+        patternType = 'attribute';
       }
+      
+      patterns.push({
+        param,
+        patternType,
+        before,
+        after,
+        fullPattern
+      });
     }
   }
   
-  // Clean up any trailing parts that might have been included
-  const endIndex = xpath.indexOf('",');
-  if (endIndex >= 0) {
-    xpath = xpath.substring(0, endIndex);
-  }
-  
-  return xpath;
+  return patterns;
 }
 
 /**
- * A completely new extractor based on direct string manipulation
- * This is a more reliable approach for complex XPaths
+ * Substitute parameters in the XPath based on their usage patterns
  */
-function extractXPathFromJSON(constructorArgs: string, paramsList: MethodParam[]): string {
-  // Find the XPath pattern
-  const xpathStartIndex = constructorArgs.indexOf('xpath=');
-  if (xpathStartIndex < 0) {
-    return `//TODO-${paramsList.map(p => p.name).join('-')}`;
-  }
-  
-  // Extract from after "xpath=" to the end of the XPath (usually at a quote)
-  let startPos = xpathStartIndex + 6; // 6 is the length of "xpath="
-  let endPos = constructorArgs.indexOf('","', startPos);
-  if (endPos < 0) endPos = constructorArgs.indexOf('"', startPos);
-  if (endPos < 0) endPos = constructorArgs.length;
-  
-  let rawXPath = constructorArgs.substring(startPos, endPos);
-  
-  // Now we need to find where each parameter is used in the constructor args
-  // and map it to the correct position in the raw XPath
-  
-  let resultXPath = rawXPath;
-  
-  // A map to track which parameters we've processed
+function substituteParametersInXPath(rawXPath: string, paramPatterns: ParameterUsagePattern[]): string {
+  let result = rawXPath;
   const processedParams = new Set<string>();
   
-  // Process numeric parameters first (used in position expressions)
-  for (const param of paramsList) {
-    if ((param.type === 'int' || param.type === 'Integer' || param.type === 'number') && 
-        !processedParams.has(param.name)) {
+  // Process patterns in a specific order to ensure correct substitution
+  // 1. Position patterns first (often sequential in the XPath)
+  // 2. Text patterns second (less ambiguity)
+  // 3. Contains patterns last (more complex)
+  
+  // Group patterns by type to process in order
+  const positionPatterns = paramPatterns.filter(p => p.patternType === 'position');
+  const textPatterns = paramPatterns.filter(p => p.patternType === 'text');
+  const containsPatterns = paramPatterns.filter(p => p.patternType === 'contains');
+  const attributePatterns = paramPatterns.filter(p => p.patternType === 'attribute');
+  const unknownPatterns = paramPatterns.filter(p => p.patternType === 'unknown');
+  
+  // Process position patterns (usually numeric parameters in position() expressions)
+  for (const pattern of positionPatterns) {
+    if (processedParams.has(pattern.param.name)) continue;
+    
+    // Look for position()=X in the XPath
+    // Position patterns usually involve integers, and the XPath contains position()=1, position()=2, etc.
+    const positionMatches = Array.from(result.matchAll(/position\(\)\s*=\s*(\d+)/g));
+    
+    if (positionMatches.length > 0) {
+      // Replace the first unprocessed position
+      const match = positionMatches[0];
+      result = result.replace(match[0], `position()=\${${pattern.param.name}}`);
+      processedParams.add(pattern.param.name);
+    }
+  }
+  
+  // Process text patterns (usually string parameters in text() expressions)
+  for (const pattern of textPatterns) {
+    if (processedParams.has(pattern.param.name)) continue;
+    
+    // Look for text()='X' in the XPath
+    const textMatches = Array.from(result.matchAll(/text\(\)\s*=\s*'([^']*)'/g));
+    
+    if (textMatches.length > 0) {
+      // Replace the first unprocessed text
+      const match = textMatches[0];
+      result = result.replace(match[0], `text()='\${${pattern.param.name}}'`);
+      processedParams.add(pattern.param.name);
+    }
+  }
+  
+  // Process contains patterns (more complex string parameters in contains() expressions)
+  for (const pattern of containsPatterns) {
+    if (processedParams.has(pattern.param.name)) continue;
+    
+    // Look for contains(@attr, 'X') in the XPath
+    // This is trickier because we need to preserve the attribute name
+    const containsMatches = Array.from(result.matchAll(/contains\(([^,]+),\s*'([^']*)'\)/g));
+    
+    if (containsMatches.length > 0) {
+      // Replace just the value part, keeping the attribute name intact
+      const match = containsMatches[0];
+      const attrName = match[1].trim();
+      const valueToReplace = `'${match[2]}'`;
       
-      // Check if this parameter is used in position()
-      const paramUsageIndex = constructorArgs.indexOf(`+${param.name}+`);
-      if (paramUsageIndex > 0) {
-        // Look back to find what XPath function is using this parameter
-        const beforeParam = constructorArgs.substring(0, paramUsageIndex);
-        
-        // Check for position() usage
-        if (beforeParam.lastIndexOf('position()=') > beforeParam.lastIndexOf('"')) {
-          // Find a position() expression in the XPath that hasn't been replaced yet
-          const posMatch = /position\(\)\s*=\s*\d+/g.exec(resultXPath);
-          if (posMatch && posMatch.index != null) {
-            // Replace just this occurrence with the parameter
-            const before = resultXPath.substring(0, posMatch.index);
-            const after = resultXPath.substring(posMatch.index + posMatch[0].length);
-            resultXPath = before + `position()=\${${param.name}}` + after;
-            processedParams.add(param.name);
-          }
-        }
-      }
-    }
-  }
-  
-  // Process string parameters (used in text() and contains())
-  for (const param of paramsList) {
-    if ((param.type === 'String' || param.type === 'string') && 
-        !processedParams.has(param.name)) {
+      // Construct the replacement while preserving the attribute name
+      const replacement = `contains(${attrName}, '\${${pattern.param.name}}')`;
       
-      // Check if this parameter is used in text()
-      const paramUsageIndex = constructorArgs.indexOf(`+${param.name}+`);
-      if (paramUsageIndex > 0) {
-        // Look back to find what XPath function is using this parameter
-        const beforeParam = constructorArgs.substring(0, paramUsageIndex);
-        
-        // Check for text() usage
-        if (beforeParam.lastIndexOf('text()=\'') > beforeParam.lastIndexOf('"')) {
-          // Find a text() expression in the XPath that hasn't been replaced yet
-          const textMatch = /text\(\)\s*=\s*'[^']*'/g.exec(resultXPath);
-          if (textMatch && textMatch.index != null) {
-            // Replace just this occurrence with the parameter
-            const before = resultXPath.substring(0, textMatch.index);
-            const after = resultXPath.substring(textMatch.index + textMatch[0].length);
-            resultXPath = before + `text()='\${${param.name}}'` + after;
-            processedParams.add(param.name);
-          }
-        }
-        
-        // Check for contains() usage (less reliable, so we do it second)
-        else if (beforeParam.lastIndexOf('contains(') > beforeParam.lastIndexOf('"')) {
-          // Find a contains expression in the XPath that hasn't been replaced
-          const containsMatch = /contains\([^,]+,\s*'[^']*'\)/g.exec(resultXPath);
-          if (containsMatch && containsMatch.index != null) {
-            // We need to be more careful here - only replace the value, not the attribute
-            const containsExpr = containsMatch[0];
-            const valueMatch = /'[^']*'/g.exec(containsExpr);
-            if (valueMatch) {
-              // Replace just the quoted value
-              const replacedContains = containsExpr.replace(
-                valueMatch[0], 
-                `'\${${param.name}}'`
-              );
-              
-              resultXPath = resultXPath.replace(containsExpr, replacedContains);
-              processedParams.add(param.name);
-            }
-          }
-        }
-      }
+      // Replace the full expression
+      result = result.replace(match[0], replacement);
+      processedParams.add(pattern.param.name);
     }
   }
   
-  return resultXPath;
-}
-
-/**
- * Enhanced method to extract dynamic locators
- * This is the main function you should use in your converter
- */
-function enhancedExtractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
-  if (DEBUG) {
-    console.log("Processing constructor args:", constructorArgs);
-    console.log("Parameters:", paramsList.map(p => `${p.type} ${p.name}`).join(", "));
-  }
-  
-  // For the UWTableSelectedRowCellInputAutoCompleteOptionElement case
-  if (constructorArgs.includes("UWTableSelectedRowCellInputAutoComplete") || 
-      (constructorArgs.includes("childrow") && 
-       constructorArgs.includes("position()") && 
-       constructorArgs.includes("autocomplete"))) {
+  // Process attribute patterns (less common, but sometimes used)
+  for (const pattern of attributePatterns) {
+    if (processedParams.has(pattern.param.name)) continue;
     
-    // Map the parameters properly - we know the pattern
-    const rowParam = paramsList.find(p => p.name === "rowNumber");
-    const colParam = paramsList.find(p => p.name === "colNumber");
-    const contentParam = paramsList.find(p => p.name === "strContent");
+    // Look for @attr='X' in the XPath
+    const attrMatches = Array.from(result.matchAll(/@([^=]+)\s*=\s*'([^']*)'/g));
     
-    if (rowParam && colParam && contentParam) {
-      return `//table//tbody/tr[not(contains(@class, 'childrow'))][position()=\${${rowParam.name}}]/td[position()=\${${colParam.name}}]/div[contains(@class, 'cell-content')]//div[contains(@class, 'ctsjv-autocompleteballoon')]//span[text()='\${${contentParam.name}}']/ancestor::li[position()=1]`;
+    if (attrMatches.length > 0) {
+      // Replace the first unprocessed attribute
+      const match = attrMatches[0];
+      const attrName = match[1].trim();
+      
+      // Construct the replacement preserving the attribute name
+      const replacement = `@${attrName}='\${${pattern.param.name}}'`;
+      
+      // Replace the full expression
+      result = result.replace(match[0], replacement);
+      processedParams.add(pattern.param.name);
     }
   }
   
-  // For the PopupTableRowRadioButtonLabel case
-  if (constructorArgs.includes("PopupTableRowRadioButtonLabel") ||
-      (constructorArgs.includes("ctsjv-panel__body") && 
-       constructorArgs.includes("position()") && 
-       constructorArgs.includes("radio-button__label"))) {
+  // Process unknown patterns (fallback for parameters with no clear pattern)
+  for (const pattern of unknownPatterns) {
+    if (processedParams.has(pattern.param.name)) continue;
     
-    // Map the parameters properly - we know the pattern
-    const rowParam = paramsList.find(p => p.name === "rowNumber");
-    const colParam = paramsList.find(p => p.name === "columnNumber");
+    // For unknown patterns, we'll look for string literals that might be replaced
+    const stringLiterals = Array.from(result.matchAll(/'([^']*)'/g));
     
-    if (rowParam && colParam) {
-      return `//div[@class='ctsjv-modal']//div[@class='ctsjv-panel__body']//table//tbody//tr[position()=\${${rowParam.name}}]/td[position()=\${${colParam.name}}]//label[contains(@class, 'ctsjv-radio-button__label')]/parent::div`;
+    if (stringLiterals.length > 0) {
+      // Replace the first unprocessed string literal
+      const match = stringLiterals[0];
+      result = result.replace(match[0], `'\${${pattern.param.name}}'`);
+      processedParams.add(pattern.param.name);
     }
   }
   
-  // Try the more general approach
-  try {
-    return extractXPathFromJSON(constructorArgs, paramsList);
-  } catch (e) {
-    if (DEBUG) {
-      console.error("Error in XPath extraction:", e);
-    }
-    return `//TODO-${paramsList.map(p => p.name).join('-')}`;
-  }
+  return result;
 }
