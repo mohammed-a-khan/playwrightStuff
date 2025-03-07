@@ -15,20 +15,58 @@ function convertFile(inputFile: string, outputFile: string): void {
     }
     
     const content = fs.readFileSync(inputFile, 'utf8');
+    debugLog(`File content length: ${content.length} characters`);
     
     // Extract class and package information
     const packageInfo = extractPackageInfo(content);
+    debugLog(`Package info: ${packageInfo || 'Not found'}`);
+    
     const className = extractClassName(content) || path.basename(inputFile, '.java');
+    debugLog(`Class name: ${className}`);
     
     // Process elements by type
+    console.log('Extracting standard elements...');
     const standardElements = extractAndConvertElements(content, 'CSWebElement');
+    debugLog(`Found ${standardElements.length} standard elements`);
+    
+    console.log('Extracting dropdown elements...');
     const dropdownElements = extractAndConvertElements(content, 'CSDropDownListWebElement');
+    debugLog(`Found ${dropdownElements.length} dropdown elements`);
     
     // Process dynamic locator methods by return type
+    console.log('Extracting standard methods...');
     const standardMethods = extractAndConvertMethods(content, 'CSWebElement');
+    debugLog(`Found ${standardMethods.length} standard methods`);
+    
+    console.log('Extracting dropdown methods...');
     const dropdownMethods = extractAndConvertMethods(content, 'CSDropDownListWebElement');
+    debugLog(`Found ${dropdownMethods.length} dropdown methods`);
+    
+    // Detailed debug output for each element and method if in debug mode
+    if (DEBUG) {
+      debugLog('Standard Elements:');
+      standardElements.forEach((el, idx) => {
+        debugLog(`${idx + 1}. ${el.originalName} => ${el.locator}`);
+      });
+      
+      debugLog('Dropdown Elements:');
+      dropdownElements.forEach((el, idx) => {
+        debugLog(`${idx + 1}. ${el.originalName} => ${el.locator}`);
+      });
+      
+      debugLog('Standard Methods:');
+      standardMethods.forEach((method, idx) => {
+        debugLog(`${idx + 1}. ${method.name}(${method.params.map(p => p.type + ' ' + p.name).join(', ')}) => ${method.locator}`);
+      });
+      
+      debugLog('Dropdown Methods:');
+      dropdownMethods.forEach((method, idx) => {
+        debugLog(`${idx + 1}. ${method.name}(${method.params.map(p => p.type + ' ' + p.name).join(', ')}) => ${method.locator}`);
+      });
+    }
     
     // Generate the final TypeScript output
+    console.log('Generating TypeScript output...');
     const finalOutput = generateTypeScriptOutput(
       className, 
       packageInfo,
@@ -95,7 +133,12 @@ function extractAndConvertElements(content: string, elementType: string): Elemen
   while ((match = findByRegex.exec(content)) !== null) {
     const locatorStr = match[1];
     const elementName = match[2];
+    
+    debugLog(`\nFound ${elementType}: ${elementName}`);
+    debugLog(`Locator string: ${locatorStr}`);
+    
     const locatorValue = extractLocatorValue(locatorStr);
+    debugLog(`Extracted locator value: ${locatorValue}`);
     
     elementsList.push({
       name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
@@ -113,36 +156,83 @@ function extractAndConvertElements(content: string, elementType: string): Elemen
  */
 function extractLocatorValue(locatorStr: string): string {
   // Debug the input
-  console.log(`Extracting locator from: ${locatorStr.substring(0, 50)}...`);
+  debugLog(`Extracting locator from: ${locatorStr}`);
+  debugLog(`String starts with: "${locatorStr.substring(0, 10)}..."`);
+  
+  // Check for both escaped and unescaped versions of "locator"
+  const hasEscapedLocator = locatorStr.includes('\\"locator\\"');
+  const hasUnescapedLocator = locatorStr.includes('"locator"');
+  
+  debugLog(`String contains: escaped "locator": ${hasEscapedLocator} | unescaped "locator": ${hasUnescapedLocator}`);
   
   // Handle JSON format with {"locator":"xpath=..."}
-  if (locatorStr.includes('"locator"')) {
+  if (hasEscapedLocator || hasUnescapedLocator) {
+    debugLog('Found "locator" keyword in string (escaped or unescaped)');
     try {
       // Check if we need to parse a real JSON or just extract with regex
       let locatorObj;
       
-      // Try to parse as JSON if it looks like valid JSON
-      if ((locatorStr.startsWith('{') && locatorStr.endsWith('}')) || 
-          (locatorStr.startsWith('{"') && locatorStr.includes('}'))) {
-        // Fix JSON string by replacing escaped quotes
-        let fixedJson = locatorStr;
-        if (fixedJson.includes('\\"')) {
-          fixedJson = fixedJson.replace(/\\"/g, '"');
-        }
+      // Extract the locator value directly using regex - most reliable method
+      debugLog('Attempting direct regex extraction with both escaped and unescaped patterns');
+      
+      // Patterns for both escaped and unescaped formats
+      const escapedXpathPattern = /\\"locator\\"\\s*:\\s*\\"xpath=([^"]+)\\"/;
+      const escapedPathPattern = /\\"locator\\"\\s*:\\s*\\"path=([^"]+)\\"/;
+      const unescapedXpathPattern = /"locator"\s*:\s*"xpath=([^"]+)"/;
+      const unescapedPathPattern = /"locator"\s*:\s*"path=([^"]+)"/;
+      
+      // Try each pattern
+      let match = null;
+      let extractedLocator = null;
+      
+      // Check escaped xpath format
+      match = locatorStr.match(escapedXpathPattern);
+      if (match && match[1]) {
+        extractedLocator = match[1];
+        debugLog(`Found xpath from escaped pattern: ${extractedLocator}`);
+        return extractedLocator;
+      }
+      
+      // Check escaped path format
+      match = locatorStr.match(escapedPathPattern);
+      if (match && match[1]) {
+        extractedLocator = match[1];
+        debugLog(`Found path from escaped pattern: ${extractedLocator}`);
+        return extractedLocator;
+      }
+      
+      // Check unescaped xpath format
+      match = locatorStr.match(unescapedXpathPattern);
+      if (match && match[1]) {
+        extractedLocator = match[1];
+        debugLog(`Found xpath from unescaped pattern: ${extractedLocator}`);
+        return extractedLocator;
+      }
+      
+      // Check unescaped path format
+      match = locatorStr.match(unescapedPathPattern);
+      if (match && match[1]) {
+        extractedLocator = match[1];
+        debugLog(`Found path from unescaped pattern: ${extractedLocator}`);
+        return extractedLocator;
+      }
+        
+        debugLog(`Attempting to parse JSON: ${fixedJson}`);
         
         // Handle cases where there might be unescaped quotes inside the string
         try {
           locatorObj = JSON.parse(fixedJson);
+          debugLog('JSON parsed successfully:', locatorObj);
         } catch (parseError) {
           // If parsing fails, try to extract the main parts with regex
-          console.log(`JSON parsing failed, trying regex: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+          debugLog(`JSON parsing failed, trying regex: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
         }
       }
       
       // If we have a valid locator object from JSON parsing
       if (locatorObj && locatorObj.locator && typeof locatorObj.locator === 'string') {
         const locatorValue = locatorObj.locator;
-        console.log(`Found locator from JSON: ${locatorValue}`);
+        debugLog(`Found locator from JSON: ${locatorValue}`);
         
         // Remove prefix like xpath= or path=
         if (locatorValue.startsWith('xpath=')) {
@@ -154,10 +244,11 @@ function extractLocatorValue(locatorStr: string): string {
         }
       } else {
         // If JSON parsing failed or didn't yield expected results, try regex
+        debugLog('JSON parsing did not yield expected results, trying regex');
         const locatorMatch = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
         if (locatorMatch && locatorMatch[1]) {
           const fullLocator = locatorMatch[1];
-          console.log(`Found locator from regex: ${fullLocator}`);
+          debugLog(`Found locator from regex: ${fullLocator}`);
           
           if (fullLocator.startsWith('xpath=')) {
             return fullLocator.substring(6);
@@ -170,15 +261,19 @@ function extractLocatorValue(locatorStr: string): string {
       }
     } catch (e) {
       console.warn(`Error extracting JSON locator: ${e instanceof Error ? e.message : String(e)}`);
+      debugLog('Error details:', e);
       
       // Last resort: try simple regex for just the path
+      debugLog('Trying last resort regex patterns');
       const pathMatch = locatorStr.match(/path=([^"]+)/);
       if (pathMatch && pathMatch[1]) {
+        debugLog(`Found path match: ${pathMatch[1]}`);
         return pathMatch[1];
       }
       
       const xpathMatch = locatorStr.match(/xpath=([^"]+)/);
       if (xpathMatch && xpathMatch[1]) {
+        debugLog(`Found xpath match: ${xpathMatch[1]}`);
         return xpathMatch[1];
       }
     }
@@ -397,7 +492,7 @@ function generateTypeScriptOutput(
   if (standardElements.length > 0) {
     output += `  // Standard Element Locators\n`;
     standardElements.forEach(element => {
-      output += `  private readonly ${element.name} = "${element.locator}";\n`;
+      output += `  private readonly ${element.name} = \`${element.locator}\`;\n`;
     });
     output += `\n`;
   }
@@ -406,7 +501,7 @@ function generateTypeScriptOutput(
   if (dropdownElements.length > 0) {
     output += `  // Dropdown Element Locators\n`;
     dropdownElements.forEach(element => {
-      output += `  private readonly ${element.name} = "${element.locator}";\n`;
+      output += `  private readonly ${element.name} = \`${element.locator}\`;\n`;
     });
     output += `\n`;
   }
@@ -584,11 +679,33 @@ function mapJavaTypeToTypeScript(javaType: string): string {
   return typeMap[javaType] || 'any';
 }
 
+// Global debug flag
+let DEBUG = false;
+
+/**
+ * Debug logging function
+ */
+function debugLog(...args: any[]): void {
+  if (DEBUG) {
+    console.log('[DEBUG]', ...args);
+  }
+}
+
 // Process command line arguments
 if (require.main === module) {
   const args = process.argv.slice(2);
+  
+  // Check for debug flag
+  if (args.includes('--debug') || args.includes('-d')) {
+    DEBUG = true;
+    // Remove debug flag from args
+    const debugIndex = args.indexOf('--debug') !== -1 ? args.indexOf('--debug') : args.indexOf('-d');
+    args.splice(debugIndex, 1);
+    console.log('Running in DEBUG mode - verbose logging enabled');
+  }
+  
   if (args.length !== 2) {
-    console.log('Usage: node qaf-to-playwright-converter.js <input-file> <output-file>');
+    console.log('Usage: node qaf-to-playwright-converter.js [--debug|-d] <input-file> <output-file>');
     process.exit(1);
   }
   
