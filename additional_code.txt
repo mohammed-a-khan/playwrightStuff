@@ -27,19 +27,23 @@ function convertFile(inputFile: string, outputFile: string): void {
       process.exit(1);
     }
     
+    // Read the file content
     const content = fs.readFileSync(inputFile, 'utf8');
     
+    // Remove comments from the Java code
+    const contentWithoutComments = removeJavaComments(content);
+    
     // Extract class and package information
-    const packageInfo = extractPackageInfo(content);
-    const className = extractClassName(content) || path.basename(inputFile, '.java');
+    const packageInfo = extractPackageInfo(contentWithoutComments);
+    const className = extractClassName(contentWithoutComments) || path.basename(inputFile, '.java');
     
     // Process elements by type
-    const standardElements = extractAndConvertElements(content, 'CSWebElement');
-    const dropdownElements = extractAndConvertElements(content, 'CSDropDownListWebElement');
+    const standardElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
+    const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
     
     // Process dynamic locator methods by return type
-    const standardMethods = extractAndConvertMethods(content, 'CSWebElement');
-    const dropdownMethods = extractAndConvertMethods(content, 'CSDropDownListWebElement');
+    const standardMethods = extractAndConvertMethods(contentWithoutComments, 'CSWebElement');
+    const dropdownMethods = extractAndConvertMethods(contentWithoutComments, 'CSDropDownListWebElement');
     
     // Generate the final TypeScript output
     const finalOutput = generateTypeScriptOutput(
@@ -65,6 +69,22 @@ function convertFile(inputFile: string, outputFile: string): void {
       console.error(error.stack);
     }
   }
+}
+
+/**
+ * Remove Java comments from the source code
+ */
+function removeJavaComments(source: string): string {
+  // Remove single-line comments (//)
+  let result = source.replace(/\/\/.*$/gm, '');
+  
+  // Remove multi-line comments (/* ... */) including JavaDoc (/** ... */)
+  result = result.replace(/\/\*[\s\S]*?\*\//g, '');
+  
+  // Remove empty lines that may be left after removing comments
+  result = result.replace(/^\s*[\r\n]/gm, '');
+  
+  return result;
 }
 
 /**
