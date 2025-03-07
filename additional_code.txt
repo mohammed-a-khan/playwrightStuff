@@ -112,45 +112,92 @@ function extractAndConvertElements(content: string, elementType: string): Elemen
  * Extract locator value from various formats
  */
 function extractLocatorValue(locatorStr: string): string {
+  // Debug the input
+  console.log(`Extracting locator from: ${locatorStr.substring(0, 50)}...`);
+  
   // Handle JSON format with {"locator":"xpath=..."}
-  if (locatorStr.includes('{"locator"')) {
+  if (locatorStr.includes('"locator"')) {
     try {
-      // Fix JSON string by replacing escaped quotes
-      const fixedJson = locatorStr.replace(/\\"/g, '"');
-      // Parse JSON
-      const locatorObj = JSON.parse(fixedJson);
-      if (locatorObj.locator) {
-        // Remove locator prefix
-        if (typeof locatorObj.locator === 'string') {
-          if (locatorObj.locator.startsWith('xpath=')) {
-            return locatorObj.locator.substring(6);
-          } else if (locatorObj.locator.startsWith('path=')) {
-            return locatorObj.locator.substring(5);
+      // Check if we need to parse a real JSON or just extract with regex
+      let locatorObj;
+      
+      // Try to parse as JSON if it looks like valid JSON
+      if ((locatorStr.startsWith('{') && locatorStr.endsWith('}')) || 
+          (locatorStr.startsWith('{"') && locatorStr.includes('}'))) {
+        // Fix JSON string by replacing escaped quotes
+        let fixedJson = locatorStr;
+        if (fixedJson.includes('\\"')) {
+          fixedJson = fixedJson.replace(/\\"/g, '"');
+        }
+        
+        // Handle cases where there might be unescaped quotes inside the string
+        try {
+          locatorObj = JSON.parse(fixedJson);
+        } catch (parseError) {
+          // If parsing fails, try to extract the main parts with regex
+          console.log(`JSON parsing failed, trying regex: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        }
+      }
+      
+      // If we have a valid locator object from JSON parsing
+      if (locatorObj && locatorObj.locator && typeof locatorObj.locator === 'string') {
+        const locatorValue = locatorObj.locator;
+        console.log(`Found locator from JSON: ${locatorValue}`);
+        
+        // Remove prefix like xpath= or path=
+        if (locatorValue.startsWith('xpath=')) {
+          return locatorValue.substring(6);
+        } else if (locatorValue.startsWith('path=')) {
+          return locatorValue.substring(5);
+        } else {
+          return locatorValue;
+        }
+      } else {
+        // If JSON parsing failed or didn't yield expected results, try regex
+        const locatorMatch = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
+        if (locatorMatch && locatorMatch[1]) {
+          const fullLocator = locatorMatch[1];
+          console.log(`Found locator from regex: ${fullLocator}`);
+          
+          if (fullLocator.startsWith('xpath=')) {
+            return fullLocator.substring(6);
+          } else if (fullLocator.startsWith('path=')) {
+            return fullLocator.substring(5);
           } else {
-            return locatorObj.locator;
+            return fullLocator;
           }
         }
       }
     } catch (e) {
-      // If JSON parsing fails, try regex
-      const locatorMatch = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
-      if (locatorMatch && locatorMatch[1]) {
-        const fullLocator = locatorMatch[1];
-        if (fullLocator.startsWith('xpath=')) {
-          return fullLocator.substring(6);
-        } else if (fullLocator.startsWith('path=')) {
-          return fullLocator.substring(5);
-        } else {
-          return fullLocator;
-        }
+      console.warn(`Error extracting JSON locator: ${e instanceof Error ? e.message : String(e)}`);
+      
+      // Last resort: try simple regex for just the path
+      const pathMatch = locatorStr.match(/path=([^"]+)/);
+      if (pathMatch && pathMatch[1]) {
+        return pathMatch[1];
+      }
+      
+      const xpathMatch = locatorStr.match(/xpath=([^"]+)/);
+      if (xpathMatch && xpathMatch[1]) {
+        return xpathMatch[1];
       }
     }
   } else if (locatorStr.startsWith('xpath=')) {
     // Direct xpath format
     return locatorStr.substring(6);
+  } else if (locatorStr.startsWith('path=')) {
+    // Direct path format
+    return locatorStr.substring(5);
   }
   
-  // Default - just return as is
+  // For simple direct locators without prefix
+  const directXpathMatch = locatorStr.match(/^\/\/.+/);
+  if (directXpathMatch) {
+    return locatorStr;
+  }
+  
+  // Default - just return as is, but log a warning
+  console.warn(`Could not extract locator properly from: ${locatorStr.substring(0, 50)}...`);
   return locatorStr;
 }
 
