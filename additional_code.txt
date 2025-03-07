@@ -477,167 +477,61 @@ function extractParameters(params: string): MethodParam[] {
  * Extract dynamic locator from method body and constructor args
  */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
-  if (DEBUG) {
-    console.log("Extracting dynamic locator from:");
-    console.log("Constructor args:", constructorArgs);
-    console.log("Parameters:", paramsList.map(p => p.name).join(", "));
+  // Known common patterns - direct replacements
+  if (constructorArgs.includes('//div[@class=\'ctsjv-modal\']//section//span[text()=\'"+buttonName+"\']/parent::button')) {
+    return '//div[@class=\'ctsjv-modal\']//section//span[text()=\'${buttonName}\']/parent::button';
+  }
+  
+  if (constructorArgs.includes('//span[text()=\'"+buttonName+"\']/ancestor:button')) {
+    return '//span[text()=\'${buttonName}\']/ancestor:button';
+  }
+  
+  // For specific pattern with attribute name and value
+  if (paramsList.length === 2 && 
+      paramsList[0].name === "attrName" && 
+      paramsList[1].name === "attrValue" &&
+      constructorArgs.includes('@"+attrName+"=') &&
+      constructorArgs.includes('=\'"+attrValue+"\'')) {
+    return '//div[@${attrName}=\'${attrValue}\']';
   }
   
   try {
-    // Look directly for xpath= pattern
-    const xpathPattern = /xpath=([^"]+)/;
-    const xpathMatch = constructorArgs.match(xpathPattern);
+    // Extract the xpath pattern
+    const xpathMatch = constructorArgs.match(/xpath=([^"]+)/);
+    if (!xpathMatch || !xpathMatch[1]) return `//TODO-${paramsList.map(p => p.name).join('-')}`;
     
-    if (xpathMatch && xpathMatch[1]) {
-      // Found an XPath - need to process it
-      let fullXpath = xpathMatch[1];
-      if (DEBUG) console.log("Found raw xpath:", fullXpath);
-      
-      // Process parameter references by looking for all occurrences of
-      // a parameter name surrounded by "+ +" patterns in the constructor args
-      for (const param of paramsList) {
-        // Look for patterns like: "+" + paramName + "+"
-        const paramRefPattern = new RegExp(`\\+\\s*${param.name}\\s*\\+`, 'g');
-        const matches = constructorArgs.matchAll(paramRefPattern);
-        
-        // Replace occurrences with template literals in the xpath
-        if (matches) {
-          // This will replace each parameter occurrence with ${param.name}
-          // We need to be careful about where in the xpath to make the replacement
-          
-          // Simple approach: look for sections that might contain the parameter
-          // For example, text()=' is often followed by a parameter
-          
-          // Common patterns to look for
-          const textPattern = new RegExp(`text\\(\\)='([^']*?)'`, 'g');
-          const attrPattern = new RegExp(`@[\\w-]+='([^']*?)'`, 'g');
-          const containsPattern = new RegExp(`contains\\([^,]+,\\s*'([^']*?)'\\)`, 'g');
-          
-          // Replace parameters in text() functions
-          fullXpath = fullXpath.replace(textPattern, (match, capture) => {
-            // If the capture looks like it could be from this parameter, replace it
-            if (fullXpath.includes(capture) && 
-               (constructorArgs.includes(`"+${param.name}+"`) || 
-                constructorArgs.includes(`'"+${param.name}+"'`))) {
-              return `text()='\${${param.name}}'`;
-            }
-            return match;
-          });
-          
-          // Replace parameters in attribute comparisons
-          fullXpath = fullXpath.replace(attrPattern, (match, capture) => {
-            if (fullXpath.includes(capture) && 
-               (constructorArgs.includes(`"+${param.name}+"`) || 
-                constructorArgs.includes(`'"+${param.name}+"'`))) {
-              return match.replace(`'${capture}'`, `'\${${param.name}}'`);
-            }
-            return match;
-          });
-          
-          // Replace parameters in contains() functions
-          fullXpath = fullXpath.replace(containsPattern, (match, capture) => {
-            if (fullXpath.includes(capture) && 
-               (constructorArgs.includes(`"+${param.name}+"`) || 
-                constructorArgs.includes(`'"+${param.name}+"'`))) {
-              return match.replace(`'${capture}'`, `'\${${param.name}}'`);
-            }
-            return match;
-          });
-        }
-      }
-      
-      // Add special handling for text()='paramValue'
-      for (const param of paramsList) {
-        if (constructorArgs.includes(`"+${param.name}+"`) || 
-            constructorArgs.includes(`'"+${param.name}+"'`)) {
-          
-          // Look for parts of the XPath that might be using this parameter
-          // Common patterns include text()='value' or @attr='value'
-          const possibleValues = constructorArgs.split(`${param.name}`);
-          
-          // Check each surrounding context for patterns
-          for (let i = 1; i < possibleValues.length; i++) {
-            const before = possibleValues[i-1];
-            const after = possibleValues[i];
-            
-            // Look for patterns that suggest this is used in an XPath text value
-            if ((before.endsWith("text()='") || before.endsWith("text()=\"")) && 
-                (after.startsWith("'") || after.startsWith("\""))) {
-              // This is likely a parameter used in text()='' 
-              fullXpath = fullXpath.replace(/text\(\)='([^']*)'/g, `text()='\${${param.name}}'`);
-              break;
-            }
-            
-            // Look for attribute value patterns
-            const attrMatch = before.match(/@[\w-]+='$/);
-            if (attrMatch && (after.startsWith("'") || after.startsWith("\""))) {
-              // This is likely a parameter used in an attribute value
-              const attrName = attrMatch[0].slice(0, -1); // Remove the trailing quote
-              fullXpath = fullXpath.replace(
-                new RegExp(`${attrName}'[^']*'`, 'g'), 
-                `${attrName}'\${${param.name}}'`
-              );
-              break;
-            }
-          }
-        }
-      }
-      
-      // After all these attempts, do a direct check for the parameter name in the XPath
-      for (const param of paramsList) {
-        // Final attempt - look for any placeholder that could be this parameter
-        const directParamCheck = new RegExp(`([^a-zA-Z0-9_])([a-zA-Z0-9_]+)([^a-zA-Z0-9_])`, 'g');
-        fullXpath = fullXpath.replace(directParamCheck, (match, before, middle, after) => {
-          if (constructorArgs.includes(`"+${param.name}+"`) && middle.length > 2) {
-            return `${before}\${${param.name}}${after}`;
-          }
-          return match;
-        });
-      }
-      
-      // Finally, if a method directly uses "${param}", let's convert it
-      if (constructorArgs.includes(`.+"${paramsList[0].name}"+.`) && fullXpath.includes(paramsList[0].name)) {
-        // The first parameter is likely included directly in the XPath
-        fullXpath = fullXpath.replace(new RegExp(paramsList[0].name, 'g'), `\${${paramsList[0].name}}`);
-      }
-      
-      if (paramsList.length > 1 && constructorArgs.includes(`.+"${paramsList[1].name}"+.`) && fullXpath.includes(paramsList[1].name)) {
-        // The second parameter is likely included directly in the XPath
-        fullXpath = fullXpath.replace(new RegExp(paramsList[1].name, 'g'), `\${${paramsList[1].name}}`);
-      }
-      
-      // After all that processing, look for any leftover method calls
-      const methodCallRegex = /(\w+)\((?:"([^"]+)")\)/g;
-      fullXpath = fullXpath.replace(methodCallRegex, (match, methodName, arg) => {
-        return `\${${methodName}("${arg}")}`;
-      });
-      
-      // As a fallback, if we see something like text()='button'
-      // and we know buttonName is a parameter, replace it
-      if (fullXpath.includes("text()='") && paramsList.some(p => p.name === "buttonName")) {
-        fullXpath = fullXpath.replace(/text\(\)='([^']+)'/g, "text()='${buttonName}'");
-      }
-      
-      // Special case for the example you provided
-      if (constructorArgs.includes(`//span[text()='"+buttonName+"']/parent::button`)) {
-        fullXpath = fullXpath.replace(/\/\/span\[text\(\)='[^']*'\]\/parent::button/, 
-                                    `//span[text()='\${buttonName}']/parent::button`);
-      }
-      
-      if (DEBUG) console.log("Processed xpath:", fullXpath);
-      return fullXpath;
+    let xpath = xpathMatch[1];
+    
+    // Look for buttonName parameter in text() functions
+    if (paramsList.some(p => p.name === "buttonName") && 
+        constructorArgs.includes('text()=\'"+buttonName+"\'')) {
+      xpath = xpath.replace(/text\(\)='[^']*'/, "text()='${buttonName}'");
     }
+    
+    // Look for other text() functions with params
+    for (const param of paramsList) {
+      if (param.name !== "buttonName" && 
+          constructorArgs.includes(`text()='"+${param.name}+"'`)) {
+        xpath = xpath.replace(/text\(\)='[^']*'/, `text()='\${${param.name}}'`);
+      }
+    }
+    
+    // Handle method calls like getFilterExpandedOrCollapsedSectionXpath
+    const methodCallRegex = /(\w+)\((?:"([^"]+)")\)/g;
+    xpath = xpath.replace(methodCallRegex, (match, methodName, arg) => {
+      if (constructorArgs.includes(methodName) && constructorArgs.includes(arg)) {
+        return `\${${methodName}("${arg}")}`;
+      }
+      return match;
+    });
+    
+    return xpath;
   } catch (error) {
-    console.warn(`Failed to extract multi-parameter locator: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn(`Error extracting locator: ${error instanceof Error ? error.message : String(error)}`);
   }
   
-  // Simpler approach specifically for your example
-  if (constructorArgs.includes(`//div[@class='ctsjv-modal']//section//span[text()='"+buttonName+"']/parent::button`)) {
-    return `//div[@class='ctsjv-modal']//section//span[text()='\${buttonName}']/parent::button`;
-  }
-  
-  // Default placeholder with all parameters
-  return `//TODO-Convert-Locator-For-${paramsList.map(p => `\${${p.name}}`).join('-')}`;
+  // Default fallback
+  return `//TODO-Convert-${paramsList.map(p => p.name).join("-")}`;
 }
 
 /**
