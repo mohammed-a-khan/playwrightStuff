@@ -1,525 +1,3 @@
-#!/usr/bin/env node
-
-const fs = require('fs');
-const path = require('path');
-
-// Global debug flag
-let DEBUG = false;
-
-/**
- * Debug logging function
- */
-function debugLog(...args: any[]): void {
-  if (DEBUG) {
-    console.log('[DEBUG]', ...args);
-  }
-}
-
-/**
- * QAF BDD Selenium Java to Playwright TypeScript Converter
- * Processes a single file
- */
-function convertFile(inputFile: string, outputFile: string): void {
-  try {
-    console.log(`Reading ${inputFile}...`);
-    if (!fs.existsSync(inputFile)) {
-      console.error(`Error: Input file ${inputFile} does not exist`);
-      process.exit(1);
-    }
-    
-    // Read the file content
-    const content = fs.readFileSync(inputFile, 'utf8');
-    
-    // Remove comments from the Java code
-    const contentWithoutComments = removeJavaComments(content);
-    
-    // Extract class and package information
-    const packageInfo = extractPackageInfo(contentWithoutComments);
-    const className = extractClassName(contentWithoutComments) || path.basename(inputFile, '.java');
-    
-    // Check if we need to add List import
-    const hasListElements = contentWithoutComments.includes('List<WebElement>') || 
-                           contentWithoutComments.includes('List<CSWebElement>') ||
-                           contentWithoutComments.includes('List<CSDropDownListWebElement>');
-    
-    // Process elements - all elements are processed in a single pass
-    console.log('Extracting WebElement and CSWebElement elements...');
-    const allWebElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
-    
-    // Process WebElement separately if needed
-    console.log('Checking for direct WebElement elements...');
-    const directWebElements = extractAndConvertElements(contentWithoutComments, 'WebElement');
-    
-    // Process dropdown elements
-    console.log('Extracting dropdown elements...');
-    const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Merge direct WebElements into the standard elements list if they don't exist already
-    const standardElements = [...allWebElements];
-    directWebElements.forEach(element => {
-      const exists = standardElements.some(e => e.originalName === element.originalName);
-      if (!exists) {
-        standardElements.push(element);
-      }
-    });
-    
-    // Debug elements (if in debug mode)
-    if (DEBUG) {
-      console.log("\nStandard Elements:");
-      standardElements.forEach((element, i) => {
-        console.log(`${i+1}. ${element.originalName} (${element.isList ? 'List' : 'Single'}): ${element.locator}`);
-      });
-      
-      console.log("\nDropdown Elements:");
-      dropdownElements.forEach((element, i) => {
-        console.log(`${i+1}. ${element.originalName} (${element.isList ? 'List' : 'Single'}): ${element.locator}`);
-      });
-    }
-    
-    // Process dynamic locator methods by return type
-    console.log('Extracting standard methods...');
-    const standardMethods = extractAndConvertMethods(contentWithoutComments, 'CSWebElement');
-    
-    console.log('Extracting dropdown methods...');
-    const dropdownMethods = extractAndConvertMethods(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Generate the final TypeScript output
-    const finalOutput = generateTypeScriptOutput(
-      className, 
-      packageInfo,
-      standardElements, 
-      dropdownElements,
-      standardMethods, 
-      dropdownMethods,
-      hasListElements
-    );
-    
-    // Write the result
-    const outputDir = path.dirname(outputFile);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    fs.writeFileSync(outputFile, finalOutput);
-    console.log(`Converted file successfully written to ${outputFile}`);
-  } catch (error) {
-    console.error(`Error converting file: ${error instanceof Error ? error.message : String(error)}`);
-    if (error instanceof Error && error.stack) {
-      console.error(error.stack);
-    }
-  }
-}
-
-/**
- * Remove Java comments from the source code while preserving string literals
- */
-function removeJavaComments(source: string): string {
-  // We can't use simple regex because it might remove XPath expressions that start with //
-  // Instead, we'll process the string character by character
-  
-  let result = '';
-  let inStringLiteral = false;
-  let inSingleLineComment = false;
-  let inMultiLineComment = false;
-  let i = 0;
-  
-  while (i < source.length) {
-    // Check if we're starting or ending a string literal
-    if (!inSingleLineComment && !inMultiLineComment && source[i] === '"' && (i === 0 || source[i-1] !== '\\')) {
-      inStringLiteral = !inStringLiteral;
-      result += source[i];
-      i++;
-      continue;
-    }
-    
-    // Check for single line comment start
-    if (!inStringLiteral && !inMultiLineComment && source[i] === '/' && source[i+1] === '/') {
-      inSingleLineComment = true;
-      i += 2;
-      continue;
-    }
-    
-    // Check for multi-line comment start
-    if (!inStringLiteral && !inSingleLineComment && source[i] === '/' && source[i+1] === '*') {
-      inMultiLineComment = true;
-      i += 2;
-      continue;
-    }
-    
-    // Check for single line comment end (new line)
-    if (inSingleLineComment && (source[i] === '\n' || source[i] === '\r')) {
-      inSingleLineComment = false;
-      // Keep the newline
-      result += source[i];
-      i++;
-      continue;
-    }
-    
-    // Check for multi-line comment end
-    if (inMultiLineComment && source[i] === '*' && source[i+1] === '/') {
-      inMultiLineComment = false;
-      i += 2;
-      continue;
-    }
-    
-    // Add character to result if not in a comment
-    if (!inSingleLineComment && !inMultiLineComment) {
-      result += source[i];
-    }
-    
-    i++;
-  }
-  
-  // Remove empty lines that may be left after removing comments
-  return result.replace(/^\s*[\r\n]/gm, '');
-}
-
-/**
- * Recursively process all Java files in a directory
- */
-function processDirectory(inputDir: string, outputDir: string): void {
-  console.log(`Processing directory: ${inputDir}`);
-  
-  // Read all items in the directory
-  const items = fs.readdirSync(inputDir);
-  
-  // Process each item
-  for (const item of items) {
-    const inputPath = path.join(inputDir, item);
-    const stat = fs.statSync(inputPath);
-    
-    if (stat.isDirectory()) {
-      // Create corresponding output directory if it doesn't exist
-      const nestedOutputDir = path.join(outputDir, item);
-      
-      // Recursively process subdirectory
-      processDirectory(inputPath, nestedOutputDir);
-    } else if (item.endsWith('.java')) {
-      // Process Java file
-      const baseName = path.basename(item, '.java');
-      const outputFile = path.join(outputDir, `${baseName}.ts`);
-      
-      console.log(`Processing ${inputPath} -> ${outputFile}`);
-      convertFile(inputPath, outputFile);
-    }
-  }
-}
-
-/**
- * Extract the package name from Java content
- */
-function extractPackageInfo(content: string): string | null {
-  const packageMatch = content.match(/package\s+([\w.]+)\s*;/);
-  return packageMatch ? packageMatch[1] : null;
-}
-
-/**
- * Extract the class name from Java content
- */
-function extractClassName(content: string): string | null {
-  const classMatch = content.match(/public\s+class\s+(\w+)/);
-  return classMatch ? classMatch[1] : null;
-}
-
-interface ElementInfo {
-  name: string;
-  originalName: string;
-  locator: string;
-  type: string;
-  isList: boolean;
-}
-
-/**
- * Extract and convert elements of a specific type from Java to Playwright format
- */
-function extractAndConvertElements(content: string, elementType: string): ElementInfo[] {
-  const elementsList: ElementInfo[] = [];
-  
-  // Process all findBy annotations in order
-  if (elementType === 'CSWebElement' || elementType === 'WebElement') {
-    // We'll capture both regular WebElements and List<WebElement>
-    const elementRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:(List)\s*<\s*(WebElement|CSWebElement)\s*>|(WebElement|CSWebElement))\s+(\w+)\s*;/g;
-    
-    let match;
-    while ((match = elementRegex.exec(content)) !== null) {
-      const locatorStr = match[1];
-      const isList = match[2] === 'List'; // Will be 'List' or undefined
-      const isCorrectType = (match[3] === elementType) || (match[4] === elementType);
-      
-      // Only process if it's the requested type
-      if (isCorrectType) {
-        // Determine the element name - it's in position 5
-        const elementName = match[5];
-        
-        // Extract the locator value
-        const locatorValue = extractLocatorValue(locatorStr);
-        
-        elementsList.push({
-          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-          originalName: elementName,
-          locator: locatorValue,
-          type: elementType,
-          isList: isList
-        });
-      }
-    }
-  } else if (elementType === 'CSDropDownListWebElement') {
-    // Process dropdown elements separately
-    const dropdownRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:(List)\s*<\s*CSDropDownListWebElement\s*>|CSDropDownListWebElement)\s+(\w+)\s*;/g;
-    
-    let match;
-    while ((match = dropdownRegex.exec(content)) !== null) {
-      const locatorStr = match[1];
-      const isList = match[2] === 'List'; // Will be 'List' or undefined
-      const elementName = match[3];
-      
-      const locatorValue = extractLocatorValue(locatorStr);
-      
-      elementsList.push({
-        name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-        originalName: elementName,
-        locator: locatorValue,
-        type: elementType,
-        isList: isList
-      });
-    }
-  }
-  
-  return elementsList;
-}
-
-/**
- * Extract locator value from various formats
- */
-function extractLocatorValue(locatorStr: string): string {
-  // Check for both escaped and unescaped versions of "locator"
-  const hasEscapedLocator = locatorStr.includes('\\"locator\\"');
-  const hasUnescapedLocator = locatorStr.includes('"locator"');
-  
-  // Handle JSON format with {"locator":"xpath=..."}
-  if (hasEscapedLocator || hasUnescapedLocator) {
-    try {
-      // Fix the JSON string by replacing escaped quotes
-      let fixedJson = locatorStr;
-      
-      // If it has escaped quotes, replace them
-      if (hasEscapedLocator) {
-        // Parse escaped JSON by replacing escaped quotes with real quotes
-        fixedJson = fixedJson.replace(/\\"/g, '"');
-      }
-      
-      // Now parse the JSON
-      const locatorObj = JSON.parse(fixedJson);
-      
-      // Extract the locator value
-      if (locatorObj.locator && typeof locatorObj.locator === 'string') {
-        const locatorValue = locatorObj.locator;
-        
-        // Remove prefix if present
-        if (locatorValue.startsWith('xpath=')) {
-          return locatorValue.substring(6);
-        } else if (locatorValue.startsWith('path=')) {
-          return locatorValue.substring(5);
-        } else {
-          return locatorValue;
-        }
-      }
-    } catch (e) {
-      // If JSON parsing fails, try regex extraction
-      const xpathMatch = locatorStr.match(/"locator"\s*:\s*"xpath=([^"]+)"/);
-      if (xpathMatch && xpathMatch[1]) {
-        return xpathMatch[1];
-      }
-      
-      const pathMatch = locatorStr.match(/"locator"\s*:\s*"path=([^"]+)"/);
-      if (pathMatch && pathMatch[1]) {
-        return pathMatch[1];
-      }
-      
-      // If regex fails, look for escaped versions
-      const escapedXpathMatch = locatorStr.match(/\\"locator\\"\\s*:\\s*\\"xpath=([^"]+)\\"/);
-      if (escapedXpathMatch && escapedXpathMatch[1]) {
-        return escapedXpathMatch[1];
-      }
-      
-      const escapedPathMatch = locatorStr.match(/\\"locator\\"\\s*:\\s*\\"path=([^"]+)\\"/);
-      if (escapedPathMatch && escapedPathMatch[1]) {
-        return escapedPathMatch[1];
-      }
-    }
-  } else if (locatorStr.startsWith('xpath=')) {
-    // Direct xpath format
-    return locatorStr.substring(6);
-  } else if (locatorStr.startsWith('path=')) {
-    // Direct path format
-    return locatorStr.substring(5);
-  }
-  
-  // For simple direct locators without prefix
-  const directXpathMatch = locatorStr.match(/^\/\/.+/);
-  if (directXpathMatch) {
-    return locatorStr;
-  }
-  
-  // Default - just return as is
-  return locatorStr;
-}
-
-interface MethodParam {
-  type: string;
-  name: string;
-}
-
-interface MethodInfo {
-  name: string;
-  params: MethodParam[];
-  locator: string;
-  type: string;
-  isList: boolean;
-}
-
-/**
- * Extract and convert all dynamic locator methods for a specific return type
- */
-function extractAndConvertMethods(content: string, returnType: string): MethodInfo[] {
-  const methodsList: MethodInfo[] = [];
-  
-  // Find all methods that return the specified element type
-  const standardMethodRegex = new RegExp(
-    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
-    'gs'
-  );
-  
-  // Find methods that return List<returnType>
-  const listMethodRegex = new RegExp(
-    `(?:public|private|protected)\\s+List\\s*<\\s*${returnType}\\s*>\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
-    'gs'
-  );
-  
-  // Process standard methods
-  let methodMatch: RegExpExecArray | null;
-  while ((methodMatch = standardMethodRegex.exec(content)) !== null) {
-    try {
-      const methodName = methodMatch[1];
-      const params = methodMatch[2] || '';
-      const methodBody = methodMatch[3] || '';
-      const constructorArgs = methodMatch[4] || '';
-      
-      // Extract parameter information
-      const paramsList = extractParameters(params);
-      
-      // Try to extract locator pattern
-      const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
-      
-      // Create the converted method
-      methodsList.push({
-        name: methodName,
-        params: paramsList,
-        locator: locator,
-        type: returnType,
-        isList: false
-      });
-    } catch (error) {
-      // Skip this method if we can't process it
-    }
-  }
-  
-  // Process list methods
-  while ((methodMatch = listMethodRegex.exec(content)) !== null) {
-    try {
-      const methodName = methodMatch[1];
-      const params = methodMatch[2] || '';
-      const methodBody = methodMatch[3] || '';
-      const constructorArgs = methodMatch[4] || '';
-      
-      // Extract parameter information
-      const paramsList = extractParameters(params);
-      
-      // Try to extract locator pattern
-      const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
-      
-      // Create the converted method
-      methodsList.push({
-        name: methodName,
-        params: paramsList,
-        locator: locator,
-        type: returnType,
-        isList: true
-      });
-    } catch (error) {
-      // Skip this method if we can't process it
-    }
-  }
-  
-  return methodsList;
-}
-
-/**
- * Extract parameters from method signature
- */
-function extractParameters(params: string): MethodParam[] {
-  return params.split(',')
-    .map(param => {
-      const parts = param.trim().split(/\s+/);
-      // Handle syntax errors in the Java code
-      if (parts.length < 2) return null;
-      
-      // Fix common typos in the Java code
-      let paramType = parts[0].replace(/Sring/, 'String');
-      let paramName = parts[1].replace(/["']/g, ''); // Remove any quotes
-      
-      return { type: paramType, name: paramName };
-    })
-    .filter((param): param is MethodParam => param !== null);
-}
-
-/**
- * Extract dynamic locator from method body and constructor args
- */
-function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
-  // Check for escaped and unescaped patterns
-  const hasEscapedLocator = constructorArgs.includes('\\"locator\\"');
-  const hasUnescapedLocator = constructorArgs.includes('"locator"');
-  
-  if (hasEscapedLocator || hasUnescapedLocator) {
-    try {
-      // Simple concatenation pattern
-      const simplePattern = /"([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
-      const match = constructorArgs.match(simplePattern);
-      
-      if (match) {
-        const prefix = match[1] || '';
-        const variable = match[2] || '';
-        const suffix = match[3] || '';
-        
-        // Check if this variable is a parameter
-        const isParam = paramsList.some(p => p.name === variable);
-        
-        if (isParam) {
-          return `${prefix}\${${variable}}${suffix}`;
-        }
-      }
-      
-      // Try to extract from getters or method calls
-      const methodCallPattern = /(\w+)\(([^)]*)\)/;
-      const methodMatch = constructorArgs.match(methodCallPattern);
-      
-      if (methodMatch) {
-        const methodName = methodMatch[1];
-        const methodParams = methodMatch[2];
-        
-        // Simple implementation for method calls
-        return `\${${methodParams}}`;
-      }
-    } catch (error) {
-      // Fall through to default
-    }
-  }
-  
-  // Default placeholder
-  return `//TODO-Convert-Locator-For-${paramsList.map(p => p.name).join('-')}`;
-}
-
 /**
  * Generate the final TypeScript output
  */
@@ -529,24 +7,19 @@ function generateTypeScriptOutput(
   standardElements: ElementInfo[], 
   dropdownElements: ElementInfo[],
   standardMethods: MethodInfo[], 
-  dropdownMethods: MethodInfo[]
+  dropdownMethods: MethodInfo[],
+  hasListElements: boolean = false
 ): string {
   // Build imports
   let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
-  output += `import { Page, Locator } from '@playwright/test';\n\n`;
+  output += `import { Page } from 'playwright';\n`;
+  output += `import { BasePage } from './base.page';\n`;
+  output += `import { Logger } from '../utils/logger';\n`;
+  output += `import config from '@config/environment.config';\n\n`;
   
-  // Add helper interface for dropdown interaction
-  output += `// Helper interface for dropdown functionality\n`;
-  output += `interface DropdownOptions {\n`;
-  output += `  selectByText: (text: string) => Promise<void>;\n`;
-  output += `  selectByValue: (value: string) => Promise<void>;\n`;
-  output += `  selectByIndex: (index: number) => Promise<void>;\n`;
-  output += `  getOptions: () => Promise<string[]>;\n`;
-  output += `}\n\n`;
-  
-  // Start class definition
-  output += `export class ${className} {\n`;
-  output += `  constructor(private page: Page) {}\n\n`;
+  // Start class definition with inheritance
+  output += `export class ${className} extends BasePage {\n`;
+  output += `  constructor(page: Page, logger: Logger) { super(page, logger, ''); }\n\n`;
   
   // Add standard element locators
   if (standardElements.length > 0) {
@@ -593,8 +66,8 @@ function generateTypeScriptOutput(
       const capitalizedName = element.originalName;
       
       if (element.isList) {
-        // For List<WebElement> types, create a method that returns an array of Locators
-        output += `  get ${capitalizedName}(): Locator {\n`;
+        // For List<WebElement> types, create a method that returns a Locator
+        output += `  get${capitalizedName}(): Locator {\n`;
         output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
         
@@ -610,7 +83,7 @@ function generateTypeScriptOutput(
         output += `  }\n\n`;
       } else {
         // Standard element getter
-        output += `  get ${capitalizedName}(): Locator {\n`;
+        output += `  get${capitalizedName}(): Locator {\n`;
         output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
       }
@@ -619,93 +92,30 @@ function generateTypeScriptOutput(
   
   // Add getters for dropdown elements
   if (dropdownElements.length > 0) {
-    output += `  // Dropdown Element Getters with enhanced functionality\n`;
+    output += `  // Dropdown Element Getters\n`;
     dropdownElements.forEach(element => {
       const capitalizedName = element.originalName;
       
       if (element.isList) {
         // For list of dropdown elements
-        output += `  get ${capitalizedName}(): Locator & DropdownOptions {\n`;
-        output += `    const baseLocator = this.page.locator(this.${element.name});\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `  get${capitalizedName}(): Locator {\n`;
+        output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
         
         // Add method to get all dropdown elements
-        output += `  async getAll${capitalizedName}(): Promise<Array<Locator & DropdownOptions>> {\n`;
+        output += `  async getAll${capitalizedName}(): Promise<Locator[]> {\n`;
         output += `    const elements = this.page.locator(this.${element.name});\n`;
         output += `    const count = await elements.count();\n`;
-        output += `    const result: Array<Locator & DropdownOptions> = [];\n`;
-        output += `    \n`;
+        output += `    const result: Locator[] = [];\n`;
         output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      const baseLocator = elements.nth(i);\n`;
-        output += `      const dropdown = baseLocator as Locator & DropdownOptions;\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ label: text });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ value });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ index });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `        return baseLocator.locator('option').allTextContents();\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      result.push(dropdown);\n`;
+        output += `      result.push(elements.nth(i));\n`;
         output += `    }\n`;
-        output += `    \n`;
         output += `    return result;\n`;
         output += `  }\n\n`;
       } else {
         // Standard dropdown element
-        output += `  get ${capitalizedName}(): Locator & DropdownOptions {\n`;
-        output += `    const baseLocator = this.page.locator(this.${element.name});\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `  get${capitalizedName}(): Locator {\n`;
+        output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
       }
     });
@@ -753,88 +163,25 @@ function generateTypeScriptOutput(
       
       if (method.isList) {
         // For list of dropdown elements
-        output += `  ${method.name}(${paramList}): Locator & DropdownOptions {\n`;
-        output += `    const baseLocator = this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `  ${method.name}(${paramList}): Locator {\n`;
+        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
         output += `  }\n\n`;
         
         // Add method to get all dropdown elements
-        output += `  async getAll${method.name.charAt(0).toUpperCase() + method.name.slice(1)}(${paramList}): Promise<Array<Locator & DropdownOptions>> {\n`;
+        output += `  async getAll${method.name.charAt(0).toUpperCase() + method.name.slice(1)}(${paramList}): Promise<Locator[]> {\n`;
         output += `    const selector = this.${method.name}(${paramNames});\n`;
         output += `    const elements = this.page.locator(selector);\n`;
         output += `    const count = await elements.count();\n`;
-        output += `    const result: Array<Locator & DropdownOptions> = [];\n`;
-        output += `    \n`;
+        output += `    const result: Locator[] = [];\n`;
         output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      const baseLocator = elements.nth(i);\n`;
-        output += `      const dropdown = baseLocator as Locator & DropdownOptions;\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ label: text });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ value });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ index });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `        return baseLocator.locator('option').allTextContents();\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      result.push(dropdown);\n`;
+        output += `      result.push(elements.nth(i));\n`;
         output += `    }\n`;
-        output += `    \n`;
         output += `    return result;\n`;
         output += `  }\n\n`;
       } else {
         // Standard dropdown method for single element
-        output += `  ${method.name}(${paramList}): Locator & DropdownOptions {\n`;
-        output += `    const baseLocator = this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `  ${method.name}(${paramList}): Locator {\n`;
+        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
         output += `  }\n\n`;
       }
     });
@@ -855,89 +202,3 @@ function generateTypeScriptOutput(
   
   return output;
 }
-
-/**
- * Map Java types to TypeScript types
- */
-function mapJavaTypeToTypeScript(javaType: string): string {
-  const typeMap: Record<string, string> = {
-    'String': 'string',
-    'int': 'number',
-    'Integer': 'number',
-    'boolean': 'boolean',
-    'Boolean': 'boolean',
-    'double': 'number',
-    'Double': 'number',
-    'long': 'number',
-    'Long': 'number',
-    'float': 'number',
-    'Float': 'number',
-    'Object': 'any',
-    'List': 'Array<any>',
-    'ArrayList': 'Array<any>',
-    'Map': 'Record<string, any>',
-    'HashMap': 'Record<string, any>'
-  };
-  
-  // Check for generic types like List<String>
-  const genericMatch = javaType.match(/(\w+)<(\w+)>/);
-  if (genericMatch) {
-    const container = genericMatch[1];
-    const innerType = genericMatch[2];
-    
-    if (container === 'List' || container === 'ArrayList') {
-      return `Array<${mapJavaTypeToTypeScript(innerType)}>`;
-    } else if (container === 'Map' || container === 'HashMap') {
-      return `Record<string, ${mapJavaTypeToTypeScript(innerType)}>`;
-    }
-  }
-  
-  return typeMap[javaType] || 'any';
-}
-
-// Process command line arguments
-if (require.main === module) {
-  const args = process.argv.slice(2);
-  
-  // Check for debug flag
-  if (args.includes('--debug') || args.includes('-d')) {
-    DEBUG = true;
-    // Remove debug flag from args
-    const debugIndex = args.indexOf('--debug') !== -1 ? args.indexOf('--debug') : args.indexOf('-d');
-    args.splice(debugIndex, 1);
-    console.log('Running in DEBUG mode - verbose logging enabled');
-  }
-  
-  if (args.length !== 2) {
-    console.log(`
-Usage:
-  For single file:   node qaf-to-playwright-converter.js <input-file.java> <output-file.ts>
-  For directories:   node qaf-to-playwright-converter.js <input-dir> <output-dir>
-  
-Options:
-  --debug, -d        Enable debug mode with verbose logging
-`);
-    process.exit(1);
-  }
-  
-  const inputPath = args[0];
-  const outputPath = args[1];
-  
-  // Check if input is a directory or a single file
-  const stat = fs.statSync(inputPath);
-  
-  if (stat.isDirectory()) {
-    // Process entire directory
-    processDirectory(inputPath, outputPath);
-  } else {
-    // Process single file
-    convertFile(inputPath, outputPath);
-  }
-}
-
-// Export functions for testing
-module.exports = {
-  convertFile,
-  processDirectory,
-  extractLocatorValue
-};
