@@ -6,7 +6,7 @@ const path = require('path');
 /**
  * QAF BDD Selenium Java to Playwright TypeScript Converter
  */
-function convertFile(inputFile, outputFile) {
+function convertFile(inputFile: string, outputFile: string): void {
   try {
     console.log(`Reading ${inputFile}...`);
     if (!fs.existsSync(inputFile)) {
@@ -47,8 +47,10 @@ function convertFile(inputFile, outputFile) {
     fs.writeFileSync(outputFile, finalOutput);
     console.log(`Converted file successfully written to ${outputFile}`);
   } catch (error) {
-    console.error(`Error converting file: ${error.message}`);
-    console.error(error.stack);
+    console.error(`Error converting file: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof Error && error.stack) {
+      console.error(error.stack);
+    }
     process.exit(1);
   }
 }
@@ -56,7 +58,7 @@ function convertFile(inputFile, outputFile) {
 /**
  * Extract the package name from Java content
  */
-function extractPackageInfo(content) {
+function extractPackageInfo(content: string): string | null {
   const packageMatch = content.match(/package\s+([\w.]+)\s*;/);
   return packageMatch ? packageMatch[1] : null;
 }
@@ -64,16 +66,23 @@ function extractPackageInfo(content) {
 /**
  * Extract the class name from Java content
  */
-function extractClassName(content) {
+function extractClassName(content: string): string | null {
   const classMatch = content.match(/public\s+class\s+(\w+)/);
   return classMatch ? classMatch[1] : null;
+}
+
+interface ElementInfo {
+  name: string;
+  originalName: string;
+  locator: string;
+  type: string;
 }
 
 /**
  * Extract and convert elements of a specific type from Java to Playwright format
  */
-function extractAndConvertElements(content, elementType) {
-  const elementsList = [];
+function extractAndConvertElements(content: string, elementType: string): ElementInfo[] {
+  const elementsList: ElementInfo[] = [];
   
   // FindBy pattern for both CSWebElement and CSDropDownListWebElement
   const findByRegex = new RegExp(
@@ -82,7 +91,7 @@ function extractAndConvertElements(content, elementType) {
   );
   
   // Process elements
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = findByRegex.exec(content)) !== null) {
     const locatorStr = match[1];
     const elementName = match[2];
@@ -102,7 +111,7 @@ function extractAndConvertElements(content, elementType) {
 /**
  * Extract locator value from various formats
  */
-function extractLocatorValue(locatorStr) {
+function extractLocatorValue(locatorStr: string): string {
   // Handle JSON format with {"locator":"xpath=..."}
   if (locatorStr.includes('{"locator"')) {
     try {
@@ -112,18 +121,20 @@ function extractLocatorValue(locatorStr) {
       const locatorObj = JSON.parse(fixedJson);
       if (locatorObj.locator) {
         // Remove locator prefix
-        if (locatorObj.locator.startsWith('xpath=')) {
-          return locatorObj.locator.substring(6);
-        } else if (locatorObj.locator.startsWith('path=')) {
-          return locatorObj.locator.substring(5);
-        } else {
-          return locatorObj.locator;
+        if (typeof locatorObj.locator === 'string') {
+          if (locatorObj.locator.startsWith('xpath=')) {
+            return locatorObj.locator.substring(6);
+          } else if (locatorObj.locator.startsWith('path=')) {
+            return locatorObj.locator.substring(5);
+          } else {
+            return locatorObj.locator;
+          }
         }
       }
     } catch (e) {
       // If JSON parsing fails, try regex
       const locatorMatch = locatorStr.match(/"locator"\s*:\s*"([^"]+)"/);
-      if (locatorMatch) {
+      if (locatorMatch && locatorMatch[1]) {
         const fullLocator = locatorMatch[1];
         if (fullLocator.startsWith('xpath=')) {
           return fullLocator.substring(6);
@@ -143,11 +154,23 @@ function extractLocatorValue(locatorStr) {
   return locatorStr;
 }
 
+interface MethodParam {
+  type: string;
+  name: string;
+}
+
+interface MethodInfo {
+  name: string;
+  params: MethodParam[];
+  locator: string;
+  type: string;
+}
+
 /**
  * Extract and convert all dynamic locator methods for a specific return type
  */
-function extractAndConvertMethods(content, returnType) {
-  const methodsList = [];
+function extractAndConvertMethods(content: string, returnType: string): MethodInfo[] {
+  const methodsList: MethodInfo[] = [];
   
   // Find all methods that return the specified element type
   const methodRegex = new RegExp(
@@ -155,7 +178,7 @@ function extractAndConvertMethods(content, returnType) {
     'gs'
   );
   
-  let methodMatch;
+  let methodMatch: RegExpExecArray | null;
   while ((methodMatch = methodRegex.exec(content)) !== null) {
     try {
       const methodName = methodMatch[1];
@@ -174,13 +197,10 @@ function extractAndConvertMethods(content, returnType) {
         let paramName = parts[1].replace(/["']/g, ''); // Remove any quotes
         
         return { type: paramType, name: paramName };
-      }).filter(param => param !== null);
+      }).filter((param): param is MethodParam => param !== null);
       
       // Try to extract locator pattern
       const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
-      
-      // Format parameters for TS function
-      const formattedParams = paramsList.map(p => p.name).join(', ');
       
       // Create the converted method
       methodsList.push({
@@ -190,7 +210,7 @@ function extractAndConvertMethods(content, returnType) {
         type: returnType
       });
     } catch (error) {
-      console.warn(`Warning: Failed to process method matching ${methodMatch[1]}: ${error.message}`);
+      console.warn(`Warning: Failed to process method matching ${methodMatch[1]}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   
@@ -200,7 +220,7 @@ function extractAndConvertMethods(content, returnType) {
 /**
  * Extract dynamic locator from method body and constructor args
  */
-function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
+function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
   let locator = "";
   
   try {
@@ -256,7 +276,7 @@ function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
         
         // Look for the method implementation
         const methodImplPattern = new RegExp(`String\\s+${methodName}\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+"([^"]*)"\\s*\\+\\s*(\\w+)\\s*\\+\\s*"([^"]*)"`, 'g');
-        const methodImplMatch = methodImplPattern.exec(content);
+        const methodImplMatch = methodImplPattern.exec(methodBody);
         
         if (methodImplMatch) {
           const returnPrefix = methodImplMatch[3] || '';
@@ -287,7 +307,7 @@ function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
       }
     }
   } catch (error) {
-    console.warn(`Warning: Failed to extract dynamic locator: ${error.message}`);
+    console.warn(`Warning: Failed to extract dynamic locator: ${error instanceof Error ? error.message : String(error)}`);
   }
   
   // If all patterns failed, create a placeholder
@@ -302,13 +322,13 @@ function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
  * Generate the final TypeScript output
  */
 function generateTypeScriptOutput(
-  className, 
-  packageInfo,
-  standardElements, 
-  dropdownElements,
-  standardMethods, 
-  dropdownMethods
-) {
+  className: string, 
+  packageInfo: string | null,
+  standardElements: ElementInfo[], 
+  dropdownElements: ElementInfo[],
+  standardMethods: MethodInfo[], 
+  dropdownMethods: MethodInfo[]
+): string {
   // Build imports
   let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
   output += `import { Page, Locator } from '@playwright/test';\n\n`;
@@ -349,7 +369,7 @@ function generateTypeScriptOutput(
     output += `  // Dynamic Standard Locators\n`;
     standardMethods.forEach(method => {
       const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-      output += `  private readonly ${method.name} = (${paramList}) => \`${method.locator}\`;\n`;
+      output += `  private readonly ${method.name} = (${paramList}): string => \`${method.locator}\`;\n`;
     });
     output += `\n`;
   }
@@ -359,7 +379,7 @@ function generateTypeScriptOutput(
     output += `  // Dynamic Dropdown Locators\n`;
     dropdownMethods.forEach(method => {
       const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-      output += `  private readonly ${method.name} = (${paramList}) => \`${method.locator}\`;\n`;
+      output += `  private readonly ${method.name} = (${paramList}): string => \`${method.locator}\`;\n`;
     });
     output += `\n`;
   }
@@ -369,7 +389,7 @@ function generateTypeScriptOutput(
     output += `  // Standard Element Getters\n`;
     standardElements.forEach(element => {
       const capitalizedName = element.originalName;
-      output += `  get ${capitalizedName}() {\n`;
+      output += `  get ${capitalizedName}(): Locator {\n`;
       output += `    return this.page.locator(this.${element.name});\n`;
       output += `  }\n\n`;
     });
@@ -386,19 +406,19 @@ function generateTypeScriptOutput(
       output += `    // Add dropdown specific functionality\n`;
       output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
       output += `    \n`;
-      output += `    dropdown.selectByText = async (text: string) => {\n`;
+      output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
       output += `      await baseLocator.selectOption({ label: text });\n`;
       output += `    };\n`;
       output += `    \n`;
-      output += `    dropdown.selectByValue = async (value: string) => {\n`;
+      output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
       output += `      await baseLocator.selectOption({ value });\n`;
       output += `    };\n`;
       output += `    \n`;
-      output += `    dropdown.selectByIndex = async (index: number) => {\n`;
+      output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
       output += `      await baseLocator.selectOption({ index });\n`;
       output += `    };\n`;
       output += `    \n`;
-      output += `    dropdown.getOptions = async () => {\n`;
+      output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
       output += `      return baseLocator.locator('option').allTextContents();\n`;
       output += `    };\n`;
       output += `    \n`;
@@ -414,7 +434,7 @@ function generateTypeScriptOutput(
       const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
       const paramNames = method.params.map(p => p.name).join(', ');
       
-      output += `  ${method.name}(${paramList}) {\n`;
+      output += `  ${method.name}(${paramList}): Locator {\n`;
       output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
       output += `  }\n\n`;
     });
@@ -433,19 +453,19 @@ function generateTypeScriptOutput(
       output += `    // Add dropdown specific functionality\n`;
       output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
       output += `    \n`;
-      output += `    dropdown.selectByText = async (text: string) => {\n`;
+      output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
       output += `      await baseLocator.selectOption({ label: text });\n`;
       output += `    };\n`;
       output += `    \n`;
-      output += `    dropdown.selectByValue = async (value: string) => {\n`;
+      output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
       output += `      await baseLocator.selectOption({ value });\n`;
       output += `    };\n`;
       output += `    \n`;
-      output += `    dropdown.selectByIndex = async (index: number) => {\n`;
+      output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
       output += `      await baseLocator.selectOption({ index });\n`;
       output += `    };\n`;
       output += `    \n`;
-      output += `    dropdown.getOptions = async () => {\n`;
+      output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
       output += `      return baseLocator.locator('option').allTextContents();\n`;
       output += `    };\n`;
       output += `    \n`;
@@ -456,19 +476,19 @@ function generateTypeScriptOutput(
   
   // Common page actions converted from the original class
   output += `  // Common Page Actions\n`;
-  output += `  async waitForPageToLoad() {\n`;
+  output += `  async waitForPageToLoad(): Promise<void> {\n`;
   output += `    await this.page.waitForLoadState('networkidle');\n`;
   output += `  }\n\n`;
   
-  output += `  async clickBurgerMenu() {\n`;
+  output += `  async clickBurgerMenu(): Promise<void> {\n`;
   output += `    await this.BurgerMenu.click();\n`;
   output += `  }\n\n`;
   
-  output += `  async clickReportsLink() {\n`;
+  output += `  async clickReportsLink(): Promise<void> {\n`;
   output += `    await this.ReportsLink.click();\n`;
   output += `  }\n\n`;
   
-  output += `  async sleep(ms: number) {\n`;
+  output += `  async sleep(ms: number): Promise<void> {\n`;
   output += `    return new Promise(resolve => setTimeout(resolve, ms));\n`;
   output += `  }\n`;
   
@@ -481,8 +501,8 @@ function generateTypeScriptOutput(
 /**
  * Map Java types to TypeScript types
  */
-function mapJavaTypeToTypeScript(javaType) {
-  const typeMap = {
+function mapJavaTypeToTypeScript(javaType: string): string {
+  const typeMap: Record<string, string> = {
     'String': 'string',
     'int': 'number',
     'Integer': 'number',
