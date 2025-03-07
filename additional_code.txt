@@ -1,189 +1,40 @@
 /**
- * Extract dynamic locator from constructor args with a pure algorithmic approach
- * No hardcoding of specific patterns - handles any XPath format
+ * Types for method parameter
  */
-function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
-  if (DEBUG) {
-    console.log("Processing constructor args:", constructorArgs);
-    console.log("Parameters:", paramsList.map(p => `${p.type} ${p.name}`).join(", "));
-  }
-  
-  // First, find all parts of the constructor args
-  // Split by the + operator to identify string literals and parameters
-  const parts = constructorArgs.split(/\+/).map(part => part.trim());
-  
-  // Reconstruct the XPath by analyzing each part
-  let rawXpath = "";
-  let inXpath = false;
-  let parameterMap = {}; // Maps parameter names to their positions in the XPath
-  
-  // First pass: identify where the XPath starts and extract both 
-  // the static parts and track where parameters would go
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    
-    // Start of XPath detection (looking for the locator pattern)
-    if (part.includes("xpath=") && !inXpath) {
-      inXpath = true;
-      
-      // Extract the start of the XPath after "xpath="
-      const xpathStartIndex = part.indexOf("xpath=") + 6;
-      rawXpath += part.substring(xpathStartIndex);
-      continue;
-    }
-    
-    // End of XPath detection (looking for common ending patterns)
-    if (inXpath && (part.includes('","desc"') || part.includes('"}') || part.endsWith('"'))) {
-      // Extract up to the end pattern
-      const endPatterns = ['","desc"', '"}', '"'];
-      for (const endPattern of endPatterns) {
-        if (part.includes(endPattern)) {
-          const endIndex = part.indexOf(endPattern);
-          if (endIndex > -1) {
-            rawXpath += part.substring(0, endIndex);
-            inXpath = false;
-            break;
-          }
-        }
-      }
-      
-      if (inXpath) {
-        // If no end pattern matched, just add the whole part
-        rawXpath += part;
-      }
-      continue;
-    }
-    
-    // Parameter detection
-    if (inXpath) {
-      // Check if this part is a parameter reference
-      const paramName = part.replace(/^"/, '').replace(/"$/, '');
-      const param = paramsList.find(p => p.name === paramName);
-      
-      if (param) {
-        // Record the parameter's position in the reconstructed XPath
-        parameterMap[param.name] = rawXpath.length;
-        
-        // For numeric parameters (e.g., position indexes), add a placeholder
-        if (param.type === 'int' || param.type === 'Integer' || param.type === 'number') {
-          rawXpath += "NUMERIC_PARAM";
-        } else {
-          // For string parameters, add a different placeholder
-          rawXpath += "STRING_PARAM";
-        }
-      } else {
-        // If not a parameter, it's part of the XPath
-        rawXpath += part;
-      }
-    }
-  }
-  
-  if (DEBUG) {
-    console.log("Extracted raw XPath:", rawXpath);
-    console.log("Parameter positions:", parameterMap);
-  }
-  
-  // Now analyze the constructor args to understand the context of each parameter
-  // This helps us determine what parts of the XPath to replace with parameter references
-  
-  // Second pass: Identify parameter context patterns
-  const paramContexts = {};
-  
-  for (const param of paramsList) {
-    // Try to find contextual patterns around the parameter
-    // Common patterns include: position()=, text()=, contains(), @attribute=, etc.
-    
-    // Look for position() pattern for numeric parameters
-    if (param.type === 'int' || param.type === 'Integer' || param.type === 'number') {
-      if (constructorArgs.includes(`position()="+${param.name}+"`)) {
-        paramContexts[param.name] = {
-          type: 'position',
-          pattern: /position\(\)\s*=\s*NUMERIC_PARAM/g
-        };
-      }
-    }
-    
-    // Look for text() pattern for string parameters
-    if (param.type === 'String' || param.type === 'string') {
-      if (constructorArgs.includes(`text()='"+${param.name}+"'`)) {
-        paramContexts[param.name] = {
-          type: 'text',
-          pattern: /text\(\)\s*=\s*['"]STRING_PARAM['"]/g
-        };
-      }
-      
-      // Look for contains() pattern
-      else if (constructorArgs.includes(`contains(`) && constructorArgs.includes(`+${param.name}+`)) {
-        paramContexts[param.name] = {
-          type: 'contains',
-          pattern: /contains\([^,]+,\s*['"]STRING_PARAM['"]\)/g
-        };
-      }
-    }
-  }
-  
-  if (DEBUG) {
-    console.log("Parameter contexts:", paramContexts);
-  }
-  
-  // Third pass: Replace placeholders with template literals for parameters
-  let finalXpath = rawXpath;
-  
-  for (const param of paramsList) {
-    const context = paramContexts[param.name];
-    
-    if (context) {
-      switch (context.type) {
-        case 'position':
-          finalXpath = finalXpath.replace(context.pattern, `position()=\${${param.name}}`);
-          break;
-          
-        case 'text':
-          finalXpath = finalXpath.replace(context.pattern, `text()='\${${param.name}}'`);
-          break;
-          
-        case 'contains':
-          // For contains, we need to be more careful about replacement
-          finalXpath = finalXpath.replace(context.pattern, (match) => {
-            // Replace just the string part within contains()
-            return match.replace(/['"]STRING_PARAM['"]/, `'\${${param.name}}'`);
-          });
-          break;
-      }
-    } else {
-      // No specific context found - try a more generic approach
-      // For numeric parameters, look for numeric literals in the XPath
-      if (param.type === 'int' || param.type === 'Integer' || param.type === 'number') {
-        if (finalXpath.includes("NUMERIC_PARAM")) {
-          finalXpath = finalXpath.replace("NUMERIC_PARAM", `\${${param.name}}`);
-        }
-      }
-      
-      // For string parameters, look for string literals
-      if (param.type === 'String' || param.type === 'string') {
-        if (finalXpath.includes("STRING_PARAM")) {
-          finalXpath = finalXpath.replace("STRING_PARAM", `\${${param.name}}`);
-        }
-      }
-    }
-  }
-  
-  // If we still have placeholders, try a last-resort approach
-  finalXpath = finalXpath
-    .replace(/NUMERIC_PARAM/g, "1") // Replace remaining numeric placeholders with default values
-    .replace(/STRING_PARAM/g, "value"); // Replace remaining string placeholders with default values
-  
-  if (DEBUG) {
-    console.log("Final XPath with parameters:", finalXpath);
-  }
-  
-  return finalXpath;
+interface MethodParam {
+  type: string;
+  name: string;
 }
 
 /**
- * Improved version that uses string tokenization to reconstruct the full XPath
+ * Types for tokenized constructor args
  */
-function extractDynamicLocatorV2(constructorArgs, methodBody, paramsList) {
+interface Token {
+  type: 'string' | 'parameter' | 'unknown';
+  value?: string;
+  name?: string;
+}
+
+/**
+ * Types for parameter context
+ */
+interface ParameterContext {
+  type: 'position' | 'text' | 'contains' | 'other';
+  replacement: string;
+}
+
+/**
+ * Result of XPath reconstruction
+ */
+interface XPathReconstructResult {
+  xpath: string;
+  paramPositions: Record<string, number>;
+}
+
+/**
+ * Extract dynamic locator from constructor args
+ */
+function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
   if (DEBUG) {
     console.log("Processing: ", constructorArgs);
   }
@@ -217,14 +68,19 @@ function extractDynamicLocatorV2(constructorArgs, methodBody, paramsList) {
     console.log("Final XPath:", finalXPath);
   }
   
+  // If we didn't extract anything useful, return a placeholder
+  if (!finalXPath || finalXPath.trim() === '') {
+    return `//TODO-${paramsList.map(p => p.name).join('-')}`;
+  }
+  
   return finalXPath;
 }
 
 /**
  * Tokenize constructor args to separate string literals and parameters
  */
-function tokenizeConstructorArgs(constructorArgs) {
-  const tokens = [];
+function tokenizeConstructorArgs(constructorArgs: string): Token[] {
+  const tokens: Token[] = [];
   
   // Clean up the constructor args first
   const cleanArgs = constructorArgs
@@ -274,16 +130,16 @@ function tokenizeConstructorArgs(constructorArgs) {
 /**
  * Reconstruct the XPath from tokenized constructor args
  */
-function reconstructXPathFromTokens(tokens, paramsList) {
+function reconstructXPathFromTokens(tokens: Token[], paramsList: MethodParam[]): XPathReconstructResult {
   let xpath = "";
-  const paramPositions = {};
+  const paramPositions: Record<string, number> = {};
   let inXPath = false;
   
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     
     // Start of XPath marker
-    if (token.type === 'string' && token.value.includes('xpath=') && !inXPath) {
+    if (token.type === 'string' && token.value && token.value.includes('xpath=') && !inXPath) {
       inXPath = true;
       const xpathStart = token.value.substring(token.value.indexOf('xpath=') + 6);
       xpath += xpathStart;
@@ -291,7 +147,7 @@ function reconstructXPathFromTokens(tokens, paramsList) {
     }
     
     // End of XPath marker
-    if (inXPath && token.type === 'string' && 
+    if (inXPath && token.type === 'string' && token.value && 
         (token.value.includes('","desc"') || token.value.includes('"}'))) {
       // Extract up to the marker
       const endMarkers = ['","desc"', '"}'];
@@ -306,7 +162,7 @@ function reconstructXPathFromTokens(tokens, paramsList) {
     }
     
     // Parameter token in XPath
-    if (inXPath && token.type === 'parameter') {
+    if (inXPath && token.type === 'parameter' && token.name) {
       // Verify this is a valid parameter
       const param = paramsList.find(p => p.name === token.name);
       if (param) {
@@ -318,13 +174,16 @@ function reconstructXPathFromTokens(tokens, paramsList) {
         const nextToken = i < tokens.length - 1 ? tokens[i+1] : null;
         
         // Add placeholder based on context
-        if (prevToken?.value?.includes('position()=')) {
+        if (prevToken && prevToken.type === 'string' && prevToken.value && 
+            prevToken.value.includes('position()=')) {
           xpath += "POSITION_PARAM";
         } 
-        else if (prevToken?.value?.includes('text()=\'')) {
+        else if (prevToken && prevToken.type === 'string' && prevToken.value && 
+                prevToken.value.includes('text()=\'')) {
           xpath += "TEXT_PARAM";
         }
-        else if (prevToken?.value?.includes('contains(')) {
+        else if (prevToken && prevToken.type === 'string' && prevToken.value && 
+                prevToken.value.includes('contains(')) {
           xpath += "CONTAINS_PARAM";
         }
         else {
@@ -336,7 +195,7 @@ function reconstructXPathFromTokens(tokens, paramsList) {
     }
     
     // Regular string token in XPath
-    if (inXPath && token.type === 'string') {
+    if (inXPath && token.type === 'string' && token.value) {
       xpath += token.value;
     }
   }
@@ -347,8 +206,8 @@ function reconstructXPathFromTokens(tokens, paramsList) {
 /**
  * Analyze parameters to determine their context in the XPath
  */
-function analyzeParameterContexts(constructorArgs, paramsList) {
-  const contexts = {};
+function analyzeParameterContexts(constructorArgs: string, paramsList: MethodParam[]): Record<string, ParameterContext> {
+  const contexts: Record<string, ParameterContext> = {};
   
   for (const param of paramsList) {
     // Different context detection strategies based on parameter type
@@ -378,6 +237,12 @@ function analyzeParameterContexts(constructorArgs, paramsList) {
           replacement: `\${${param.name}}`
         };
       }
+      else {
+        contexts[param.name] = {
+          type: 'other',
+          replacement: `\${${param.name}}`
+        };
+      }
     }
   }
   
@@ -387,15 +252,20 @@ function analyzeParameterContexts(constructorArgs, paramsList) {
 /**
  * Substitute parameters in the XPath using intelligent pattern matching
  */
-function substituteParametersInXPath(xpath, paramPositions, contexts, paramsList) {
+function substituteParametersInXPath(
+  xpath: string, 
+  paramPositions: Record<string, number>,
+  contexts: Record<string, ParameterContext>, 
+  paramsList: MethodParam[]
+): string {
   let result = xpath;
   
   // Track parameters we've already processed
-  const processedParams = new Set();
+  const processedParams = new Set<string>();
   
   // First pass: Use specific context replacements
   for (const param of paramsList) {
-    if (contexts[param.name]) {
+    if (param.name in contexts) {
       const context = contexts[param.name];
       
       switch (context.type) {
@@ -415,9 +285,13 @@ function substituteParametersInXPath(xpath, paramPositions, contexts, paramsList
           
         case 'contains':
           // Replace contains(..., 'X') with contains(..., '${param}')
-          result = result.replace(/contains\([^,]+,\s*['"]?(CONTAINS_PARAM|STRING_PARAM|[^'"]+)['"]?\)/g, 
-                                 `contains($1, '\${${param.name}}')`);
-          processedParams.add(param.name);
+          const containsPattern = /contains\([^,]+,\s*['"]?(CONTAINS_PARAM|STRING_PARAM|[^'"]+)['"]?\)/g;
+          if (containsPattern.test(result)) {
+            result = result.replace(containsPattern, (match) => {
+              return match.replace(/['"]?(CONTAINS_PARAM|STRING_PARAM|[^'"]+)['"]?/, `'\${${param.name}}'`);
+            });
+            processedParams.add(param.name);
+          }
           break;
       }
     }
@@ -431,10 +305,12 @@ function substituteParametersInXPath(xpath, paramPositions, contexts, paramsList
       // Try to replace any position-like pattern
       if (result.includes("POSITION_PARAM")) {
         result = result.replace("POSITION_PARAM", `\${${param.name}}`);
+        processedParams.add(param.name);
         continue;
       }
       if (result.includes("NUMERIC_PARAM")) {
         result = result.replace("NUMERIC_PARAM", `\${${param.name}}`);
+        processedParams.add(param.name);
         continue;
       }
     }
@@ -443,10 +319,17 @@ function substituteParametersInXPath(xpath, paramPositions, contexts, paramsList
       // Try to replace any text-like pattern
       if (result.includes("TEXT_PARAM")) {
         result = result.replace("TEXT_PARAM", `\${${param.name}}`);
+        processedParams.add(param.name);
         continue;
       }
       if (result.includes("STRING_PARAM")) {
         result = result.replace("STRING_PARAM", `\${${param.name}}`);
+        processedParams.add(param.name);
+        continue;
+      }
+      if (result.includes("CONTAINS_PARAM")) {
+        result = result.replace("CONTAINS_PARAM", `\${${param.name}}`);
+        processedParams.add(param.name);
         continue;
       }
     }
