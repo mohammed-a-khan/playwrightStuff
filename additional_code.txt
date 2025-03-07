@@ -421,6 +421,7 @@ function extractAndConvertMethods(content: string, returnType: string): MethodIn
       });
     } catch (error) {
       // Skip this method if we can't process it
+      console.error(`Error processing method: ${error}`);
     }
   }
   
@@ -448,6 +449,7 @@ function extractAndConvertMethods(content: string, returnType: string): MethodIn
       });
     } catch (error) {
       // Skip this method if we can't process it
+      console.error(`Error processing method: ${error}`);
     }
   }
   
@@ -477,49 +479,197 @@ function extractParameters(params: string): MethodParam[] {
  * Extract dynamic locator from method body and constructor args
  */
 function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
-  // Specific hardcoded pattern for your modal popup case
-  // This is the most reliable approach given the escaping challenges
-  if (paramsList.length === 2 && 
-      paramsList.some(p => p.name === "buttonName") &&
-      paramsList.some(p => p.name === "popupName") &&
-      constructorArgs.includes("modal") &&
-      constructorArgs.includes("section") &&
-      constructorArgs.includes("parent::button")) {
+  debugLog("Extracting dynamic locator from:", constructorArgs);
+  
+  // Look for JSON format with locator key
+  if (constructorArgs.includes('"locator"') || constructorArgs.includes('\\"locator\\"')) {
+    // This is a JSON locator format
+    // First, extract the XPath
+    let xpathValue = "";
     
-    return "//div[@class='ctsjv-modal']//section//span[text()='${buttonName}']/parent::button";
+    // Try to find the XPath part of the locator
+    const jsonLocatorRegex = /"locator"\s*:\s*"(xpath=)?([^"]+)"/;
+    const jsonMatch = constructorArgs.match(jsonLocatorRegex);
+    
+    if (jsonMatch) {
+      xpathValue = jsonMatch[2];
+    } else {
+      // Try escaped version
+      const escapedJsonLocatorRegex = /\\"locator\\"\\s*:\\s*\\"(xpath=)?([^"]+)\\"/;
+      const escapedJsonMatch = constructorArgs.match(escapedJsonLocatorRegex);
+      
+      if (escapedJsonMatch) {
+        xpathValue = escapedJsonMatch[2];
+      }
+    }
+    
+    // If we found a possible XPath value
+    if (xpathValue) {
+      debugLog("Found XPath in JSON:", xpathValue);
+      
+      // Now check for Java string concatenation with parameters
+      // If we have parameters, we need to transform them into template literals
+      let templateXPath = xpathValue;
+      
+      // Process each parameter
+      paramsList.forEach(param => {
+        debugLog(`Checking for parameter ${param.name} usage in XPath`);
+        
+        // In Java, string concat looks like: "part1'" + paramName + "'part2"
+        // We want to convert this to: `part1'${paramName}'part2`
+        
+        // First pattern: something like "text()='" + strCellText + "'"
+        const quotedParamPattern = new RegExp(`'\\s*\\+\\s*${param.name}\\s*\\+\\s*'`, 'g');
+        if (quotedParamPattern.test(constructorArgs)) {
+          debugLog(`Found quoted pattern for ${param.name}`);
+          templateXPath = templateXPath.replace(new RegExp(`'[^']*'`), `'\${${param.name}}'`);
+        }
+        
+        // Second pattern: something like "role='checkbox' and @aria-checked='" + checkboxCheckedState + "'"
+        // This is trickier because we need to find where exactly the parameter is used
+        if (constructorArgs.includes(param.name)) {
+          // Look through the constructor args for the pattern
+          const concatenationPattern = new RegExp(`(['\"])([^'\"]*)(\\1)\\s*\\+\\s*${param.name}\\s*\\+\\s*(['\"])([^'\"]*)(\\4)`, 'g');
+          const concatMatches = [...constructorArgs.matchAll(concatenationPattern)];
+          
+          if (concatMatches.length > 0) {
+            debugLog(`Found concatenation patterns for ${param.name}:`, concatMatches);
+            
+            // For each match, create a placeholder and then replace it
+            // This is safer than direct replacement since the regex might be complex
+            concatMatches.forEach((match, index) => {
+              const before = match[2];
+              const after = match[5];
+              
+              // Create a unique placeholder
+              const placeholder = `__PLACEHOLDER_${index}__`;
+              
+              // Replace in the original string
+              templateXPath = templateXPath.replace(`${before}${param.name}${after}`, `${before}\${${param.name}}${after}`);
+            });
+          } else {
+            // Simpler approach as fallback - if we can identify parameter boundaries
+            const simplePattern = new RegExp(`(\\w+|'[^']*')\\s*\\+\\s*${param.name}\\s*\\+\\s*(\\w+|'[^']*')`, 'g');
+            if (simplePattern.test(constructorArgs)) {
+              debugLog(`Using simple pattern replacement for ${param.name}`);
+              
+              // Do a simple search for param name in the XPath and wrap in ${}
+              const parts = templateXPath.split(param.name);
+              if (parts.length > 1) {
+                templateXPath = parts.join(`\${${param.name}}`);
+              }
+            }
+          }
+        }
+      });
+      
+      // If we didn't manage to apply transformations but parameters exist
+      if (templateXPath === xpathValue && paramsList.length > 0) {
+        debugLog("Falling back to generic parameter replacement");
+        
+        // As a last resort, try to infer placements based on Java string concatenation patterns
+        paramsList.forEach(param => {
+          // Look for "'...'" + param.name + "'...'
+          const concatPattern = `"(.*?)('.*?')\\s*"\\s*\\+\\s*${param.name}\\s*\\+\\s*"\\s*('.*?')(.*?)"`;
+          const concatRegex = new RegExp(concatPattern, 'g');
+          const concatMatch = constructorArgs.match(concatRegex);
+          
+          if (concatMatch) {
+            debugLog(`Found complex concatenation for ${param.name}`);
+            templateXPath = templateXPath.replace(/('[^']*')/, `'\${${param.name}}'`);
+          }
+        });
+        
+        // If we still haven't transformed it but there are parameters
+        if (templateXPath === xpathValue && constructorArgs.includes("'+")) {
+          debugLog("Using regexp-based extraction of parameters");
+          
+          // Extract each parameter from the Java string concatenation
+          paramsList.forEach(param => {
+            // Find where in the constructor args this parameter is used
+            if (constructorArgs.includes(param.name)) {
+              // Extract adjacent string literals
+              const beforePattern = new RegExp(`"([^"]*)"\\s*\\+\\s*${param.name}`);
+              const afterPattern = new RegExp(`${param.name}\\s*\\+\\s*"([^"]*)"`);
+              
+              const beforeMatch = constructorArgs.match(beforePattern);
+              const afterMatch = constructorArgs.match(afterPattern);
+              
+              if (beforeMatch && afterMatch) {
+                const beforeText = beforeMatch[1];
+                const afterText = afterMatch[1];
+                
+                // Find where this text appears in XPath
+                if (templateXPath.includes(beforeText) && templateXPath.includes(afterText)) {
+                  const startIdx = templateXPath.indexOf(beforeText) + beforeText.length;
+                  const endIdx = templateXPath.indexOf(afterText, startIdx);
+                  
+                  if (startIdx >= 0 && endIdx >= 0) {
+                    const paramPlaceholder = `\${${param.name}}`;
+                    const before = templateXPath.substring(0, startIdx);
+                    const after = templateXPath.substring(endIdx);
+                    templateXPath = before + paramPlaceholder + after;
+                  }
+                }
+              }
+            }
+          });
+        }
+      }
+      
+      return templateXPath;
+    }
   }
   
-  // For span with text and buttonName parameter
-  if (paramsList.some(p => p.name === "buttonName") && 
-      constructorArgs.includes("span") && 
-      constructorArgs.includes("text()") &&
-      constructorArgs.includes("ancestor:button")) {
+  // If we couldn't extract from JSON format, try other patterns
+  
+  // For modal popup case (common pattern)
+  if (constructorArgs.includes("ctsjv-modal") && 
+      paramsList.some(p => p.type === "String")) {
     
-    return "//span[text()='${buttonName}']/ancestor:button";
+    // Construct a template based on parameters
+    const stringParams = paramsList.filter(p => p.type === "String");
+    
+    if (constructorArgs.includes("text()") && stringParams.length > 0) {
+      // Likely a text comparison
+      const textParam = stringParams[0];
+      return `//div[@class='ctsjv-modal']//span[text()='\${${textParam.name}}']/parent::button`;
+    }
+  }
+  
+  // For span with text parameter
+  if (paramsList.some(p => p.name.includes("text") || p.name.includes("Text") || p.name.includes("Name")) && 
+      constructorArgs.includes("text()") && 
+      constructorArgs.includes("span")) {
+    
+    const textParam = paramsList.find(p => 
+      p.name.includes("text") || p.name.includes("Text") || p.name.includes("Name")
+    );
+    
+    if (textParam) {
+      if (constructorArgs.includes("ancestor::button")) {
+        return `//span[text()='\${${textParam.name}}']/ancestor::button`;
+      } else {
+        return `//span[text()='\${${textParam.name}}']`;
+      }
+    }
   }
   
   // For attribute name-value pairs
   if (paramsList.length === 2 && 
-      paramsList.some(p => p.name === "attrName") && 
-      paramsList.some(p => p.name === "attrValue") &&
-      constructorArgs.includes("attrName") && 
-      constructorArgs.includes("attrValue")) {
+      paramsList.some(p => p.name.includes("attr") || p.name.includes("Attr")) && 
+      paramsList.some(p => p.name.includes("value") || p.name.includes("Value"))) {
     
-    return "//div[@${attrName}='${attrValue}']";
-  }
-  
-  // Generic approach - find the method signature in the method body
-  // Look for common parameter usage patterns in dynamic locators
-  if (paramsList.some(p => p.name === "buttonName") && 
-      constructorArgs.includes("buttonName")) {
+    const attrParam = paramsList.find(p => p.name.includes("attr") || p.name.includes("Attr"));
+    const valueParam = paramsList.find(p => p.name.includes("value") || p.name.includes("Value"));
     
-    // Handle text() comparison with buttonName
-    if (constructorArgs.includes("text()") && constructorArgs.includes("button")) {
-      return "//span[text()='${buttonName}']/ancestor::button";
+    if (attrParam && valueParam) {
+      return `//div[@\${${attrParam.name}}='\${${valueParam.name}}']`;
     }
   }
   
-  // Return a default placeholder if we can't determine the pattern
+  // If we can't determine a specific pattern, create a placeholder
+  // We'll include parameter names to help with manual conversion
   return `//TODO-${paramsList.map(p => p.name).join('-')}`;
 }
 
@@ -532,7 +682,8 @@ function generateTypeScriptOutput(
   standardElements: ElementInfo[], 
   dropdownElements: ElementInfo[],
   standardMethods: MethodInfo[], 
-  dropdownMethods: MethodInfo[]
+  dropdownMethods: MethodInfo[],
+  hasListElements: boolean
 ): string {
   // Build imports
   let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
@@ -942,5 +1093,6 @@ Options:
 module.exports = {
   convertFile,
   processDirectory,
-  extractLocatorValue
+  extractLocatorValue,
+  extractDynamicLocator
 };
