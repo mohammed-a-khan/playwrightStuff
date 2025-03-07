@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Main conversion function that handles the entire process
+ * QAF BDD Selenium Java to Playwright TypeScript Converter
  */
 function convertFile(inputFile, outputFile) {
   try {
@@ -16,15 +16,27 @@ function convertFile(inputFile, outputFile) {
     
     const content = fs.readFileSync(inputFile, 'utf8');
     
-    // Extract class name from the file content
+    // Extract class and package information
+    const packageInfo = extractPackageInfo(content);
     const className = extractClassName(content) || path.basename(inputFile, '.java');
     
-    // Process elements and methods
-    const elements = extractAndConvertElements(content);
-    const methods = extractAndConvertMethods(content);
+    // Process elements by type
+    const standardElements = extractAndConvertElements(content, 'CSWebElement');
+    const dropdownElements = extractAndConvertElements(content, 'CSDropDownListWebElement');
+    
+    // Process dynamic locator methods by return type
+    const standardMethods = extractAndConvertMethods(content, 'CSWebElement');
+    const dropdownMethods = extractAndConvertMethods(content, 'CSDropDownListWebElement');
     
     // Generate the final TypeScript output
-    const finalOutput = generateTypeScriptOutput(className, elements, methods);
+    const finalOutput = generateTypeScriptOutput(
+      className, 
+      packageInfo,
+      standardElements, 
+      dropdownElements,
+      standardMethods, 
+      dropdownMethods
+    );
     
     // Write the result
     const outputDir = path.dirname(outputFile);
@@ -36,8 +48,17 @@ function convertFile(inputFile, outputFile) {
     console.log(`Converted file successfully written to ${outputFile}`);
   } catch (error) {
     console.error(`Error converting file: ${error.message}`);
+    console.error(error.stack);
     process.exit(1);
   }
+}
+
+/**
+ * Extract the package name from Java content
+ */
+function extractPackageInfo(content) {
+  const packageMatch = content.match(/package\s+([\w.]+)\s*;/);
+  return packageMatch ? packageMatch[1] : null;
 }
 
 /**
@@ -49,98 +70,33 @@ function extractClassName(content) {
 }
 
 /**
- * Extract and convert all @FindBy elements from Java to Playwright format
+ * Extract and convert elements of a specific type from Java to Playwright format
  */
-function extractAndConvertElements(content) {
+function extractAndConvertElements(content, elementType) {
   const elementsList = [];
   
-  // Various patterns for element declarations
-  const patterns = [
-    // Standard @FindBy pattern
-    {
-      regex: /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*CSWebElement\s+(\w+)\s*;/gs,
-      process: (match) => {
-        const locatorStr = match[1];
-        const elementName = match[2];
-        const locatorValue = extractLocatorValue(locatorStr);
-        return {
-          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-          locator: locatorValue
-        };
-      }
-    },
-    // Alternative @FindBy pattern with different attribute names
-    {
-      regex: /@FindBy\((?:xpath|css|id|name|className|tagName)\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:WebElement|CSWebElement)\s+(\w+)\s*;/gs,
-      process: (match) => {
-        const locatorStr = match[1];
-        const elementName = match[2];
-        return {
-          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-          locator: locatorStr // Direct locator value
-        };
-      }
-    },
-    // Look for elements initialized in constructors or methods
-    {
-      regex: /(?:this\.)?(\w+)\s*=\s*new\s+CSWebElement\s*\(\s*"(.*?)"\s*\)/gs,
-      process: (match) => {
-        const elementName = match[1];
-        const locatorStr = match[2];
-        const locatorValue = extractLocatorValue(locatorStr);
-        return {
-          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-          locator: locatorValue
-        };
-      }
-    }
-  ];
+  // FindBy pattern for both CSWebElement and CSDropDownListWebElement
+  const findByRegex = new RegExp(
+    `@FindBy\\(locator\\s*=\\s*"(.*?)"\\)\\s*(?:public|private|protected)?\\s*${elementType}\\s+(\\w+)\\s*;`, 
+    'gs'
+  );
   
-  // Process each pattern
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.regex.exec(content)) !== null) {
-      const element = pattern.process(match);
-      elementsList.push(`  private readonly ${element.name} = "${element.locator}";`);
-    }
+  // Process elements
+  let match;
+  while ((match = findByRegex.exec(content)) !== null) {
+    const locatorStr = match[1];
+    const elementName = match[2];
+    const locatorValue = extractLocatorValue(locatorStr);
+    
+    elementsList.push({
+      name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+      originalName: elementName,
+      locator: locatorValue,
+      type: elementType
+    });
   }
   
   return elementsList;
-}
-
-/**
- * Extract and convert all dynamic locator methods
- */
-function extractAndConvertMethods(content) {
-  const methodsList = [];
-  
-  // Find all methods that return CSWebElement
-  const methodRegex = /(?:public|private|protected)\s+CSWebElement\s+(\w+)\s*\(\s*((?:String|int|boolean|[\w<>[\]]+)\s+\w+(?:\s*,\s*(?:String|int|boolean|[\w<>[\]]+)\s+\w+)*)\s*\)\s*\{([\s\S]*?)return\s+new\s+CSWebElement\s*\(([\s\S]*?)\)\s*;\s*\}/gs;
-  
-  let methodMatch;
-  while ((methodMatch = methodRegex.exec(content)) !== null) {
-    const methodName = methodMatch[1];
-    const params = methodMatch[2];
-    const methodBody = methodMatch[3];
-    const constructorArgs = methodMatch[4];
-    
-    // Extract parameter information
-    const paramsList = params.split(',').map(param => {
-      const parts = param.trim().split(/\s+/);
-      return parts[parts.length - 1]; // Get the parameter name
-    });
-    
-    // Try to extract locator pattern
-    const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
-    
-    // Format parameters for TS function
-    const formattedParams = paramsList.join(', ');
-    
-    // Create the converted method
-    methodsList.push(`  private readonly ${methodName} = (${formattedParams}) => \`${locator}\`;`);
-  }
-  
-  return methodsList;
 }
 
 /**
@@ -188,160 +144,391 @@ function extractLocatorValue(locatorStr) {
 }
 
 /**
+ * Extract and convert all dynamic locator methods for a specific return type
+ */
+function extractAndConvertMethods(content, returnType) {
+  const methodsList = [];
+  
+  // Find all methods that return the specified element type
+  const methodRegex = new RegExp(
+    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
+    'gs'
+  );
+  
+  let methodMatch;
+  while ((methodMatch = methodRegex.exec(content)) !== null) {
+    try {
+      const methodName = methodMatch[1];
+      const params = methodMatch[2] || '';
+      const methodBody = methodMatch[3] || '';
+      const constructorArgs = methodMatch[4] || '';
+      
+      // Extract parameter information
+      const paramsList = params.split(',').map(param => {
+        const parts = param.trim().split(/\s+/);
+        // Handle syntax errors in the Java code
+        if (parts.length < 2) return null;
+        
+        // Fix common typos in the Java code
+        let paramType = parts[0].replace(/Sring/, 'String');
+        let paramName = parts[1].replace(/["']/g, ''); // Remove any quotes
+        
+        return { type: paramType, name: paramName };
+      }).filter(param => param !== null);
+      
+      // Try to extract locator pattern
+      const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
+      
+      // Format parameters for TS function
+      const formattedParams = paramsList.map(p => p.name).join(', ');
+      
+      // Create the converted method
+      methodsList.push({
+        name: methodName,
+        params: paramsList,
+        locator: locator,
+        type: returnType
+      });
+    } catch (error) {
+      console.warn(`Warning: Failed to process method matching ${methodMatch[1]}: ${error.message}`);
+    }
+  }
+  
+  return methodsList;
+}
+
+/**
  * Extract dynamic locator from method body and constructor args
  */
 function extractDynamicLocator(constructorArgs, methodBody, paramsList) {
   let locator = "";
   
-  // Common patterns for locator construction
-  
-  // Pattern 1: JSON locator with single parameter
-  const jsonSinglePattern = /"locator"\s*:\s*"xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
-  const match1 = constructorArgs.match(jsonSinglePattern);
-  if (match1) {
-    const prefix = match1[1] || '';
-    const variable = match1[2] || '';
-    const suffix = match1[3] || '';
-    locator = `${prefix}\${${variable}}${suffix}`;
-    return locator;
-  }
-  
-  // Pattern 2: JSON locator with multiple parameters
-  const jsonMultiPattern = /"locator"\s*:\s*"xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
-  const match2 = constructorArgs.match(jsonMultiPattern);
-  if (match2) {
-    const prefix = match2[1] || '';
-    const var1 = match2[2] || '';
-    const middle = match2[3] || '';
-    const var2 = match2[4] || '';
-    const suffix = match2[5] || '';
-    locator = `${prefix}\${${var1}}${middle}\${${var2}}${suffix}`;
-    return locator;
-  }
-  
-  // Pattern 3: Method call in the locator
-  const methodCallPattern = /getPath\((\w+)\)/;
-  const match3 = constructorArgs.match(methodCallPattern);
-  if (match3) {
-    const methodParam = match3[1];
-    // Look for the method definition
-    const methodDefPattern = new RegExp(`String\\s+getPath\\s*\\(\\s*String\\s+${methodParam}\\s*\\)\\s*\\{([\\s\\S]*?)\\}`, 'g');
-    const methodDefMatch = methodDefPattern.exec(methodBody);
-    if (methodDefMatch) {
-      const methodDefBody = methodDefMatch[1];
-      // Try to extract the logic
-      const returnPattern = /return\s+"([^"]*)"\s*\+\s*(\w+)\s*\+\s*"([^"]*)"/;
-      const returnMatch = methodDefBody.match(returnPattern);
-      if (returnMatch) {
-        const prefix = returnMatch[1] || '';
-        const variable = returnMatch[2] || '';
-        const suffix = returnMatch[3] || '';
+  try {
+    // JSON locator pattern with concatenation
+    const jsonConcatPattern = /"locator"\s*:\s*"xpath=([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
+    const match = constructorArgs.match(jsonConcatPattern);
+    
+    if (match) {
+      const prefix = match[1] || '';
+      const variable = match[2] || '';
+      const suffix = match[3] || '';
+      
+      // Find which parameter this variable refers to
+      const param = paramsList.find(p => p.name === variable);
+      if (param) {
         locator = `${prefix}\${${variable}}${suffix}`;
-        return locator;
+      } else {
+        // It might be a method call
+        const methodCallPattern = new RegExp(`(\\w+)\\(([^)]*)\\)`, 'g');
+        const methodCallMatch = methodCallPattern.exec(constructorArgs);
+        if (methodCallMatch) {
+          const methodName = methodCallMatch[1];
+          const methodParams = methodCallMatch[2];
+          
+          // Look for the method definition
+          const methodDefPattern = new RegExp(`String\\s+${methodName}\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+"([^"]*)"\\s*\\+\\s*(\\w+)\\s*\\+\\s*"([^"]*)"`, 'g');
+          const methodDefMatch = methodDefPattern.exec(methodBody);
+          
+          if (methodDefMatch) {
+            const returnPrefix = methodDefMatch[3] || '';
+            const returnVar = methodDefMatch[4] || '';
+            const returnSuffix = methodDefMatch[5] || '';
+            
+            // Use the parameters from the method call
+            const methodCallParams = methodParams.split(',').map(p => p.trim());
+            if (methodCallParams.length > 0) {
+              locator = `${returnPrefix}\${${methodCallParams[0]}}${returnSuffix}`;
+            }
+          }
+        }
+      }
+    } else {
+      // Try direct pattern for method calls in constructor arguments
+      const methodPattern = new RegExp(`(\\w+)\\(([^)]*)\\)\\+?"([^"]*?)"\s*\\+\\s*(\\w+)\\s*\\+\\s*"([^"]*)"`, 'g');
+      const methodMatch = methodPattern.exec(constructorArgs);
+      
+      if (methodMatch) {
+        const methodName = methodMatch[1];
+        const methodParams = methodMatch[2];
+        const midText = methodMatch[3] || '';
+        const variable = methodMatch[4] || '';
+        const suffix = methodMatch[5] || '';
+        
+        // Look for the method implementation
+        const methodImplPattern = new RegExp(`String\\s+${methodName}\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+"([^"]*)"\\s*\\+\\s*(\\w+)\\s*\\+\\s*"([^"]*)"`, 'g');
+        const methodImplMatch = methodImplPattern.exec(content);
+        
+        if (methodImplMatch) {
+          const returnPrefix = methodImplMatch[3] || '';
+          const returnVar = methodImplMatch[4] || '';
+          const returnSuffix = methodImplMatch[5] || '';
+          
+          // Use the parameters from the method call
+          const methodCallParams = methodParams.split(',').map(p => p.trim());
+          if (methodCallParams.length > 0) {
+            locator = `${returnPrefix}\${${methodCallParams[0]}}${returnSuffix}${midText}\${${variable}}${suffix}`;
+          }
+        } else {
+          // If method implementation not found, make a best guess
+          locator = `\${${methodName}(${methodParams})}${midText}\${${variable}}${suffix}`;
+        }
+      } else {
+        // Final fallback for simple string concatenation
+        const simpleConcatPattern = /"([^"]*?)"\s*\+\s*(\w+)\s*\+\s*"([^"]*?)"/;
+        const simpleConcatMatch = constructorArgs.match(simpleConcatPattern);
+        
+        if (simpleConcatMatch) {
+          const prefix = simpleConcatMatch[1] || '';
+          const variable = simpleConcatMatch[2] || '';
+          const suffix = simpleConcatMatch[3] || '';
+          
+          locator = `${prefix}\${${variable}}${suffix}`;
+        }
       }
     }
+  } catch (error) {
+    console.warn(`Warning: Failed to extract dynamic locator: ${error.message}`);
   }
   
-  // Pattern 4: Complex string concatenation
-  const complexConcatPattern = /"([^"]*)"\s*\+(?:\s*\+)?\s*(\w+)(?:\s*\+\s*"([^"]*)")?/g;
-  let stringParts = [];
-  let variableParts = [];
-  let match4;
-  let fullString = constructorArgs;
-  
-  while ((match4 = complexConcatPattern.exec(fullString)) !== null) {
-    if (match4[1]) stringParts.push(match4[1]);
-    if (match4[2] && paramsList.includes(match4[2])) {
-      variableParts.push(match4[2]);
-      stringParts.push(`\${${match4[2]}}`);
-    } else if (match4[2]) {
-      // It's a variable but not a parameter
-      stringParts.push(`[VAR:${match4[2]}]`);
-    }
-    if (match4[3]) stringParts.push(match4[3]);
+  // If all patterns failed, create a placeholder
+  if (!locator) {
+    locator = `//TODO-CONVERT-LOCATOR-FOR-PARAMETERS-${paramsList.map(p => p.name).join('-')}`;
   }
   
-  if (stringParts.length > 0) {
-    locator = stringParts.join('');
-    
-    // Clean up the locator
-    locator = locator.replace(/xpath=/g, '');
-    locator = locator.replace(/\[VAR:(\w+)\]/g, (match, varName) => {
-      // Try to find variable value in the method body
-      const varPattern = new RegExp(`${varName}\\s*=\\s*"([^"]*)"`, 'g');
-      const varMatch = varPattern.exec(methodBody);
-      return varMatch ? varMatch[1] : `\${${varName}}`;
-    });
-    
-    return locator;
-  }
-  
-  // Fallback - create placeholder with parameter names
-  locator = `//TODO-CONVERT-LOCATOR-${paramsList.map(p => `\${${p}}`).join('-')}`;
   return locator;
 }
 
 /**
  * Generate the final TypeScript output
  */
-function generateTypeScriptOutput(className, elements, methods) {
-  let output = `import { Page, Locator } from '@playwright/test';\n\n`;
+function generateTypeScriptOutput(
+  className, 
+  packageInfo,
+  standardElements, 
+  dropdownElements,
+  standardMethods, 
+  dropdownMethods
+) {
+  // Build imports
+  let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
+  output += `import { Page, Locator } from '@playwright/test';\n\n`;
+  
+  // Add helper interface for dropdown interaction
+  output += `// Helper interface for dropdown functionality\n`;
+  output += `interface DropdownOptions {\n`;
+  output += `  selectByText: (text: string) => Promise<void>;\n`;
+  output += `  selectByValue: (value: string) => Promise<void>;\n`;
+  output += `  selectByIndex: (index: number) => Promise<void>;\n`;
+  output += `  getOptions: () => Promise<string[]>;\n`;
+  output += `}\n\n`;
+  
+  // Start class definition
   output += `export class ${className} {\n`;
   output += `  constructor(private page: Page) {}\n\n`;
   
-  // Add elements
-  if (elements.length > 0) {
-    output += `  // Element Locators\n`;
-    output += elements.join('\n') + '\n\n';
+  // Add standard element locators
+  if (standardElements.length > 0) {
+    output += `  // Standard Element Locators\n`;
+    standardElements.forEach(element => {
+      output += `  private readonly ${element.name} = "${element.locator}";\n`;
+    });
+    output += `\n`;
   }
   
-  // Add methods
-  if (methods.length > 0) {
-    output += `  // Dynamic Locators\n`;
-    output += methods.join('\n\n') + '\n\n';
+  // Add dropdown element locators
+  if (dropdownElements.length > 0) {
+    output += `  // Dropdown Element Locators\n`;
+    dropdownElements.forEach(element => {
+      output += `  private readonly ${element.name} = "${element.locator}";\n`;
+    });
+    output += `\n`;
   }
   
-  // Add getter methods for each element
-  if (elements.length > 0) {
-    output += `  // Element Getters\n`;
-    elements.forEach(element => {
-      const match = element.match(/private readonly (\w+) = "([^"]*)";/);
-      if (match) {
-        const elementName = match[1];
-        const capitalizedName = elementName.charAt(0).toUpperCase() + elementName.slice(1);
-        output += `  get${capitalizedName}() {\n`;
-        output += `    return this.page.locator(this.${elementName});\n`;
-        output += `  }\n\n`;
-      }
+  // Add standard dynamic locator methods
+  if (standardMethods.length > 0) {
+    output += `  // Dynamic Standard Locators\n`;
+    standardMethods.forEach(method => {
+      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
+      output += `  private readonly ${method.name} = (${paramList}) => \`${method.locator}\`;\n`;
+    });
+    output += `\n`;
+  }
+  
+  // Add dropdown dynamic locator methods
+  if (dropdownMethods.length > 0) {
+    output += `  // Dynamic Dropdown Locators\n`;
+    dropdownMethods.forEach(method => {
+      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
+      output += `  private readonly ${method.name} = (${paramList}) => \`${method.locator}\`;\n`;
+    });
+    output += `\n`;
+  }
+  
+  // Add getters for standard elements
+  if (standardElements.length > 0) {
+    output += `  // Standard Element Getters\n`;
+    standardElements.forEach(element => {
+      const capitalizedName = element.originalName;
+      output += `  get ${capitalizedName}() {\n`;
+      output += `    return this.page.locator(this.${element.name});\n`;
+      output += `  }\n\n`;
     });
   }
   
-  // Add getter methods for dynamic locators
-  if (methods.length > 0) {
-    output += `  // Dynamic Element Getters\n`;
-    methods.forEach(method => {
-      const match = method.match(/private readonly (\w+) = \(([^)]*)\)/);
-      if (match) {
-        const methodName = match[1];
-        const params = match[2];
-        const capitalizedName = methodName.charAt(0).toUpperCase() + methodName.slice(1);
-        output += `  get${capitalizedName}(${params}) {\n`;
-        output += `    return this.page.locator(this.${methodName}(${params.split(',').map(p => p.trim()).join(', ')}));\n`;
-        output += `  }\n\n`;
-      }
+  // Add getters for dropdown elements
+  if (dropdownElements.length > 0) {
+    output += `  // Dropdown Element Getters with enhanced functionality\n`;
+    dropdownElements.forEach(element => {
+      const capitalizedName = element.originalName;
+      output += `  get ${capitalizedName}(): Locator & DropdownOptions {\n`;
+      output += `    const baseLocator = this.page.locator(this.${element.name});\n`;
+      output += `    \n`;
+      output += `    // Add dropdown specific functionality\n`;
+      output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
+      output += `    \n`;
+      output += `    dropdown.selectByText = async (text: string) => {\n`;
+      output += `      await baseLocator.selectOption({ label: text });\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    dropdown.selectByValue = async (value: string) => {\n`;
+      output += `      await baseLocator.selectOption({ value });\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    dropdown.selectByIndex = async (index: number) => {\n`;
+      output += `      await baseLocator.selectOption({ index });\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    dropdown.getOptions = async () => {\n`;
+      output += `      return baseLocator.locator('option').allTextContents();\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    return dropdown;\n`;
+      output += `  }\n\n`;
     });
   }
   
+  // Add methods for standard dynamic locators
+  if (standardMethods.length > 0) {
+    output += `  // Dynamic Standard Element Getters\n`;
+    standardMethods.forEach(method => {
+      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
+      const paramNames = method.params.map(p => p.name).join(', ');
+      
+      output += `  ${method.name}(${paramList}) {\n`;
+      output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
+      output += `  }\n\n`;
+    });
+  }
+  
+  // Add methods for dropdown dynamic locators
+  if (dropdownMethods.length > 0) {
+    output += `  // Dynamic Dropdown Element Getters\n`;
+    dropdownMethods.forEach(method => {
+      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
+      const paramNames = method.params.map(p => p.name).join(', ');
+      
+      output += `  ${method.name}(${paramList}): Locator & DropdownOptions {\n`;
+      output += `    const baseLocator = this.page.locator(this.${method.name}(${paramNames}));\n`;
+      output += `    \n`;
+      output += `    // Add dropdown specific functionality\n`;
+      output += `    const dropdown = baseLocator as Locator & DropdownOptions;\n`;
+      output += `    \n`;
+      output += `    dropdown.selectByText = async (text: string) => {\n`;
+      output += `      await baseLocator.selectOption({ label: text });\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    dropdown.selectByValue = async (value: string) => {\n`;
+      output += `      await baseLocator.selectOption({ value });\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    dropdown.selectByIndex = async (index: number) => {\n`;
+      output += `      await baseLocator.selectOption({ index });\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    dropdown.getOptions = async () => {\n`;
+      output += `      return baseLocator.locator('option').allTextContents();\n`;
+      output += `    };\n`;
+      output += `    \n`;
+      output += `    return dropdown;\n`;
+      output += `  }\n\n`;
+    });
+  }
+  
+  // Common page actions converted from the original class
+  output += `  // Common Page Actions\n`;
+  output += `  async waitForPageToLoad() {\n`;
+  output += `    await this.page.waitForLoadState('networkidle');\n`;
+  output += `  }\n\n`;
+  
+  output += `  async clickBurgerMenu() {\n`;
+  output += `    await this.BurgerMenu.click();\n`;
+  output += `  }\n\n`;
+  
+  output += `  async clickReportsLink() {\n`;
+  output += `    await this.ReportsLink.click();\n`;
+  output += `  }\n\n`;
+  
+  output += `  async sleep(ms: number) {\n`;
+  output += `    return new Promise(resolve => setTimeout(resolve, ms));\n`;
+  output += `  }\n`;
+  
+  // Close class
   output += `}\n`;
+  
   return output;
 }
 
-// Process command line arguments
-const args = process.argv.slice(2);
-if (args.length !== 2) {
-  console.log('Usage: node java-to-playwright-converter.js <input-file> <output-file>');
-  process.exit(1);
+/**
+ * Map Java types to TypeScript types
+ */
+function mapJavaTypeToTypeScript(javaType) {
+  const typeMap = {
+    'String': 'string',
+    'int': 'number',
+    'Integer': 'number',
+    'boolean': 'boolean',
+    'Boolean': 'boolean',
+    'double': 'number',
+    'Double': 'number',
+    'long': 'number',
+    'Long': 'number',
+    'float': 'number',
+    'Float': 'number',
+    'Object': 'any',
+    'List': 'Array<any>',
+    'ArrayList': 'Array<any>',
+    'Map': 'Record<string, any>',
+    'HashMap': 'Record<string, any>'
+  };
+  
+  // Check for generic types like List<String>
+  const genericMatch = javaType.match(/(\w+)<(\w+)>/);
+  if (genericMatch) {
+    const container = genericMatch[1];
+    const innerType = genericMatch[2];
+    
+    if (container === 'List' || container === 'ArrayList') {
+      return `Array<${mapJavaTypeToTypeScript(innerType)}>`;
+    } else if (container === 'Map' || container === 'HashMap') {
+      return `Record<string, ${mapJavaTypeToTypeScript(innerType)}>`;
+    }
+  }
+  
+  return typeMap[javaType] || 'any';
 }
 
-// Convert the file
-convertFile(args[0], args[1]);
+// Process command line arguments
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  if (args.length !== 2) {
+    console.log('Usage: node qaf-to-playwright-converter.js <input-file> <output-file>');
+    process.exit(1);
+  }
+  
+  // Convert the file
+  convertFile(args[0], args[1]);
+}
+
+module.exports = {
+  convertFile
+};
