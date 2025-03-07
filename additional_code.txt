@@ -42,25 +42,39 @@ function convertFile(inputFile: string, outputFile: string): void {
                            contentWithoutComments.includes('List<CSWebElement>') ||
                            contentWithoutComments.includes('List<CSDropDownListWebElement>');
     
-    // Process elements by type
+    // Process elements - all elements are processed in a single pass
     console.log('Extracting WebElement and CSWebElement elements...');
-    const standardElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
+    const allWebElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
     
+    // Process WebElement separately if needed
+    console.log('Checking for direct WebElement elements...');
+    const directWebElements = extractAndConvertElements(contentWithoutComments, 'WebElement');
+    
+    // Process dropdown elements
     console.log('Extracting dropdown elements...');
     const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
     
-    // Check for WebElement directly when it's not a CSWebElement
-    console.log('Checking for WebElement elements...');
-    const webElements = extractAndConvertElements(contentWithoutComments, 'WebElement');
-    
-    // Merge web elements that aren't CSWebElements
-    webElements.forEach(element => {
-      // Check if this element is already in standardElements
+    // Merge direct WebElements into the standard elements list if they don't exist already
+    const standardElements = [...allWebElements];
+    directWebElements.forEach(element => {
       const exists = standardElements.some(e => e.originalName === element.originalName);
       if (!exists) {
         standardElements.push(element);
       }
     });
+    
+    // Debug elements (if in debug mode)
+    if (DEBUG) {
+      console.log("\nStandard Elements:");
+      standardElements.forEach((element, i) => {
+        console.log(`${i+1}. ${element.originalName} (${element.isList ? 'List' : 'Single'}): ${element.locator}`);
+      });
+      
+      console.log("\nDropdown Elements:");
+      dropdownElements.forEach((element, i) => {
+        console.log(`${i+1}. ${element.originalName} (${element.isList ? 'List' : 'Single'}): ${element.locator}`);
+      });
+    }
     
     // Process dynamic locator methods by return type
     console.log('Extracting standard methods...');
@@ -221,58 +235,43 @@ interface ElementInfo {
 function extractAndConvertElements(content: string, elementType: string): ElementInfo[] {
   const elementsList: ElementInfo[] = [];
   
-  // First, let's handle standard element types (CSWebElement, CSDropDownListWebElement)
-  const standardRegex = new RegExp(
-    `@FindBy\\(locator\\s*=\\s*"(.*?)"\\)\\s*(?:public|private|protected)?\\s*${elementType}\\s+(\\w+)\\s*;`, 
-    'gs'
-  );
-  
-  // Process standard elements
-  let match: RegExpExecArray | null;
-  while ((match = standardRegex.exec(content)) !== null) {
-    const locatorStr = match[1];
-    const elementName = match[2];
-    
-    const locatorValue = extractLocatorValue(locatorStr);
-    
-    elementsList.push({
-      name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-      originalName: elementName,
-      locator: locatorValue,
-      type: elementType,
-      isList: false
-    });
-  }
-  
-  // Now, if we're looking for WebElements, also check for List<WebElement>
+  // Process all findBy annotations in order
   if (elementType === 'CSWebElement' || elementType === 'WebElement') {
-    // Check for List<WebElement> or List<CSWebElement>
-    const listWebElementRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*List\s*<\s*(?:WebElement|CSWebElement)\s*>\s*(\w+)\s*;/gs;
+    // We'll capture both regular WebElements and List<WebElement>
+    const elementRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:(List)\s*<\s*(WebElement|CSWebElement)\s*>|(WebElement|CSWebElement))\s+(\w+)\s*;/g;
     
-    while ((match = listWebElementRegex.exec(content)) !== null) {
+    let match;
+    while ((match = elementRegex.exec(content)) !== null) {
       const locatorStr = match[1];
-      const elementName = match[2];
+      const isList = match[2] === 'List'; // Will be 'List' or undefined
+      const isCorrectType = (match[3] === elementType) || (match[4] === elementType);
       
-      const locatorValue = extractLocatorValue(locatorStr);
-      
-      elementsList.push({
-        name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-        originalName: elementName,
-        locator: locatorValue,
-        type: 'WebElement',
-        isList: true
-      });
+      // Only process if it's the requested type
+      if (isCorrectType) {
+        // Determine the element name - it's in position 5
+        const elementName = match[5];
+        
+        // Extract the locator value
+        const locatorValue = extractLocatorValue(locatorStr);
+        
+        elementsList.push({
+          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+          originalName: elementName,
+          locator: locatorValue,
+          type: elementType,
+          isList: isList
+        });
+      }
     }
-  }
-  
-  // For dropdown lists
-  if (elementType === 'CSDropDownListWebElement') {
-    // Check for List<CSDropDownListWebElement>
-    const listDropdownRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*List\s*<\s*CSDropDownListWebElement\s*>\s*(\w+)\s*;/gs;
+  } else if (elementType === 'CSDropDownListWebElement') {
+    // Process dropdown elements separately
+    const dropdownRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:(List)\s*<\s*CSDropDownListWebElement\s*>|CSDropDownListWebElement)\s+(\w+)\s*;/g;
     
-    while ((match = listDropdownRegex.exec(content)) !== null) {
+    let match;
+    while ((match = dropdownRegex.exec(content)) !== null) {
       const locatorStr = match[1];
-      const elementName = match[2];
+      const isList = match[2] === 'List'; // Will be 'List' or undefined
+      const elementName = match[3];
       
       const locatorValue = extractLocatorValue(locatorStr);
       
@@ -280,8 +279,8 @@ function extractAndConvertElements(content: string, elementType: string): Elemen
         name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
         originalName: elementName,
         locator: locatorValue,
-        type: 'CSDropDownListWebElement',
-        isList: true
+        type: elementType,
+        isList: isList
       });
     }
   }
