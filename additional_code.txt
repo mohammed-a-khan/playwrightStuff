@@ -37,12 +37,36 @@ function convertFile(inputFile: string, outputFile: string): void {
     const packageInfo = extractPackageInfo(contentWithoutComments);
     const className = extractClassName(contentWithoutComments) || path.basename(inputFile, '.java');
     
+    // Check if we need to add List import
+    const hasListElements = contentWithoutComments.includes('List<WebElement>') || 
+                           contentWithoutComments.includes('List<CSWebElement>') ||
+                           contentWithoutComments.includes('List<CSDropDownListWebElement>');
+    
     // Process elements by type
+    console.log('Extracting WebElement and CSWebElement elements...');
     const standardElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
+    
+    console.log('Extracting dropdown elements...');
     const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
     
+    // Check for WebElement directly when it's not a CSWebElement
+    console.log('Checking for WebElement elements...');
+    const webElements = extractAndConvertElements(contentWithoutComments, 'WebElement');
+    
+    // Merge web elements that aren't CSWebElements
+    webElements.forEach(element => {
+      // Check if this element is already in standardElements
+      const exists = standardElements.some(e => e.originalName === element.originalName);
+      if (!exists) {
+        standardElements.push(element);
+      }
+    });
+    
     // Process dynamic locator methods by return type
+    console.log('Extracting standard methods...');
     const standardMethods = extractAndConvertMethods(contentWithoutComments, 'CSWebElement');
+    
+    console.log('Extracting dropdown methods...');
     const dropdownMethods = extractAndConvertMethods(contentWithoutComments, 'CSDropDownListWebElement');
     
     // Generate the final TypeScript output
@@ -52,7 +76,8 @@ function convertFile(inputFile: string, outputFile: string): void {
       standardElements, 
       dropdownElements,
       standardMethods, 
-      dropdownMethods
+      dropdownMethods,
+      hasListElements
     );
     
     // Write the result
@@ -196,15 +221,9 @@ interface ElementInfo {
 function extractAndConvertElements(content: string, elementType: string): ElementInfo[] {
   const elementsList: ElementInfo[] = [];
   
-  // Standard pattern for CSWebElement types
+  // First, let's handle standard element types (CSWebElement, CSDropDownListWebElement)
   const standardRegex = new RegExp(
     `@FindBy\\(locator\\s*=\\s*"(.*?)"\\)\\s*(?:public|private|protected)?\\s*${elementType}\\s+(\\w+)\\s*;`, 
-    'gs'
-  );
-  
-  // Pattern for List<WebElement>
-  const listRegex = new RegExp(
-    `@FindBy\\(locator\\s*=\\s*"(.*?)"\\)\\s*(?:public|private|protected)?\\s*List<(?:WebElement|${elementType})>\\s+(\\w+)\\s*;`,
     'gs'
   );
   
@@ -225,20 +244,46 @@ function extractAndConvertElements(content: string, elementType: string): Elemen
     });
   }
   
-  // Process list elements
-  while ((match = listRegex.exec(content)) !== null) {
-    const locatorStr = match[1];
-    const elementName = match[2];
+  // Now, if we're looking for WebElements, also check for List<WebElement>
+  if (elementType === 'CSWebElement' || elementType === 'WebElement') {
+    // Check for List<WebElement> or List<CSWebElement>
+    const listWebElementRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*List\s*<\s*(?:WebElement|CSWebElement)\s*>\s*(\w+)\s*;/gs;
     
-    const locatorValue = extractLocatorValue(locatorStr);
+    while ((match = listWebElementRegex.exec(content)) !== null) {
+      const locatorStr = match[1];
+      const elementName = match[2];
+      
+      const locatorValue = extractLocatorValue(locatorStr);
+      
+      elementsList.push({
+        name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+        originalName: elementName,
+        locator: locatorValue,
+        type: 'WebElement',
+        isList: true
+      });
+    }
+  }
+  
+  // For dropdown lists
+  if (elementType === 'CSDropDownListWebElement') {
+    // Check for List<CSDropDownListWebElement>
+    const listDropdownRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*List\s*<\s*CSDropDownListWebElement\s*>\s*(\w+)\s*;/gs;
     
-    elementsList.push({
-      name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
-      originalName: elementName,
-      locator: locatorValue,
-      type: elementType,
-      isList: true
-    });
+    while ((match = listDropdownRegex.exec(content)) !== null) {
+      const locatorStr = match[1];
+      const elementName = match[2];
+      
+      const locatorValue = extractLocatorValue(locatorStr);
+      
+      elementsList.push({
+        name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+        originalName: elementName,
+        locator: locatorValue,
+        type: 'CSDropDownListWebElement',
+        isList: true
+      });
+    }
   }
   
   return elementsList;
@@ -341,35 +386,28 @@ function extractAndConvertMethods(content: string, returnType: string): MethodIn
   const methodsList: MethodInfo[] = [];
   
   // Find all methods that return the specified element type
-  const methodRegex = new RegExp(
-    `(?:public|private|protected)\\s+(?:${returnType}|List<${returnType}>)\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
+  const standardMethodRegex = new RegExp(
+    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
     'gs'
   );
   
+  // Find methods that return List<returnType>
+  const listMethodRegex = new RegExp(
+    `(?:public|private|protected)\\s+List\\s*<\\s*${returnType}\\s*>\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
+    'gs'
+  );
+  
+  // Process standard methods
   let methodMatch: RegExpExecArray | null;
-  while ((methodMatch = methodRegex.exec(content)) !== null) {
+  while ((methodMatch = standardMethodRegex.exec(content)) !== null) {
     try {
       const methodName = methodMatch[1];
       const params = methodMatch[2] || '';
       const methodBody = methodMatch[3] || '';
       const constructorArgs = methodMatch[4] || '';
       
-      // Check if it returns a list
-      const methodDef = content.substring(methodMatch.index, methodMatch.index + 100);
-      const isList = methodDef.includes(`List<${returnType}>`);
-      
       // Extract parameter information
-      const paramsList = params.split(',').map(param => {
-        const parts = param.trim().split(/\s+/);
-        // Handle syntax errors in the Java code
-        if (parts.length < 2) return null;
-        
-        // Fix common typos in the Java code
-        let paramType = parts[0].replace(/Sring/, 'String');
-        let paramName = parts[1].replace(/["']/g, ''); // Remove any quotes
-        
-        return { type: paramType, name: paramName };
-      }).filter((param): param is MethodParam => param !== null);
+      const paramsList = extractParameters(params);
       
       // Try to extract locator pattern
       const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
@@ -380,7 +418,34 @@ function extractAndConvertMethods(content: string, returnType: string): MethodIn
         params: paramsList,
         locator: locator,
         type: returnType,
-        isList: isList
+        isList: false
+      });
+    } catch (error) {
+      // Skip this method if we can't process it
+    }
+  }
+  
+  // Process list methods
+  while ((methodMatch = listMethodRegex.exec(content)) !== null) {
+    try {
+      const methodName = methodMatch[1];
+      const params = methodMatch[2] || '';
+      const methodBody = methodMatch[3] || '';
+      const constructorArgs = methodMatch[4] || '';
+      
+      // Extract parameter information
+      const paramsList = extractParameters(params);
+      
+      // Try to extract locator pattern
+      const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
+      
+      // Create the converted method
+      methodsList.push({
+        name: methodName,
+        params: paramsList,
+        locator: locator,
+        type: returnType,
+        isList: true
       });
     } catch (error) {
       // Skip this method if we can't process it
@@ -388,6 +453,25 @@ function extractAndConvertMethods(content: string, returnType: string): MethodIn
   }
   
   return methodsList;
+}
+
+/**
+ * Extract parameters from method signature
+ */
+function extractParameters(params: string): MethodParam[] {
+  return params.split(',')
+    .map(param => {
+      const parts = param.trim().split(/\s+/);
+      // Handle syntax errors in the Java code
+      if (parts.length < 2) return null;
+      
+      // Fix common typos in the Java code
+      let paramType = parts[0].replace(/Sring/, 'String');
+      let paramName = parts[1].replace(/["']/g, ''); // Remove any quotes
+      
+      return { type: paramType, name: paramName };
+    })
+    .filter((param): param is MethodParam => param !== null);
 }
 
 /**
