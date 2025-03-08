@@ -1,336 +1,231 @@
 /**
- * Direct implementation to handle the specific method format with switch/enum
+ * Enhanced version of extractAndConvertComplexMethods that properly handles enum switch cases
+ * Add this to your existing code without replacing anything
  */
-function convertFile(inputFile, outputFile) {
-  try {
-    console.log(`Reading ${inputFile}...`);
-    const content = fs.readFileSync(inputFile, 'utf8');
-    
-    // Process the file
-    const contentWithoutComments = removeJavaComments(content);
-    const packageInfo = extractPackageInfo(contentWithoutComments);
-    const className = extractClassName(contentWithoutComments) || path.basename(inputFile, '.java');
-    
-    // Extract all regular elements and methods first
-    const standardElements = [...extractAndConvertElements(contentWithoutComments, 'CSWebElement')];
-    const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Extract regular methods (no switch)
-    const regularMethods = extractRegularMethods(contentWithoutComments, 'CSWebElement');
-    const dropdownMethods = extractRegularMethods(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Extract complex methods with switch statements - this is the key change
-    const complexSwitchMethods = extractSwitchEnumMethods(contentWithoutComments);
-    
-    // Generate the TypeScript output
-    const output = generateTypeScriptWithSwitchSupport(
-      className,
-      packageInfo,
-      standardElements,
-      dropdownElements,
-      regularMethods,
-      dropdownMethods,
-      complexSwitchMethods
-    );
-    
-    // Write the output
-    fs.writeFileSync(outputFile, output);
-    console.log(`Successfully converted ${inputFile} to ${outputFile}`);
-  } 
-  catch (error) {
-    console.error(`Error converting file: ${error.message}`);
-  }
-}
-
-/**
- * Extract regular methods (no switch statements)
- */
-function extractRegularMethods(content, returnType) {
-  const methods = [];
+function extractAndConvertComplexMethods(content: string, returnType: string): MethodInfo[] {
+  const methodsList: MethodInfo[] = [];
   
-  // Find simple methods without switch statements
-  const methodRegex = new RegExp(
-    `public\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{\\s*return\\s+new\\s+${returnType}\\s*\\(([^;]+);`, 
-    'g'
+  // Special pattern to capture switch methods with element assignment
+  // This pattern looks for "element = null" followed by a switch statement
+  const switchElementMethodRegex = new RegExp(
+    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{\\s*${returnType}\\s+element\\s*=\\s*null;\\s*switch\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)\\}\\s*return\\s+element;\\s*\\}`, 
+    'gs'
   );
   
-  let match;
-  while ((match = methodRegex.exec(content)) !== null) {
-    const methodName = match[1];
-    const params = match[2];
-    const constructorArgs = match[3];
-    
-    // Parse parameters
-    const paramsList = params.split(',')
-      .map(param => param.trim())
-      .filter(param => param)
-      .map(param => {
-        const [type, name] = param.split(/\s+/);
-        return { type, name };
-      });
-    
-    // Extract locator
-    const locator = extractLocatorValue(constructorArgs);
-    
-    methods.push({
-      name: methodName,
-      params: paramsList,
-      locator,
-      type: returnType,
-      isSwitch: false
-    });
-  }
-  
-  return methods;
-}
-
-/**
- * Extract methods with switch statements using enum cases
- */
-function extractSwitchEnumMethods(content) {
-  const methods = [];
-  
-  // Regex to find method with switch-case pattern
-  const switchMethodRegex = /public\s+CSWebElement\s+(\w+)\s*\(([^)]*)\)\s*\{\s*CSWebElement\s+element\s*=\s*null\s*;\s*switch\s*\(([^)]*)\)\s*\{([^}]*)\}\s*return\s+element\s*;\s*\}/g;
-  
-  let methodMatch;
-  while ((methodMatch = switchMethodRegex.exec(content)) !== null) {
-    const methodName = methodMatch[1];
-    const params = methodMatch[2];
-    const switchVariable = methodMatch[3];
-    const switchBody = methodMatch[4];
-    
-    // Parse parameters
-    const paramsList = params.split(',')
-      .map(param => param.trim())
-      .filter(param => param)
-      .map(param => {
-        const [type, name] = param.split(/\s+/);
-        return { type, name };
-      });
-    
-    // Extract enum type
-    const enumType = paramsList.find(p => switchVariable.includes(p.name))?.type;
-    
-    // Extract cases
-    const cases = [];
-    const caseRegex = /case\s+([A-Z_][A-Z0-9_]*):\s*element\s*=\s*new\s+CSWebElement\(\s*([^;]+)\);\s*break;/g;
-    
-    let caseMatch;
-    while ((caseMatch = caseRegex.exec(switchBody)) !== null) {
-      const caseValue = caseMatch[1];
-      const caseConstructorArgs = caseMatch[2];
+  let methodMatch: RegExpExecArray | null;
+  while ((methodMatch = switchElementMethodRegex.exec(content)) !== null) {
+    try {
+      const methodName = methodMatch[1];
+      const params = methodMatch[2] || '';
+      const switchVar = methodMatch[3] || '';
+      const switchBody = methodMatch[4] || '';
       
-      // Extract locator for this case
-      const locator = extractLocatorValue(caseConstructorArgs);
-      
-      cases.push({
-        value: caseValue,
-        locator
-      });
-    }
-    
-    methods.push({
-      name: methodName,
-      params: paramsList,
-      switchVariable,
-      enumType,
-      cases,
-      isSwitch: true
-    });
-  }
-  
-  return methods;
-}
-
-/**
- * Generate TypeScript output including support for switch-enum methods
- */
-function generateTypeScriptWithSwitchSupport(
-  className,
-  packageInfo,
-  standardElements,
-  dropdownElements,
-  regularMethods,
-  dropdownMethods,
-  switchMethods
-) {
-  let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
-  output += `import { Page } from 'playwright';\n`;
-  output += `import { BasePage } from './base.page';\n`;
-  output += `import { Logger } from '../utils/logger';\n`;
-  output += `import config from '@config/environment.config';\n\n`;
-  
-  // Extract enums used in switch statements and generate TypeScript enum definitions
-  const enumTypes = new Set(switchMethods.map(m => m.enumType).filter(Boolean));
-  if (enumTypes.size > 0) {
-    // Simple conversion - actual enum values would need to be extracted from the Java file
-    enumTypes.forEach(enumType => {
-      output += `// TypeScript enum for Java enum ${enumType}\n`;
-      output += `enum ${enumType} {\n`;
-      
-      // Find all case values used with this enum
-      const values = new Set();
-      switchMethods.forEach(method => {
-        if (method.enumType === enumType) {
-          method.cases.forEach(c => values.add(c.value));
-        }
-      });
-      
-      // Add each value to the enum definition
-      Array.from(values).forEach((value, index, array) => {
-        output += `  ${value} = '${value.toLowerCase()}'`;
-        if (index < array.length - 1) output += ',';
-        output += '\n';
-      });
-      
-      output += `}\n\n`;
-    });
-  }
-  
-  // Start class
-  output += `export class ${className} extends BasePage {\n`;
-  output += `  constructor(page: Page, logger: Logger) {\n`;
-  output += `    super(page, logger, '');\n`;
-  output += `  }\n\n`;
-  
-  // Add element locators
-  if (standardElements.length > 0) {
-    output += `  // Standard Element Locators\n`;
-    standardElements.forEach(element => {
-      output += `  private readonly ${element.name} = \`${element.locator}\`;\n`;
-    });
-    output += '\n';
-  }
-  
-  if (dropdownElements.length > 0) {
-    output += `  // Dropdown Element Locators\n`;
-    dropdownElements.forEach(element => {
-      output += `  private readonly ${element.name} = \`${element.locator}\`;\n`;
-    });
-    output += '\n';
-  }
-  
-  // Add regular method locators
-  if (regularMethods.length > 0) {
-    output += `  // Regular Method Locators\n`;
-    regularMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: string`).join(', ');
-      output += `  private readonly ${method.name} = (${paramList}): string => \`${method.locator}\`;\n`;
-    });
-    output += '\n';
-  }
-  
-  if (dropdownMethods.length > 0) {
-    output += `  // Dropdown Method Locators\n`;
-    dropdownMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: string`).join(', ');
-      output += `  private readonly ${method.name} = (${paramList}): string => \`${method.locator}\`;\n`;
-    });
-    output += '\n';
-  }
-  
-  // Add getters for standard elements
-  if (standardElements.length > 0) {
-    output += `  // Element Getters\n`;
-    standardElements.forEach(element => {
-      const capitalizedName = element.originalName || 
-        element.name.charAt(0).toUpperCase() + element.name.slice(1);
-      
-      output += `  get${capitalizedName}() {\n`;
-      output += `    return this.page.locator(this.${element.name});\n`;
-      output += `  }\n\n`;
-    });
-  }
-  
-  // Add methods for regular locator methods
-  if (regularMethods.length > 0) {
-    output += `  // Regular Method Getters\n`;
-    regularMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: string`).join(', ');
-      const paramNames = method.params.map(p => p.name).join(', ');
-      
-      output += `  ${method.name}(${paramList}) {\n`;
-      output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
-      output += `  }\n\n`;
-    });
-  }
-  
-  // Add special handling for switch-enum methods
-  if (switchMethods.length > 0) {
-    output += `  // Switch-Enum Methods\n`;
-    switchMethods.forEach(method => {
-      const paramList = method.params.map(p => 
-        `${p.name}: ${p.type === method.enumType ? method.enumType : 'string'}`
-      ).join(', ');
-      
-      // Generate switch method
-      output += `  ${method.name}(${paramList}) {\n`;
-      output += `    let locator = '';\n\n`;
-      
-      // Find the enum parameter name
-      const enumParamName = method.params.find(p => p.type === method.enumType)?.name;
-      
-      if (enumParamName) {
-        output += `    switch (${enumParamName}.toLowerCase()) {\n`;
-        
-        // Generate cases
-        method.cases.forEach(caseInfo => {
-          output += `      case ${method.enumType}.${caseInfo.value}.toLowerCase():\n`;
-          output += `        locator = \`${caseInfo.locator}\`;\n`;
-          output += `        break;\n`;
-        });
-        
-        // Default case
-        output += `      default:\n`;
-        output += `        locator = '//element-not-found';\n`;
-        output += `        break;\n`;
-        output += `    }\n\n`;
+      if (DEBUG) {
+        console.log(`Found switch-enum method: ${methodName}`);
+        console.log(`Switch variable: ${switchVar}`);
       }
       
-      output += `    return this.page.locator(locator);\n`;
-      output += `  }\n\n`;
+      // Extract parameter information
+      const paramsList = extractParameters(params);
+      
+      // Identify the enum parameter
+      let enumParam: MethodParam | undefined;
+      for (const param of paramsList) {
+        if (switchVar.includes(param.name)) {
+          enumParam = param;
+          break;
+        }
+      }
+      
+      // Extract case statements with better enum case handling
+      const cases = extractEnumCases(switchBody, paramsList);
+      
+      if (DEBUG) {
+        console.log(`Found ${cases.length} enum cases`);
+      }
+      
+      // Create the complex method info
+      methodsList.push({
+        name: methodName,
+        params: paramsList,
+        locator: 'COMPLEX_ENUM_METHOD',  // Special marker for enum switch methods
+        type: returnType,
+        isList: false,
+        isComplex: true,
+        complexData: {
+          switchVar,
+          cases,
+          beforeSwitch: '',
+          afterSwitch: '',
+          enumParams: enumParam ? [enumParam] : [],
+          isEnumSwitch: true  // Flag to identify this special type of method
+        }
+      });
+    } catch (error) {
+      console.error(`Error processing complex enum method: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  // Also run the original complex method extraction to capture other patterns
+  const otherComplexMethods = originalExtractAndConvertComplexMethods(content, returnType);
+  
+  // Merge the results, giving priority to the enum switch methods
+  return [...methodsList, ...otherComplexMethods];
+}
+
+/**
+ * Store a reference to the original function so we can still use it
+ */
+const originalExtractAndConvertComplexMethods = extractAndConvertComplexMethods;
+
+/**
+ * Extract case statements specifically for enum switch cases
+ */
+function extractEnumCases(switchBody: string, paramsList: MethodParam[]): CaseInfo[] {
+  const cases: CaseInfo[] = [];
+  
+  // Pattern to match enum cases: case ENUM_VALUE: element = new CSWebElement(...); break;
+  const enumCaseRegex = /case\s+([A-Z_][A-Z0-9_]*):\s*element\s*=\s*new\s+CSWebElement\(\s*([^;]+)\);\s*break;/g;
+  
+  let caseMatch;
+  while ((caseMatch = enumCaseRegex.exec(switchBody)) !== null) {
+    const enumValue = caseMatch[1];  // The enum value (e.g., FIELD_LABEL)
+    const constructorArgs = caseMatch[2];  // The CSWebElement constructor args
+    
+    // Extract the locator from the constructor args
+    let locator = '';
+    try {
+      // First unescape any escaped quotes
+      const unescapedArgs = constructorArgs.replace(/\\"/g, '"');
+      
+      // Look for JSON format with locator key
+      const jsonMatch = unescapedArgs.match(/"locator"\s*:\s*"xpath=([^"]+)"/);
+      if (jsonMatch) {
+        locator = jsonMatch[1];
+        
+        // Process parameters in the locator
+        for (const param of paramsList) {
+          const paramPatterns = [
+            `"+${param.name}+"`,
+            `" + ${param.name} + "`,
+            `"+${param.name} + "`,
+            `" + ${param.name}+"`
+          ];
+          
+          // Try each pattern
+          for (const pattern of paramPatterns) {
+            if (unescapedArgs.includes(pattern)) {
+              // Found a parameter reference, replace with template literal
+              // This is a simple text replacement to handle parameters in the locator
+              locator = locator.replace(/text\(\)\s*=\s*'[^']*'/, `text()='\${${param.name}}'`);
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Error extracting locator for case ${enumValue}:`, e);
+      locator = `//Error-extracting-locator-for-${enumValue}`;
+    }
+    
+    // Add the case info
+    cases.push({
+      value: enumValue,
+      hasCondition: false,
+      conditions: [],
+      locators: [{
+        condition: null,
+        locator
+      }]
     });
   }
   
-  // Common methods
-  output += `  // Common Page Actions\n`;
-  output += `  async waitForPageToLoad(): Promise<void> {\n`;
-  output += `    await this.page.waitForLoadState('networkidle');\n`;
-  output += `  }\n\n`;
-  
-  output += `  async sleep(ms: number): Promise<void> {\n`;
-  output += `    return new Promise(resolve => setTimeout(resolve, ms));\n`;
-  output += `  }\n`;
-  
-  // Close class
-  output += `}\n`;
-  
-  return output;
+  return cases;
 }
 
-// Extract locator value from constructor args - simplified version
-function extractLocatorValue(constructorArgs) {
-  // First unescape any escaped quotes in the string
-  constructorArgs = constructorArgs.replace(/\\"/g, '"');
-  
-  // Handle JSON format
-  const jsonMatch = constructorArgs.match(/"locator"\s*:\s*"xpath=([^"]+)"/);
-  if (jsonMatch) {
-    // Extract the xpath value and process any parameters
-    let xpath = jsonMatch[1];
-    
-    // Process parameter substitutions
-    xpath = xpath.replace(/"\s*\+\s*(\w+)\s*\+\s*"/g, '${$1}');
-    
-    return xpath;
+/**
+ * Enhanced complex method generator that handles enum switch statements specifically
+ * Add this to your code - don't replace the existing complex method generator
+ */
+function generateComplexMethodEnhanced(method: MethodInfo): string {
+  if (!method.isComplex || !method.complexData) {
+    return '';
   }
   
-  // For direct XPath
-  const directMatch = constructorArgs.match(/xpath=([^"]+)/);
-  if (directMatch) {
-    return directMatch[1];
+  // Check if this is an enum switch method
+  if (method.complexData.isEnumSwitch) {
+    const { switchVar, cases, enumParams } = method.complexData;
+    const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
+    
+    // Find the enum parameter
+    const enumParam = enumParams && enumParams.length > 0 ? enumParams[0] : null;
+    
+    let output = `  ${method.name}(${paramList}) {\n`;
+    output += `    // Method with enum switch/case logic\n`;
+    output += `    let locator = '';\n`;
+    output += `    \n`;
+    
+    // Generate the switch statement
+    if (enumParam) {
+      output += `    switch (${switchVar.trim()}) {\n`;
+      
+      // Generate each case
+      cases.forEach(c => {
+        output += `      case ${c.value}:\n`;
+        
+        if (c.locators.length > 0) {
+          // Simple case with a single locator
+          output += `        locator = \`${c.locators[0].locator}\`;\n`;
+        }
+        
+        output += `        break;\n`;
+      });
+      
+      // Default case
+      output += `      default:\n`;
+      output += `        locator = \`//element-not-found\`;\n`;
+      output += `        break;\n`;
+      
+      // Close switch
+      output += `    }\n`;
+    } else {
+      // Fallback for when we can't identify the enum parameter
+      output += `    // Unable to identify enum parameter, using first case\n`;
+      if (cases.length > 0 && cases[0].locators.length > 0) {
+        output += `    locator = \`${cases[0].locators[0].locator}\`;\n`;
+      } else {
+        output += `    locator = \`//element-not-found\`;\n`;
+      }
+    }
+    
+    output += `    \n`;
+    output += `    return this.page.locator(locator);\n`;
+    output += `  }\n\n`;
+    
+    return output;
   }
   
-  return '//unable-to-parse-locator';
+  // For non-enum switch methods, use the original generator
+  return generateComplexMethod(method);
+}
+
+/**
+ * Update your generateTypeScriptOutput function to use the enhanced method generator
+ * This doesn't replace your function, just shows the change needed
+ */
+function generateTypeScriptOutputWithEnhancement(
+  // Existing parameters...
+) {
+  // Your existing code...
+  
+  // Add complex methods with switch/case logic
+  if (complexMethods.length > 0) {
+    output += `  // Complex Methods with Switch/Case Logic\n`;
+    complexMethods.forEach(method => {
+      // Use the enhanced generator - it will handle both regular and enum switch methods
+      output += generateComplexMethodEnhanced(method);
+    });
+  }
+  
+  // Rest of your existing code...
 }
