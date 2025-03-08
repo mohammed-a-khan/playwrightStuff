@@ -1,5 +1,395 @@
 /**
- * Generate the final TypeScript output with enhanced imports and class structure
+ * QAF BDD Selenium Java to Playwright TypeScript Converter
+ * Processes a single file with enhanced support for enums and complex methods
+ */
+function convertFile(inputFile: string, outputFile: string): void {
+  try {
+    console.log(`Reading ${inputFile}...`);
+    if (!fs.existsSync(inputFile)) {
+      console.error(`Error: Input file ${inputFile} does not exist`);
+      process.exit(1);
+    }
+    
+    // Read the file content
+    const content = fs.readFileSync(inputFile, 'utf8');
+    
+    // Remove comments from the Java code
+    const contentWithoutComments = removeJavaComments(content);
+    
+    // Extract class and package information
+    const packageInfo = extractPackageInfo(contentWithoutComments);
+    const className = extractClassName(contentWithoutComments) || path.basename(inputFile, '.java');
+    
+    // Check if we need to add List import
+    const hasListElements = contentWithoutComments.includes('List<WebElement>') || 
+                           contentWithoutComments.includes('List<CSWebElement>') ||
+                           contentWithoutComments.includes('List<CSDropDownListWebElement>');
+    
+    // Extract enums from the Java code
+    const enumsList = extractEnums(contentWithoutComments);
+    
+    // Process elements - all elements are processed in a single pass
+    console.log('Extracting WebElement and CSWebElement elements...');
+    const allWebElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
+    
+    // Process WebElement separately if needed
+    console.log('Checking for direct WebElement elements...');
+    const directWebElements = extractAndConvertElements(contentWithoutComments, 'WebElement');
+    
+    // Process dropdown elements
+    console.log('Extracting dropdown elements...');
+    const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
+    
+    // Merge direct WebElements into the standard elements list if they don't exist already
+    const standardElements = [...allWebElements];
+    directWebElements.forEach(element => {
+      const exists = standardElements.some(e => e.originalName === element.originalName);
+      if (!exists) {
+        standardElements.push(element);
+      }
+    });
+    
+    // Process dynamic locator methods by return type
+    console.log('Extracting standard methods...');
+    const standardMethods = extractAndConvertMethods(contentWithoutComments, 'CSWebElement');
+    
+    console.log('Extracting dropdown methods...');
+    const dropdownMethods = extractAndConvertMethods(contentWithoutComments, 'CSDropDownListWebElement');
+    
+    // Extract complex methods with switch statements
+    console.log('Extracting complex methods with switch statements...');
+    const complexStandardMethods = extractAndConvertComplexMethods(contentWithoutComments, 'CSWebElement');
+    const complexDropdownMethods = extractAndConvertComplexMethods(contentWithoutComments, 'CSDropDownListWebElement');
+    
+    // Generate the final TypeScript output
+    const finalOutput = generateTypeScriptOutput(
+      className, 
+      packageInfo,
+      standardElements, 
+      dropdownElements,
+      standardMethods, 
+      dropdownMethods,
+      [...complexStandardMethods, ...complexDropdownMethods], // Pass complex methods
+      hasListElements,
+      enumsList // Pass enums
+    );
+    
+    // Write the result
+    const outputDir = path.dirname(outputFile);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(outputFile, finalOutput);
+    console.log(`Converted file successfully written to ${outputFile}`);
+  } catch (error) {
+    console.error(`Error converting file: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof Error && error.stack) {
+      console.error(error.stack);
+    }
+  }
+}
+
+/**
+ * Extract enum definitions from Java content
+ */
+function extractEnums(content: string): any[] {
+  const enums = [];
+  
+  // Find enum declarations
+  const enumRegex = /public\s+enum\s+(\w+)\s*\{([^}]+)\}/g;
+  
+  let enumMatch;
+  while ((enumMatch = enumRegex.exec(content)) !== null) {
+    const enumName = enumMatch[1];
+    const enumValues = enumMatch[2];
+    
+    // Parse enum values
+    const values = enumValues
+      .split(',')
+      .map(v => v.trim())
+      .filter(v => v.length > 0)
+      .map(v => {
+        // Handle enum values with parameters
+        const valueParts = v.split('(');
+        return {
+          name: valueParts[0].trim(),
+          value: valueParts[0].trim().toLowerCase() // Default value is lowercase form
+        };
+      });
+    
+    enums.push({
+      name: enumName,
+      values
+    });
+  }
+  
+  return enums;
+}
+
+/**
+ * Generate TypeScript for enum definitions
+ */
+function generateEnumTypeScript(enums: any[]): string {
+  let output = '';
+  
+  enums.forEach(enumDef => {
+    output += `// Converted from Java enum\n`;
+    output += `enum ${enumDef.name} {\n`;
+    
+    enumDef.values.forEach((value, index) => {
+      output += `  ${value.name} = '${value.value}'`;
+      if (index < enumDef.values.length - 1) {
+        output += ',';
+      }
+      output += '\n';
+    });
+    
+    output += `}\n\n`;
+  });
+  
+  return output;
+}
+
+/**
+ * Enhanced extract and convert methods that processes complex methods
+ */
+function extractAndConvertComplexMethods(content: string, returnType: string): MethodInfo[] {
+  const methodsList: MethodInfo[] = [];
+  
+  // Find methods with switch statements
+  const switchMethodRegex = new RegExp(
+    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)switch\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)\\}([\\s\\S]*?)\\}`, 
+    'gs'
+  );
+  
+  let methodMatch: RegExpExecArray | null;
+  while ((methodMatch = switchMethodRegex.exec(content)) !== null) {
+    try {
+      const methodName = methodMatch[1];
+      const params = methodMatch[2] || '';
+      const beforeSwitch = methodMatch[3] || '';
+      const switchVar = methodMatch[4] || '';
+      const switchBody = methodMatch[5] || '';
+      const afterSwitch = methodMatch[6] || '';
+      
+      if (DEBUG) {
+        console.log(`Found complex method: ${methodName}`);
+        console.log(`Switch variable: ${switchVar}`);
+      }
+      
+      // Extract parameter information
+      const paramsList = extractParameters(params);
+      
+      // Extract case statements
+      const cases = extractCases(switchBody);
+      
+      if (DEBUG) {
+        console.log(`Found ${cases.length} cases`);
+        cases.forEach((c, i) => console.log(`Case ${i}: ${c.value} - Has condition: ${c.hasCondition}`));
+      }
+      
+      // We'll convert this to a switch/case function in TypeScript
+      // Create method info with a special marker indicating it's a complex method
+      methodsList.push({
+        name: methodName,
+        params: paramsList,
+        locator: '//COMPLEX_METHOD',  // Special marker indicating complex implementation needed
+        type: returnType,
+        isList: false,
+        isComplex: true,              // Add a flag to indicate complex method
+        complexData: {                // Store the complex method data for later use
+          switchVar,
+          cases,
+          beforeSwitch,
+          afterSwitch
+        }
+      });
+    } catch (error) {
+      console.error(`Error processing complex method: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  return methodsList;
+}
+
+/**
+ * Extract case statements from a switch body
+ */
+function extractCases(switchBody: string): any[] {
+  const cases = [];
+  
+  // Regex to extract case statements
+  const caseRegex = /case\s+(?:["']([^"']+)["']|([\w.]+)):\s*([^}]*?)(?=case|default|$)/gs;
+  
+  let caseMatch;
+  while ((caseMatch = caseRegex.exec(switchBody)) !== null) {
+    const value = caseMatch[1] || caseMatch[2]; // String literal or identifier (enum)
+    const caseBody = caseMatch[3];
+    
+    // Check if the case has a condition
+    const hasCondition = caseBody.includes('if') && (caseBody.includes('else') || caseBody.includes('return'));
+    
+    let conditions = [];
+    let locators = [];
+    
+    if (hasCondition) {
+      // Extract if-else conditions and their locators
+      extractConditionsAndLocators(caseBody, conditions, locators);
+    } else {
+      // Simple case with just a locator
+      const locatorMatch = caseBody.match(/new\s+CSWebElement\(\s*([^)]+)\)/);
+      
+      if (locatorMatch) {
+        locators.push({
+          condition: null,
+          locator: extractLocatorValue(locatorMatch[1].replace(/^["']|["']$/g, ''))
+        });
+      }
+    }
+    
+    cases.push({
+      value,
+      hasCondition,
+      conditions,
+      locators
+    });
+  }
+  
+  return cases;
+}
+
+/**
+ * Extract conditions and locators from if-else blocks
+ */
+function extractConditionsAndLocators(caseBody: string, conditions: any[], locators: any[]): void {
+  // Extract if conditions
+  const ifRegex = /if\s*\(([^)]+)\)\s*\{([^}]*)\}/gs;
+  let ifMatch;
+  
+  while ((ifMatch = ifRegex.exec(caseBody)) !== null) {
+    const condition = ifMatch[1].trim();
+    const ifBody = ifMatch[2];
+    
+    conditions.push(condition);
+    
+    // Extract locator from if body
+    const locatorMatch = ifBody.match(/new\s+CSWebElement\(\s*([^)]+)\)/);
+    if (locatorMatch) {
+      locators.push({
+        condition,
+        locator: extractLocatorValue(locatorMatch[1].replace(/^["']|["']$/g, ''))
+      });
+    }
+  }
+  
+  // Extract else blocks
+  const elseRegex = /else\s*\{([^}]*)\}/gs;
+  let elseMatch;
+  
+  while ((elseMatch = elseRegex.exec(caseBody)) !== null) {
+    const elseBody = elseMatch[1];
+    
+    // Extract locator from else body
+    const locatorMatch = elseBody.match(/new\s+CSWebElement\(\s*([^)]+)\)/);
+    if (locatorMatch) {
+      // Use a negated condition for the else
+      const elseCondition = conditions.length > 0 ? `!(${conditions[conditions.length - 1]})` : null;
+      
+      locators.push({
+        condition: elseCondition,
+        locator: extractLocatorValue(locatorMatch[1].replace(/^["']|["']$/g, ''))
+      });
+    }
+  }
+}
+
+/**
+ * Convert Java conditions to TypeScript
+ */
+function convertJavaConditionToTS(condition: string): string {
+  let result = condition.trim();
+  
+  // Replace .equals with ===
+  result = result.replace(/([^.]+)\.equals\("([^"]+)"\)/g, '$1 === "$2"');
+  result = result.replace(/([^.]+)\.equals\('([^']+)'\)/g, "$1 === '$2'");
+  
+  // Replace .equalsIgnoreCase with toLowerCase() comparison
+  result = result.replace(/([^.]+)\.equalsIgnoreCase\("([^"]+)"\)/g, '$1.toLowerCase() === "$2".toLowerCase()');
+  result = result.replace(/([^.]+)\.equalsIgnoreCase\('([^']+)'\)/g, "$1.toLowerCase() === '$2'.toLowerCase()");
+  
+  // Handle boolean operators (same in TS)
+  
+  return result;
+}
+
+/**
+ * Generate TypeScript method for complex methods with switch statements
+ */
+function generateComplexMethod(method: MethodInfo): string {
+  if (!method.isComplex || !method.complexData) {
+    return '';
+  }
+  
+  const { switchVar, cases } = method.complexData;
+  const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
+  
+  let output = `  ${method.name}(${paramList}) {\n`;
+  output += `    // Complex method with switch/case logic\n`;
+  output += `    let locator = '';\n`;
+  output += `    \n`;
+  
+  // Generate the switch statement
+  output += `    switch (${switchVar.trim().toLowerCase()}) {\n`;
+  
+  // Generate each case
+  cases.forEach(c => {
+    output += `      case '${c.value.toLowerCase()}':\n`;
+    
+    if (c.hasCondition && c.locators.length > 0) {
+      // Generate if-else logic
+      c.locators.forEach((l, index) => {
+        if (l.condition) {
+          const condition = convertJavaConditionToTS(l.condition);
+          
+          if (index === 0) {
+            output += `        if (${condition}) {\n`;
+          } else {
+            output += `        else if (${condition}) {\n`;
+          }
+          
+          output += `          locator = \`${l.locator}\`;\n`;
+          output += `        }\n`;
+        } else {
+          output += `        else {\n`;
+          output += `          locator = \`${l.locator}\`;\n`;
+          output += `        }\n`;
+        }
+      });
+    } else if (c.locators.length > 0) {
+      // Simple case with no conditions
+      output += `        locator = \`${c.locators[0].locator}\`;\n`;
+    }
+    
+    output += `        break;\n`;
+  });
+  
+  // Default case
+  output += `      default:\n`;
+  output += `        locator = \`//div[contains(@class, "not-found")]\`;\n`;
+  output += `        break;\n`;
+  
+  // Close switch
+  output += `    }\n`;
+  output += `    \n`;
+  output += `    return this.page.locator(locator);\n`;
+  output += `  }\n\n`;
+  
+  return output;
+}
+
+/**
+ * Enhanced generateTypeScriptOutput function that supports enums and complex methods
  */
 function generateTypeScriptOutput(
   className: string, 
@@ -8,7 +398,9 @@ function generateTypeScriptOutput(
   dropdownElements: ElementInfo[],
   standardMethods: MethodInfo[], 
   dropdownMethods: MethodInfo[],
-  hasListElements: boolean
+  complexMethods: MethodInfo[], // New parameter for complex methods
+  hasListElements: boolean,
+  enums: any[] // New parameter for enums
 ): string {
   // Build imports with the enhanced import statements
   let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
@@ -17,7 +409,10 @@ function generateTypeScriptOutput(
   output += `import { Logger } from '../utils/logger';\n`;
   output += `import config from '@config/environment.config';\n\n`;
   
-  // No helper interface - removed as requested
+  // Add enum definitions
+  if (enums && enums.length > 0) {
+    output += generateEnumTypeScript(enums);
+  }
   
   // Start class definition with BasePage extension
   output += `export class ${className} extends BasePage {\n`;
@@ -190,6 +585,14 @@ function generateTypeScriptOutput(
         output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
         output += `  }\n\n`;
       }
+    });
+  }
+  
+  // Add complex methods with switch/case logic
+  if (complexMethods.length > 0) {
+    output += `  // Complex Methods with Switch/Case Logic\n`;
+    complexMethods.forEach(method => {
+      output += generateComplexMethod(method);
     });
   }
   
