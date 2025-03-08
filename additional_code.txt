@@ -89,7 +89,7 @@ function generateTypeScriptOutput(
         output += `  }\n\n`;
       } else {
         // Standard element getter
-        output += `  get ${capitalizedName}() {\n`;
+        output += `  get${capitalizedName}() {\n`;
         output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
       }
@@ -98,35 +98,14 @@ function generateTypeScriptOutput(
   
   // Add getters for dropdown elements
   if (dropdownElements.length > 0) {
-    output += `  // Dropdown Element Getters with enhanced functionality\n`;
+    output += `  // Dropdown Element Getters\n`;
     dropdownElements.forEach(element => {
       const capitalizedName = element.originalName;
       
       if (element.isList) {
         // For list of dropdown elements
         output += `  get${capitalizedName}() {\n`;
-        output += `    const baseLocator = this.page.locator(this.${element.name});\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as any;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
         
         // Add method to get all dropdown elements
@@ -134,57 +113,15 @@ function generateTypeScriptOutput(
         output += `    const elements = this.page.locator(this.${element.name});\n`;
         output += `    const count = await elements.count();\n`;
         output += `    const result = [];\n`;
-        output += `    \n`;
         output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      const baseLocator = elements.nth(i);\n`;
-        output += `      const dropdown = baseLocator as any;\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ label: text });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ value });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ index });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `        return baseLocator.locator('option').allTextContents();\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      result.push(dropdown);\n`;
+        output += `      result.push(elements.nth(i));\n`;
         output += `    }\n`;
-        output += `    \n`;
         output += `    return result;\n`;
         output += `  }\n\n`;
       } else {
         // Standard dropdown element
-        output += `  get ${capitalizedName}() {\n`;
-        output += `    const baseLocator = this.page.locator(this.${element.name});\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as any;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `  get${capitalizedName}() {\n`;
+        output += `    return this.page.locator(this.${element.name});\n`;
         output += `  }\n\n`;
       }
     });
@@ -233,28 +170,7 @@ function generateTypeScriptOutput(
       if (method.isList) {
         // For list of dropdown elements
         output += `  ${method.name}(${paramList}) {\n`;
-        output += `    const baseLocator = this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as any;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
         output += `  }\n\n`;
         
         // Add method to get all dropdown elements
@@ -263,57 +179,15 @@ function generateTypeScriptOutput(
         output += `    const elements = this.page.locator(selector);\n`;
         output += `    const count = await elements.count();\n`;
         output += `    const result = [];\n`;
-        output += `    \n`;
         output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      const baseLocator = elements.nth(i);\n`;
-        output += `      const dropdown = baseLocator as any;\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ label: text });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ value });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `        await baseLocator.selectOption({ index });\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `        return baseLocator.locator('option').allTextContents();\n`;
-        output += `      };\n`;
-        output += `      \n`;
-        output += `      result.push(dropdown);\n`;
+        output += `      result.push(elements.nth(i));\n`;
         output += `    }\n`;
-        output += `    \n`;
         output += `    return result;\n`;
         output += `  }\n\n`;
       } else {
-        // Standard dropdown method for single element
+        // Standard method for single element
         output += `  ${method.name}(${paramList}) {\n`;
-        output += `    const baseLocator = this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `    \n`;
-        output += `    // Add dropdown specific functionality\n`;
-        output += `    const dropdown = baseLocator as any;\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByText = async (text: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ label: text });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByValue = async (value: string): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ value });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.selectByIndex = async (index: number): Promise<void> => {\n`;
-        output += `      await baseLocator.selectOption({ index });\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    dropdown.getOptions = async (): Promise<string[]> => {\n`;
-        output += `      return baseLocator.locator('option').allTextContents();\n`;
-        output += `    };\n`;
-        output += `    \n`;
-        output += `    return dropdown;\n`;
+        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
         output += `  }\n\n`;
       }
     });
