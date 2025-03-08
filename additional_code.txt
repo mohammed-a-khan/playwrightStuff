@@ -1,6 +1,70 @@
+#!/usr/bin/env node
+
+const fs = require('fs');
+const path = require('path');
+
+// Global debug flag
+let DEBUG = false;
+
+/**
+ * Debug logging function
+ */
+function debugLog(...args: any[]): void {
+  if (DEBUG) {
+    console.log('[DEBUG]', ...args);
+  }
+}
+
+// Define interfaces for better type safety
+interface ElementInfo {
+  name: string;
+  originalName: string;
+  locator: string;
+  type: string;
+  isList: boolean;
+}
+
+interface MethodParam {
+  type: string;
+  name: string;
+}
+
+interface CaseInfo {
+  value: string;
+  hasCondition: boolean;
+  conditions: string[];
+  locators: Array<{
+    condition: string | null;
+    locator: string;
+  }>;
+}
+
+interface MethodInfo {
+  name: string;
+  params: MethodParam[];
+  locator: string;
+  type: string;
+  isList: boolean;
+  isComplex?: boolean;
+  complexData?: {
+    switchVar: string;
+    cases: CaseInfo[];
+    beforeSwitch: string;
+    afterSwitch: string;
+  };
+}
+
+interface EnumInfo {
+  name: string;
+  values: Array<{
+    name: string;
+    value: string;
+  }>;
+}
+
 /**
  * QAF BDD Selenium Java to Playwright TypeScript Converter
- * Processes a single file with enhanced support for enums and complex methods
+ * Processes a single file
  */
 function convertFile(inputFile: string, outputFile: string): void {
   try {
@@ -49,6 +113,19 @@ function convertFile(inputFile: string, outputFile: string): void {
       }
     });
     
+    // Debug elements (if in debug mode)
+    if (DEBUG) {
+      console.log("\nStandard Elements:");
+      standardElements.forEach((element, i) => {
+        console.log(`${i+1}. ${element.originalName} (${element.isList ? 'List' : 'Single'}): ${element.locator}`);
+      });
+      
+      console.log("\nDropdown Elements:");
+      dropdownElements.forEach((element, i) => {
+        console.log(`${i+1}. ${element.originalName} (${element.isList ? 'List' : 'Single'}): ${element.locator}`);
+      });
+    }
+    
     // Process dynamic locator methods by return type
     console.log('Extracting standard methods...');
     const standardMethods = extractAndConvertMethods(contentWithoutComments, 'CSWebElement');
@@ -60,6 +137,7 @@ function convertFile(inputFile: string, outputFile: string): void {
     console.log('Extracting complex methods with switch statements...');
     const complexStandardMethods = extractAndConvertComplexMethods(contentWithoutComments, 'CSWebElement');
     const complexDropdownMethods = extractAndConvertComplexMethods(contentWithoutComments, 'CSDropDownListWebElement');
+    const complexMethods = [...complexStandardMethods, ...complexDropdownMethods];
     
     // Generate the final TypeScript output
     const finalOutput = generateTypeScriptOutput(
@@ -69,9 +147,9 @@ function convertFile(inputFile: string, outputFile: string): void {
       dropdownElements,
       standardMethods, 
       dropdownMethods,
-      [...complexStandardMethods, ...complexDropdownMethods], // Pass complex methods
+      complexMethods,
       hasListElements,
-      enumsList // Pass enums
+      enumsList
     );
     
     // Write the result
@@ -91,10 +169,121 @@ function convertFile(inputFile: string, outputFile: string): void {
 }
 
 /**
+ * Remove Java comments from the source code while preserving string literals
+ */
+function removeJavaComments(source: string): string {
+  // We can't use simple regex because it might remove XPath expressions that start with //
+  // Instead, we'll process the string character by character
+  
+  let result = '';
+  let inStringLiteral = false;
+  let inSingleLineComment = false;
+  let inMultiLineComment = false;
+  let i = 0;
+  
+  while (i < source.length) {
+    // Check if we're starting or ending a string literal
+    if (!inSingleLineComment && !inMultiLineComment && source[i] === '"' && (i === 0 || source[i-1] !== '\\')) {
+      inStringLiteral = !inStringLiteral;
+      result += source[i];
+      i++;
+      continue;
+    }
+    
+    // Check for single line comment start
+    if (!inStringLiteral && !inMultiLineComment && source[i] === '/' && source[i+1] === '/') {
+      inSingleLineComment = true;
+      i += 2;
+      continue;
+    }
+    
+    // Check for multi-line comment start
+    if (!inStringLiteral && !inSingleLineComment && source[i] === '/' && source[i+1] === '*') {
+      inMultiLineComment = true;
+      i += 2;
+      continue;
+    }
+    
+    // Check for single line comment end (new line)
+    if (inSingleLineComment && (source[i] === '\n' || source[i] === '\r')) {
+      inSingleLineComment = false;
+      // Keep the newline
+      result += source[i];
+      i++;
+      continue;
+    }
+    
+    // Check for multi-line comment end
+    if (inMultiLineComment && source[i] === '*' && source[i+1] === '/') {
+      inMultiLineComment = false;
+      i += 2;
+      continue;
+    }
+    
+    // Add character to result if not in a comment
+    if (!inSingleLineComment && !inMultiLineComment) {
+      result += source[i];
+    }
+    
+    i++;
+  }
+  
+  // Remove empty lines that may be left after removing comments
+  return result.replace(/^\s*[\r\n]/gm, '');
+}
+
+/**
+ * Recursively process all Java files in a directory
+ */
+function processDirectory(inputDir: string, outputDir: string): void {
+  console.log(`Processing directory: ${inputDir}`);
+  
+  // Read all items in the directory
+  const items = fs.readdirSync(inputDir);
+  
+  // Process each item
+  for (const item of items) {
+    const inputPath = path.join(inputDir, item);
+    const stat = fs.statSync(inputPath);
+    
+    if (stat.isDirectory()) {
+      // Create corresponding output directory if it doesn't exist
+      const nestedOutputDir = path.join(outputDir, item);
+      
+      // Recursively process subdirectory
+      processDirectory(inputPath, nestedOutputDir);
+    } else if (item.endsWith('.java')) {
+      // Process Java file
+      const baseName = path.basename(item, '.java');
+      const outputFile = path.join(outputDir, `${baseName}.ts`);
+      
+      console.log(`Processing ${inputPath} -> ${outputFile}`);
+      convertFile(inputPath, outputFile);
+    }
+  }
+}
+
+/**
+ * Extract the package name from Java content
+ */
+function extractPackageInfo(content: string): string | null {
+  const packageMatch = content.match(/package\s+([\w.]+)\s*;/);
+  return packageMatch ? packageMatch[1] : null;
+}
+
+/**
+ * Extract the class name from Java content
+ */
+function extractClassName(content: string): string | null {
+  const classMatch = content.match(/public\s+class\s+(\w+)/);
+  return classMatch ? classMatch[1] : null;
+}
+
+/**
  * Extract enum definitions from Java content
  */
-function extractEnums(content: string): any[] {
-  const enums = [];
+function extractEnums(content: string): EnumInfo[] {
+  const enums: EnumInfo[] = [];
   
   // Find enum declarations
   const enumRegex = /public\s+enum\s+(\w+)\s*\{([^}]+)\}/g;
@@ -130,7 +319,7 @@ function extractEnums(content: string): any[] {
 /**
  * Generate TypeScript for enum definitions
  */
-function generateEnumTypeScript(enums: any[]): string {
+function generateEnumTypeScript(enums: EnumInfo[]): string {
   let output = '';
   
   enums.forEach(enumDef => {
@@ -152,7 +341,353 @@ function generateEnumTypeScript(enums: any[]): string {
 }
 
 /**
- * Enhanced extract and convert methods that processes complex methods
+ * Extract and convert elements of a specific type from Java to Playwright format
+ */
+function extractAndConvertElements(content: string, elementType: string): ElementInfo[] {
+  const elementsList: ElementInfo[] = [];
+  
+  // Process all findBy annotations in order
+  if (elementType === 'CSWebElement' || elementType === 'WebElement') {
+    // We'll capture both regular WebElements and List<WebElement>
+    const elementRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:(List)\s*<\s*(WebElement|CSWebElement)\s*>|(WebElement|CSWebElement))\s+(\w+)\s*;/g;
+    
+    let match;
+    while ((match = elementRegex.exec(content)) !== null) {
+      const locatorStr = match[1];
+      const isList = match[2] === 'List'; // Will be 'List' or undefined
+      const isCorrectType = (match[3] === elementType) || (match[4] === elementType);
+      
+      // Only process if it's the requested type
+      if (isCorrectType) {
+        // Determine the element name - it's in position 5
+        const elementName = match[5];
+        
+        // Extract the locator value
+        const locatorValue = extractLocatorValue(locatorStr);
+        
+        elementsList.push({
+          name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+          originalName: elementName,
+          locator: locatorValue,
+          type: elementType,
+          isList: isList
+        });
+      }
+    }
+  } else if (elementType === 'CSDropDownListWebElement') {
+    // Process dropdown elements separately
+    const dropdownRegex = /@FindBy\(locator\s*=\s*"(.*?)"\)\s*(?:public|private|protected)?\s*(?:(List)\s*<\s*CSDropDownListWebElement\s*>|CSDropDownListWebElement)\s+(\w+)\s*;/g;
+    
+    let match;
+    while ((match = dropdownRegex.exec(content)) !== null) {
+      const locatorStr = match[1];
+      const isList = match[2] === 'List'; // Will be 'List' or undefined
+      const elementName = match[3];
+      
+      const locatorValue = extractLocatorValue(locatorStr);
+      
+      elementsList.push({
+        name: elementName.charAt(0).toLowerCase() + elementName.slice(1),
+        originalName: elementName,
+        locator: locatorValue,
+        type: elementType,
+        isList: isList
+      });
+    }
+  }
+  
+  return elementsList;
+}
+
+/**
+ * Extract locator value from various formats
+ */
+function extractLocatorValue(locatorStr: string): string {
+  // First unescape any escaped quotes in the string
+  locatorStr = locatorStr.replace(/\\"/g, '"');
+  
+  // Check for both escaped and unescaped versions of "locator"
+  const hasEscapedLocator = locatorStr.includes('\\"locator\\"');
+  const hasUnescapedLocator = locatorStr.includes('"locator"');
+  
+  // Handle JSON format with {"locator":"xpath=..."}
+  if (hasEscapedLocator || hasUnescapedLocator) {
+    try {
+      // Fix the JSON string by replacing escaped quotes
+      let fixedJson = locatorStr;
+      
+      // If it has escaped quotes, replace them
+      if (hasEscapedLocator) {
+        // Parse escaped JSON by replacing escaped quotes with real quotes
+        fixedJson = fixedJson.replace(/\\"/g, '"');
+      }
+      
+      // Now parse the JSON
+      const locatorObj = JSON.parse(fixedJson);
+      
+      // Extract the locator value
+      if (locatorObj.locator && typeof locatorObj.locator === 'string') {
+        const locatorValue = locatorObj.locator;
+        
+        // Remove prefix if present
+        if (locatorValue.startsWith('xpath=')) {
+          return locatorValue.substring(6);
+        } else if (locatorValue.startsWith('path=')) {
+          return locatorValue.substring(5);
+        } else {
+          return locatorValue;
+        }
+      }
+    } catch (e) {
+      // If JSON parsing fails, try regex extraction
+      const xpathMatch = locatorStr.match(/"locator"\s*:\s*"(xpath=)?([^"]+)"/);
+      if (xpathMatch && xpathMatch[2]) {
+        return xpathMatch[2];
+      }
+      
+      const pathMatch = locatorStr.match(/"locator"\s*:\s*"(path=)?([^"]+)"/);
+      if (pathMatch && pathMatch[2]) {
+        return pathMatch[2];
+      }
+      
+      // If regex fails, look for escaped versions
+      const escapedXpathMatch = locatorStr.match(/\\"locator\\"\\s*:\\s*\\"(xpath=)?([^"]+)\\"/);
+      if (escapedXpathMatch && escapedXpathMatch[2]) {
+        return escapedXpathMatch[2];
+      }
+      
+      const escapedPathMatch = locatorStr.match(/\\"locator\\"\\s*:\\s*\\"(path=)?([^"]+)\\"/);
+      if (escapedPathMatch && escapedPathMatch[2]) {
+        return escapedPathMatch[2];
+      }
+    }
+  } else if (locatorStr.startsWith('xpath=')) {
+    // Direct xpath format
+    return locatorStr.substring(6);
+  } else if (locatorStr.startsWith('path=')) {
+    // Direct path format
+    return locatorStr.substring(5);
+  }
+  
+  // For simple direct locators without prefix
+  const directXpathMatch = locatorStr.match(/^\/\/.+/);
+  if (directXpathMatch) {
+    return locatorStr;
+  }
+  
+  // Default - just return as is
+  return locatorStr;
+}
+
+/**
+ * Extract parameters from method signature
+ */
+function extractParameters(params: string): MethodParam[] {
+  return params.split(',')
+    .map(param => {
+      const parts = param.trim().split(/\s+/);
+      // Handle syntax errors in the Java code
+      if (parts.length < 2) return null;
+      
+      // Fix common typos in the Java code
+      let paramType = parts[0].replace(/Sring/, 'String');
+      let paramName = parts[1].replace(/["']/g, ''); // Remove any quotes
+      
+      return { type: paramType, name: paramName };
+    })
+    .filter((param): param is MethodParam => param !== null);
+}
+
+/**
+ * Extract and convert all dynamic locator methods for a specific return type
+ */
+function extractAndConvertMethods(content: string, returnType: string): MethodInfo[] {
+  const methodsList: MethodInfo[] = [];
+  
+  // Find all methods that return the specified element type
+  const standardMethodRegex = new RegExp(
+    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
+    'gs'
+  );
+  
+  // Find methods that return List<returnType>
+  const listMethodRegex = new RegExp(
+    `(?:public|private|protected)\\s+List\\s*<\\s*${returnType}\\s*>\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)return\\s+new\\s+${returnType}\\s*\\(([\\s\\S]*?)\\)\\s*;\\s*\\}`, 
+    'gs'
+  );
+  
+  // Process standard methods
+  let methodMatch: RegExpExecArray | null;
+  while ((methodMatch = standardMethodRegex.exec(content)) !== null) {
+    try {
+      const methodName = methodMatch[1];
+      const params = methodMatch[2] || '';
+      const methodBody = methodMatch[3] || '';
+      const constructorArgs = methodMatch[4] || '';
+      
+      // Extract parameter information
+      const paramsList = extractParameters(params);
+      
+      // Try to extract locator pattern
+      const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
+      
+      // Create the converted method
+      methodsList.push({
+        name: methodName,
+        params: paramsList,
+        locator: locator,
+        type: returnType,
+        isList: false
+      });
+    } catch (error) {
+      // Skip this method if we can't process it
+      console.error(`Error processing method: ${error}`);
+    }
+  }
+  
+  // Process list methods
+  while ((methodMatch = listMethodRegex.exec(content)) !== null) {
+    try {
+      const methodName = methodMatch[1];
+      const params = methodMatch[2] || '';
+      const methodBody = methodMatch[3] || '';
+      const constructorArgs = methodMatch[4] || '';
+      
+      // Extract parameter information
+      const paramsList = extractParameters(params);
+      
+      // Try to extract locator pattern
+      const locator = extractDynamicLocator(constructorArgs, methodBody, paramsList);
+      
+      // Create the converted method
+      methodsList.push({
+        name: methodName,
+        params: paramsList,
+        locator: locator,
+        type: returnType,
+        isList: true
+      });
+    } catch (error) {
+      // Skip this method if we can't process it
+      console.error(`Error processing method: ${error}`);
+    }
+  }
+  
+  return methodsList;
+}
+
+/**
+ * Extract dynamic locator from constructor args
+ * This improved version better handles complex XPaths with multiple parameters
+ */
+function extractDynamicLocator(constructorArgs: string, methodBody: string, paramsList: MethodParam[]): string {
+  // First unescape any escaped quotes in the string
+  constructorArgs = constructorArgs.replace(/\\"/g, '"');
+  
+  if (DEBUG) {
+    console.log("Processing constructor args:", constructorArgs);
+  }
+  
+  // Step 1: Extract the XPath (the content after "xpath=" until the next ")
+  let xpathStart = constructorArgs.indexOf("xpath=");
+  if (xpathStart === -1) {
+    return `//TODO-${paramsList.map(p => p.name).join('-')}`;
+  }
+  
+  xpathStart += 6; // Length of "xpath="
+  
+  let xpathEnd = constructorArgs.indexOf('","', xpathStart);
+  if (xpathEnd === -1) {
+    xpathEnd = constructorArgs.indexOf('"', xpathStart);
+  }
+  
+  if (xpathEnd === -1) {
+    return `//TODO-${paramsList.map(p => p.name).join('-')}`;
+  }
+  
+  // Extract the raw XPath with Java string concatenation
+  const rawXPath = constructorArgs.substring(xpathStart, xpathEnd);
+  
+  if (DEBUG) {
+    console.log("Raw XPath:", rawXPath);
+  }
+  
+  // Step 2: Process each parameter using more flexible pattern matching
+  let finalXPath = rawXPath;
+
+  paramsList.forEach(param => {
+    // Check for multiple concatenation patterns
+    const patterns = [
+      `"+${param.name}+"`,           // No spaces
+      `" + ${param.name} + "`,       // Spaces on both sides
+      `"+${param.name} + "`,         // Space on right side
+      `" + ${param.name}+"`,         // Space on left side
+    ];
+    
+    // Try each pattern
+    let patternFound = false;
+    for (const pattern of patterns) {
+      if (finalXPath.includes(pattern)) {
+        // Found a match, replace it
+        finalXPath = finalXPath.replace(pattern, `\${${param.name}}`);
+        patternFound = true;
+        break; // Exit after first successful replacement
+      }
+    }
+    
+    // If direct replacement didn't work, try a more aggressive approach with regex
+    if (!patternFound) {
+      // Use regex to catch variations in spacing/formatting
+      const regex = new RegExp(`"\\s*\\+\\s*${param.name}\\s*\\+\\s*"`, 'g');
+      finalXPath = finalXPath.replace(regex, `\${${param.name}}`);
+      
+      // Also try checking the constructor args directly
+      if (constructorArgs.includes(param.name)) {
+        // Look for patterns based on parameter type
+        if (param.type === 'int' || param.type === 'Integer' || param.type === 'number') {
+          // For numeric parameters, check for position() expressions
+          const posMatch = finalXPath.match(/position\(\)\s*=\s*\d+/);
+          if (posMatch) {
+            finalXPath = finalXPath.replace(posMatch[0], `position()=\${${param.name}}`);
+          }
+        } else if (param.type === 'String' || param.type === 'string') {
+          // For string parameters, check for text() or contains() expressions
+          const textMatch = finalXPath.match(/text\(\)\s*=\s*'[^']*'/);
+          if (textMatch) {
+            finalXPath = finalXPath.replace(textMatch[0], `text()='\${${param.name}}'`);
+          } else {
+            // Look for attribute values
+            const attrMatch = finalXPath.match(/@[^=]+=\s*'[^']*'/);
+            if (attrMatch) {
+              const valueMatch = attrMatch[0].match(/'[^']*'/);
+              if (valueMatch) {
+                finalXPath = finalXPath.replace(
+                  attrMatch[0],
+                  attrMatch[0].replace(valueMatch[0], `'\${${param.name}}'`)
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+  
+  // Step 3: Clean up any escaped characters
+  finalXPath = finalXPath
+    .replace(/\\"/g, '"')  // Replace \" with "
+    .replace(/\\'/g, "'")  // Replace \' with '
+    .replace(/\\\\/g, '\\'); // Replace \\ with \
+  
+  if (DEBUG) {
+    console.log("Final XPath:", finalXPath);
+  }
+  
+  return finalXPath;
+}
+
+/**
+ * Extract and convert complex methods with switch statements
  */
 function extractAndConvertComplexMethods(content: string, returnType: string): MethodInfo[] {
   const methodsList: MethodInfo[] = [];
@@ -216,8 +751,8 @@ function extractAndConvertComplexMethods(content: string, returnType: string): M
 /**
  * Extract case statements from a switch body
  */
-function extractCases(switchBody: string): any[] {
-  const cases = [];
+function extractCases(switchBody: string): CaseInfo[] {
+  const cases: CaseInfo[] = [];
   
   // Regex to extract case statements
   const caseRegex = /case\s+(?:["']([^"']+)["']|([\w.]+)):\s*([^}]*?)(?=case|default|$)/gs;
@@ -230,8 +765,8 @@ function extractCases(switchBody: string): any[] {
     // Check if the case has a condition
     const hasCondition = caseBody.includes('if') && (caseBody.includes('else') || caseBody.includes('return'));
     
-    let conditions = [];
-    let locators = [];
+    const conditions: string[] = [];
+    const locators: Array<{ condition: string | null; locator: string }> = [];
     
     if (hasCondition) {
       // Extract if-else conditions and their locators
@@ -262,7 +797,7 @@ function extractCases(switchBody: string): any[] {
 /**
  * Extract conditions and locators from if-else blocks
  */
-function extractConditionsAndLocators(caseBody: string, conditions: any[], locators: any[]): void {
+function extractConditionsAndLocators(caseBody: string, conditions: string[], locators: Array<{ condition: string | null; locator: string }>): void {
   // Extract if conditions
   const ifRegex = /if\s*\(([^)]+)\)\s*\{([^}]*)\}/gs;
   let ifMatch;
@@ -276,9 +811,10 @@ function extractConditionsAndLocators(caseBody: string, conditions: any[], locat
     // Extract locator from if body
     const locatorMatch = ifBody.match(/new\s+CSWebElement\(\s*([^)]+)\)/);
     if (locatorMatch) {
+      const locatorValue = locatorMatch[1].replace(/^["']|["']$/g, '');
       locators.push({
         condition,
-        locator: extractLocatorValue(locatorMatch[1].replace(/^["']|["']$/g, ''))
+        locator: extractLocatorValue(locatorValue)
       });
     }
   }
@@ -296,9 +832,10 @@ function extractConditionsAndLocators(caseBody: string, conditions: any[], locat
       // Use a negated condition for the else
       const elseCondition = conditions.length > 0 ? `!(${conditions[conditions.length - 1]})` : null;
       
+      const locatorValue = locatorMatch[1].replace(/^["']|["']$/g, '');
       locators.push({
         condition: elseCondition,
-        locator: extractLocatorValue(locatorMatch[1].replace(/^["']|["']$/g, ''))
+        locator: extractLocatorValue(locatorValue)
       });
     }
   }
@@ -389,7 +926,7 @@ function generateComplexMethod(method: MethodInfo): string {
 }
 
 /**
- * Enhanced generateTypeScriptOutput function that supports enums and complex methods
+ * Generate the final TypeScript output
  */
 function generateTypeScriptOutput(
   className: string, 
@@ -400,7 +937,7 @@ function generateTypeScriptOutput(
   dropdownMethods: MethodInfo[],
   complexMethods: MethodInfo[], // New parameter for complex methods
   hasListElements: boolean,
-  enums: any[] // New parameter for enums
+  enums: EnumInfo[] // New parameter for enums
 ): string {
   // Build imports with the enhanced import statements
   let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
@@ -611,3 +1148,90 @@ function generateTypeScriptOutput(
   
   return output;
 }
+
+/**
+ * Map Java types to TypeScript types
+ */
+function mapJavaTypeToTypeScript(javaType: string): string {
+  const typeMap: Record<string, string> = {
+    'String': 'string',
+    'int': 'number',
+    'Integer': 'number',
+    'boolean': 'boolean',
+    'Boolean': 'boolean',
+    'double': 'number',
+    'Double': 'number',
+    'long': 'number',
+    'Long': 'number',
+    'float': 'number',
+    'Float': 'number',
+    'Object': 'any',
+    'List': 'Array<any>',
+    'ArrayList': 'Array<any>',
+    'Map': 'Record<string, any>',
+    'HashMap': 'Record<string, any>'
+  };
+  
+  // Check for generic types like List<String>
+  const genericMatch = javaType.match(/(\w+)<(\w+)>/);
+  if (genericMatch) {
+    const container = genericMatch[1];
+    const innerType = genericMatch[2];
+    
+    if (container === 'List' || container === 'ArrayList') {
+      return `Array<${mapJavaTypeToTypeScript(innerType)}>`;
+    } else if (container === 'Map' || container === 'HashMap') {
+      return `Record<string, ${mapJavaTypeToTypeScript(innerType)}>`;
+    }
+  }
+  
+  return typeMap[javaType] || 'any';
+}
+
+// Process command line arguments
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  
+  // Check for debug flag
+  if (args.includes('--debug') || args.includes('-d')) {
+    DEBUG = true;
+    // Remove debug flag from args
+    const debugIndex = args.indexOf('--debug') !== -1 ? args.indexOf('--debug') : args.indexOf('-d');
+    args.splice(debugIndex, 1);
+    console.log('Running in DEBUG mode - verbose logging enabled');
+  }
+  
+  if (args.length !== 2) {
+    console.log(`
+Usage:
+  For single file:   node qaf-to-playwright-converter.js <input-file.java> <output-file.ts>
+  For directories:   node qaf-to-playwright-converter.js <input-dir> <output-dir>
+  
+Options:
+  --debug, -d        Enable debug mode with verbose logging
+`);
+    process.exit(1);
+  }
+  
+  const inputPath = args[0];
+  const outputPath = args[1];
+  
+  // Check if input is a directory or a single file
+  const stat = fs.statSync(inputPath);
+  
+  if (stat.isDirectory()) {
+    // Process entire directory
+    processDirectory(inputPath, outputPath);
+  } else {
+    // Process single file
+    convertFile(inputPath, outputPath);
+  }
+}
+
+// Export functions for testing
+module.exports = {
+  convertFile,
+  processDirectory,
+  extractLocatorValue,
+  extractDynamicLocator
+};
