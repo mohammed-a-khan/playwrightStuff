@@ -1,41 +1,3270 @@
+/**
+ * ENTERPRISE TEST AUTOMATION FRAMEWORK
+ * Based on Playwright, TypeScript, and Cucumber.js
+ * Supports both UI and API testing in a BDD fashion
+ */
+
+// Directory Structure:
+/**
+ * /
+ * ├── src/
+ * │   ├── framework/                # Core framework components
+ * │   │   ├── utils/                # Utility classes
+ * │   │   │   ├── logger.ts         # Winston-based logger
+ * │   │   │   ├── data-generator.ts # Test data generation
+ * │   │   │   ├── config-manager.ts # Configuration management
+ * │   │   │   └── report-helper.ts  # Reporting utilities
+ * │   │   ├── base-web-page.ts      # Base class for web pages
+ * │   │   └── base-api-client.ts    # Base class for API clients
+ * │   ├── pages/                    # Page objects
+ * │   │   ├── login-page.ts         # Login page
+ * │   │   ├── dashboard-page.ts     # Dashboard page
+ * │   │   └── user-profile-page.ts  # User profile page
+ * │   ├── api/                      # API clients
+ * │   │   ├── user-api-client.ts    # User API client
+ * │   │   └── product-api-client.ts # Product API client
+ * │   ├── step-definitions/         # Step definitions
+ * │   │   ├── ui-steps/             # UI step definitions
+ * │   │   │   ├── login-steps.ts    # Login steps
+ * │   │   │   └── profile-steps.ts  # Profile steps
+ * │   │   └── api-steps/            # API step definitions
+ * │   │       ├── user-api-steps.ts # User API steps
+ * │   │       └── product-api-steps.ts # Product API steps
+ * │   └── support/                  # Test support files
+ * │       ├── test-context.ts       # Test context
+ * │       ├── hooks.ts              # Cucumber hooks
+ * │       └── debug-helper.ts       # Debugging utilities
+ * ├── features/                     # Cucumber feature files
+ * │   ├── ui/                       # UI features
+ * │   │   ├── login.feature         # Login scenarios
+ * │   │   └── profile.feature       # Profile scenarios
+ * │   └── api/                      # API features
+ * │       ├── user-api.feature      # User API scenarios
+ * │       └── product-api.feature   # Product API scenarios
+ * ├── config/                       # Configuration files
+ * │   ├── default.json              # Default config
+ * │   ├── dev.json                  # Dev environment config
+ * │   └── test.json                 # Test environment config
+ * ├── reports/                      # Test reports
+ * │   ├── html/                     # HTML reports
+ * │   ├── logs/                     # Log files
+ * │   └── screenshots/              # Screenshots
+ * ├── package.json                  # Project dependencies
+ * ├── tsconfig.json                 # TypeScript config
+ * ├── cucumber.js                   # Cucumber configuration
+ * └── README.md                     # Documentation
+ */
+
+/******************************
+ * 1. FRAMEWORK CORE COMPONENTS
+ ******************************/
+
 // File: src/framework/utils/logger.ts
+import winston from 'winston';
+import path from 'path';
+import fs from 'fs';
 
 /**
- * Logger class for test logging
+ * Memory transport for Winston that stores logs in memory
  */
-export class Logger {
-  private readonly context: string;
+class MemoryTransport extends winston.Transport {
   private logs: string[] = [];
 
-  constructor(context: string) {
-    this.context = context;
+  constructor(opts?: winston.TransportOptions) {
+    super(opts);
   }
 
-  info(message: string): void {
-    const logMessage = `[INFO][${this.context}] ${message}`;
-    console.log(logMessage);
-    this.logs.push(logMessage);
-  }
+  log(info: winston.LogEntry, callback: () => void) {
+    setImmediate(() => {
+      this.emit('logged', info);
+    });
 
-  debug(message: string): void {
-    const logMessage = `[DEBUG][${this.context}] ${message}`;
-    console.debug(logMessage);
-    this.logs.push(logMessage);
-  }
+    // Store the formatted log message
+    const formattedMessage = `[${info.timestamp}] [${info.level.toUpperCase()}] [${info.testId}]: ${info.message}`;
+    this.logs.push(formattedMessage);
 
-  warn(message: string): void {
-    const logMessage = `[WARN][${this.context}] ${message}`;
-    console.warn(logMessage);
-    this.logs.push(logMessage);
-  }
-
-  error(message: string): void {
-    const logMessage = `[ERROR][${this.context}] ${message}`;
-    console.error(logMessage);
-    this.logs.push(logMessage);
+    callback();
   }
 
   getLogs(): string[] {
     return this.logs;
   }
 }
+
+/**
+ * Enhanced Logger using Winston with memory storage for test automation
+ */
+export class Logger {
+  private logger: winston.Logger;
+  private testId: string;
+  private memoryTransport: MemoryTransport;
+  private scenarioName?: string;
+
+  /**
+   * Constructor for the Logger
+   * @param testId - Identifier for the test/context
+   */
+  constructor(testId: string) {
+    this.testId = testId;
+    const logsDir = path.join(process.cwd(), 'reports', 'logs');
+    
+    // Create logs directory if it doesn't exist
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    
+    // Create memory transport for storing logs in memory
+    this.memoryTransport = new MemoryTransport();
+    
+    // Create Winston logger with multiple transports
+    this.logger = winston.createLogger({
+      level: process.env.LOG_LEVEL || 'info',
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf((info) => {
+          // Add testId to info object for memory transport
+          info.testId = this.testId;
+          return `[${info.timestamp}] [${info.level.toUpperCase()}] [${this.testId}]: ${info.message}`;
+        })
+      ),
+      transports: [
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple()
+          )
+        }),
+        new winston.transports.File({
+          filename: path.join(logsDir, `test-${this.testId}.log`)
+        }),
+        this.memoryTransport // Add memory transport
+      ]
+    });
+  }
+
+  /**
+   * Log a debug message
+   * @param message - Message to log
+   */
+  debug(message: string): void {
+    this.logger.debug(message);
+  }
+
+  /**
+   * Log an info message
+   * @param message - Message to log
+   */
+  info(message: string): void {
+    this.logger.info(message);
+  }
+
+  /**
+   * Log a warning message
+   * @param message - Message to log
+   */
+  warn(message: string): void {
+    this.logger.warn(message);
+  }
+
+  /**
+   * Log an error message
+   * @param message - Message to log
+   */
+  error(message: string): void {
+    this.logger.error(message);
+  }
+
+  /**
+   * Set the current scenario name for logging
+   * @param scenarioName - Name of the scenario
+   */
+  setScenario(scenarioName: string): void {
+    this.scenarioName = scenarioName;
+    this.info(`Starting scenario: ${scenarioName}`);
+  }
+
+  /**
+   * Get all logs from memory
+   * @returns string[] - Array of log messages
+   */
+  getLogs(): string[] {
+    return this.memoryTransport.getLogs();
+  }
+
+  /**
+   * Get the current test ID
+   * @returns string - Test ID
+   */
+  getTestId(): string {
+    return this.testId;
+  }
+
+  /**
+   * Get the current scenario name
+   * @returns string | undefined - Scenario name
+   */
+  getScenarioName(): string | undefined {
+    return this.scenarioName;
+  }
+}
+
+// File: src/framework/utils/config-manager.ts
+import fs from 'fs';
+import path from 'path';
+
+/**
+ * Configuration Manager for handling environment-specific configurations
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private config: Record<string, any>;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    const env = process.env.NODE_ENV || 'default';
+    const configPath = path.join(process.cwd(), 'config', `${env}.json`);
+    
+    try {
+      if (fs.existsSync(configPath)) {
+        this.config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      } else {
+        const defaultConfigPath = path.join(process.cwd(), 'config', 'default.json');
+        this.config = fs.existsSync(defaultConfigPath) 
+          ? JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'))
+          : {};
+      }
+    } catch (error) {
+      console.error(`Error loading configuration: ${error}`);
+      this.config = {};
+    }
+    
+    // Override with environment variables
+    this.mergeEnvironmentVariables();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns ConfigManager instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
+    }
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Get configuration value
+   * @param key - Configuration key (supports dot notation)
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value
+   */
+  public get<T>(key: string, defaultValue?: T): T {
+    const keys = key.split('.');
+    let value: any = this.config;
+    
+    for (const k of keys) {
+      value = value && value[k] !== undefined ? value[k] : undefined;
+    }
+    
+    return (value !== undefined ? value : defaultValue) as T;
+  }
+
+  /**
+   * Set configuration value
+   * @param key - Configuration key (supports dot notation)
+   * @param value - Configuration value
+   */
+  public set<T>(key: string, value: T): void {
+    const keys = key.split('.');
+    let current = this.config;
+    
+    for (let i = 0; i < keys.length - 1; i++) {
+      const k = keys[i];
+      current[k] = current[k] || {};
+      current = current[k];
+    }
+    
+    current[keys[keys.length - 1]] = value;
+  }
+
+  /**
+   * Get entire configuration object
+   * @returns Configuration object
+   */
+  public getAll(): Record<string, any> {
+    return { ...this.config };
+  }
+
+  /**
+   * Override configuration with environment variables
+   * @private
+   */
+  private mergeEnvironmentVariables(): void {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.startsWith('TEST_')) {
+        const configKey = key.replace('TEST_', '').toLowerCase().replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+        this.set(configKey, value);
+      }
+    }
+  }
+}
+
+// File: src/framework/utils/data-generator.ts
+/**
+ * Utility class for generating test data
+ */
+export class DataGenerator {
+  /**
+   * Generate a random email address
+   * @param domain - Email domain (default: example.com)
+   * @returns Random email address
+   */
+  static email(domain: string = 'example.com'): string {
+    const timestamp = Date.now();
+    const randomString = Math.random().toString(36).substring(2, 8);
+    return `test.${randomString}.${timestamp}@${domain}`;
+  }
+
+  /**
+   * Generate a random username
+   * @param prefix - Username prefix (default: user)
+   * @returns Random username
+   */
+  static username(prefix: string = 'user'): string {
+    const timestamp = Date.now().toString().substring(9);
+    const randomString = Math.random().toString(36).substring(2, 6);
+    return `${prefix}_${randomString}${timestamp}`;
+  }
+
+  /**
+   * Generate a random password
+   * @param length - Password length (default: 12)
+   * @param includeSpecial - Include special characters (default: true)
+   * @returns Random password
+   */
+  static password(length: number = 12, includeSpecial: boolean = true): string {
+    const uppercaseChars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lowercaseChars = 'abcdefghijklmnopqrstuvwxyz';
+    const numberChars = '0123456789';
+    const specialChars = '!@#$%^&*()_+~`|}{[]:;?><,./-=';
+    
+    let allChars = uppercaseChars + lowercaseChars + numberChars;
+    if (includeSpecial) {
+      allChars += specialChars;
+    }
+    
+    let password = '';
+    for (let i = 0; i < length; i++) {
+      const randomIndex = Math.floor(Math.random() * allChars.length);
+      password += allChars[randomIndex];
+    }
+    
+    return password;
+  }
+
+  /**
+   * Generate a random name
+   * @returns Random name
+   */
+  static name(): string {
+    const firstNames = ['John', 'Jane', 'Alice', 'Bob', 'Charlie', 'Diana', 'Edward', 'Fiona', 'George', 'Helen'];
+    const lastNames = ['Smith', 'Johnson', 'Williams', 'Jones', 'Brown', 'Davis', 'Miller', 'Wilson', 'Moore', 'Taylor'];
+    
+    const randomFirstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const randomLastName = lastNames[Math.floor(Math.random() * lastNames.length)];
+    
+    return `${randomFirstName} ${randomLastName}`;
+  }
+
+  /**
+   * Generate a random phone number
+   * @param format - Phone number format (default: (###) ###-####)
+   * @returns Random phone number
+   */
+  static phoneNumber(format: string = '(###) ###-####'): string {
+    return format.replace(/#/g, () => Math.floor(Math.random() * 10).toString());
+  }
+
+  /**
+   * Generate a random date
+   * @param startDate - Start date (default: 10 years ago)
+   * @param endDate - End date (default: today)
+   * @returns Random date
+   */
+  static date(startDate?: Date, endDate?: Date): Date {
+    const start = startDate || new Date(Date.now() - 10 * 365 * 24 * 60 * 60 * 1000);
+    const end = endDate || new Date();
+    
+    const startTimestamp = start.getTime();
+    const endTimestamp = end.getTime();
+    const randomTimestamp = startTimestamp + Math.random() * (endTimestamp - startTimestamp);
+    
+    return new Date(randomTimestamp);
+  }
+
+  /**
+   * Generate a random number
+   * @param min - Minimum value (default: 0)
+   * @param max - Maximum value (default: 100)
+   * @returns Random number
+   */
+  static number(min: number = 0, max: number = 100): number {
+    return min + Math.floor(Math.random() * (max - min + 1));
+  }
+
+  /**
+   * Generate a random boolean
+   * @param trueProbability - Probability of true (default: 0.5)
+   * @returns Random boolean
+   */
+  static boolean(trueProbability: number = 0.5): boolean {
+    return Math.random() < trueProbability;
+  }
+
+  /**
+   * Generate a random item from an array
+   * @param array - Array of items
+   * @returns Random item
+   */
+  static fromArray<T>(array: T[]): T {
+    return array[Math.floor(Math.random() * array.length)];
+  }
+
+  /**
+   * Generate a random UUID
+   * @returns Random UUID
+   */
+  static uuid(): string {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+}
+
+// File: src/framework/utils/report-helper.ts
+import fs from 'fs';
+import path from 'path';
+
+/**
+ * Utility class for reporting
+ */
+export class ReportHelper {
+  /**
+   * Save screenshot to reports directory
+   * @param screenshot - Screenshot data
+   * @param name - Screenshot name
+   * @returns Path to saved screenshot
+   */
+  static saveScreenshot(screenshot: Buffer, name: string): string {
+    const screenshotsDir = path.join(process.cwd(), 'reports', 'screenshots');
+    
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const filename = `${name}_${timestamp}.png`;
+    const filepath = path.join(screenshotsDir, filename);
+    
+    fs.writeFileSync(filepath, screenshot);
+    
+    return filepath;
+  }
+
+  /**
+   * Save data to JSON file
+   * @param data - Data to save
+   * @param name - File name
+   * @returns Path to saved file
+   */
+  static saveJson(data: any, name: string): string {
+    const dataDir = path.join(process.cwd(), 'reports', 'data');
+    
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const filename = `${name}_${timestamp}.json`;
+    const filepath = path.join(dataDir, filename);
+    
+    fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+    
+    return filepath;
+  }
+
+  /**
+   * Format object for logging
+   * @param obj - Object to format
+   * @returns Formatted string
+   */
+  static formatObject(obj: any): string {
+    return JSON.stringify(obj, null, 2);
+  }
+
+  /**
+   * Format response for logging
+   * @param response - Axios response
+   * @returns Formatted string
+   */
+  static formatResponse(response: any): string {
+    const { status, statusText, headers, data } = response;
+    
+    return JSON.stringify({
+      status,
+      statusText,
+      headers,
+      data
+    }, null, 2);
+  }
+
+  /**
+   * Truncate a string
+   * @param str - String to truncate
+   * @param maxLength - Maximum length (default: 100)
+   * @returns Truncated string
+   */
+  static truncate(str: string, maxLength: number = 100): string {
+    if (str.length <= maxLength) {
+      return str;
+    }
+    
+    return str.substring(0, maxLength) + '...';
+  }
+}
+
+// File: src/framework/base-web-page.ts
+import { Page, Locator, BrowserContext, Response, Request } from '@playwright/test';
+import { expect } from '@playwright/test';
+import fs from 'fs';
+import path from 'path';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
+
+/**
+ * Base web page class for all UI page objects
+ * Provides common methods for UI interactions
+ */
+export class BaseWebPage {
+  readonly page: Page;
+  readonly context: BrowserContext;
+  readonly baseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly config: ConfigManager;
+
+  /**
+   * Constructor for the BaseWebPage
+   * @param page - Playwright Page object
+   * @param context - Playwright Browser Context
+   * @param baseUrl - Base URL for UI navigation (optional)
+   */
+  constructor(
+    page: Page, 
+    context: BrowserContext,
+    baseUrl?: string
+  ) {
+    this.page = page;
+    this.context = context;
+    this.config = ConfigManager.getInstance();
+    this.baseUrl = baseUrl || this.config.get<string>('baseUrl', process.env.BASE_URL || 'https://example.com');
+    this.defaultTimeout = this.config.get<number>('defaultTimeout', parseInt(process.env.DEFAULT_TIMEOUT || '30000'));
+    this.logger = new Logger(this.constructor.name);
+    
+    // Set up listeners for network events
+    this.setupNetworkListeners();
+  }
+
+  // ====== Navigation Methods ======
+
+  /**
+   * Navigate to a specific URL
+   * @param url - URL to navigate to
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateTo(url: string): Promise<Response | null> {
+    this.logger.info(`Navigating to: ${url}`);
+    return await this.page.goto(url, { waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate to a specific page using the base URL
+   * @param path - Path to append to the base URL
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateToPage(path: string): Promise<Response | null> {
+    const url = new URL(path, this.baseUrl).toString();
+    return this.navigateTo(url);
+  }
+
+  /**
+   * Refresh the current page
+   * @returns Promise<Response | null> - The main response
+   */
+  async refreshPage(): Promise<Response | null> {
+    this.logger.info('Refreshing page');
+    return await this.page.reload({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate back in browser history
+   */
+  async goBack(): Promise<void> {
+    this.logger.info('Navigating back');
+    await this.page.goBack({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate forward in browser history
+   */
+  async goForward(): Promise<void> {
+    this.logger.info('Navigating forward');
+    await this.page.goForward({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Get the current URL
+   * @returns string - Current URL
+   */
+  async getCurrentUrl(): Promise<string> {
+    return this.page.url();
+  }
+
+  /**
+   * Get the page title
+   * @returns Promise<string> - Page title
+   */
+  async getPageTitle(): Promise<string> {
+    return await this.page.title();
+  }
+
+  // ====== Element Interaction Methods ======
+
+  /**
+   * Get a locator for an element
+   * @param selector - CSS or XPath selector
+   * @returns Locator - Playwright locator object
+   */
+  getLocator(selector: string): Locator {
+    return this.page.locator(selector);
+  }
+
+  /**
+   * Click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright click options
+   */
+  async click(selector: string, options?: { force?: boolean, timeout?: number, noWaitAfter?: boolean }): Promise<void> {
+    this.logger.debug(`Clicking on element: ${selector}`);
+    await this.page.click(selector, { 
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false,
+      noWaitAfter: options?.noWaitAfter || false
+    });
+  }
+
+  /**
+   * Double click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright dblclick options
+   */
+  async doubleClick(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Double-clicking on element: ${selector}`);
+    await this.page.dblclick(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Right click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright click options
+   */
+  async rightClick(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Right-clicking on element: ${selector}`);
+    await this.page.click(selector, {
+      button: 'right',
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Hover over an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright hover options
+   */
+  async hover(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Hovering over element: ${selector}`);
+    await this.page.hover(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Type text into an input field
+   * @param selector - CSS or XPath selector
+   * @param text - Text to type
+   * @param options - Playwright fill options
+   */
+  async fill(selector: string, text: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Filling text in element: ${selector}`);
+    await this.page.fill(selector, text, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Type text character by character (simulates human typing)
+   * @param selector - CSS or XPath selector
+   * @param text - Text to type
+   * @param options - Playwright type options
+   */
+  async type(selector: string, text: string, options?: { delay?: number, timeout?: number }): Promise<void> {
+    this.logger.debug(`Typing text in element: ${selector}`);
+    await this.page.type(selector, text, {
+      delay: options?.delay || 100,
+      timeout: options?.timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Clear an input field
+   * @param selector - CSS or XPath selector
+   */
+  async clearInput(selector: string): Promise<void> {
+    this.logger.debug(`Clearing input field: ${selector}`);
+    await this.page.fill(selector, '');
+  }
+
+  /**
+   * Select an option from a dropdown
+   * @param selector - CSS or XPath selector for the select element
+   * @param value - Value to select
+   */
+  async selectOption(selector: string, value: string | string[] | { value?: string, label?: string, index?: number }): Promise<string[]> {
+    this.logger.debug(`Selecting option in dropdown: ${selector}`);
+    return await this.page.selectOption(selector, value);
+  }
+
+  /**
+   * Check a checkbox or radio button
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright check options
+   */
+  async check(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Checking checkbox/radio: ${selector}`);
+    await this.page.check(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Uncheck a checkbox
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright uncheck options
+   */
+  async uncheck(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Unchecking checkbox: ${selector}`);
+    await this.page.uncheck(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Get text from an element
+   * @param selector - CSS or XPath selector
+   * @returns Promise<string> - Text content of the element
+   */
+  async getText(selector: string): Promise<string> {
+    this.logger.debug(`Getting text from element: ${selector}`);
+    return await this.page.locator(selector).innerText();
+  }
+
+  /**
+   * Get attribute value from an element
+   * @param selector - CSS or XPath selector
+   * @param attributeName - Name of the attribute
+   * @returns Promise<string | null> - Attribute value
+   */
+  async getAttribute(selector: string, attributeName: string): Promise<string | null> {
+    this.logger.debug(`Getting attribute "${attributeName}" from element: ${selector}`);
+    return await this.page.locator(selector).getAttribute(attributeName);
+  }
+
+  /**
+   * Get value of an input element
+   * @param selector - CSS or XPath selector
+   * @returns Promise<string> - Input value
+   */
+  async getValue(selector: string): Promise<string> {
+    this.logger.debug(`Getting value from input: ${selector}`);
+    return await this.page.inputValue(selector);
+  }
+
+  /**
+   * Upload a file
+   * @param selector - CSS or XPath selector for the file input
+   * @param filePaths - Path(s) to the file(s) to upload
+   */
+  async uploadFile(selector: string, filePaths: string | string[]): Promise<void> {
+    this.logger.debug(`Uploading file(s) to: ${selector}`);
+    await this.page.setInputFiles(selector, filePaths);
+  }
+
+  /**
+   * Press a key or key combination
+   * @param selector - CSS or XPath selector
+   * @param key - Key or key combination to press
+   */
+  async pressKey(selector: string, key: string): Promise<void> {
+    this.logger.debug(`Pressing key "${key}" on element: ${selector}`);
+    await this.page.locator(selector).press(key);
+  }
+
+  /**
+   * Drag and drop an element
+   * @param sourceSelector - CSS or XPath selector for the source element
+   * @param targetSelector - CSS or XPath selector for the target element
+   */
+  async dragAndDrop(sourceSelector: string, targetSelector: string): Promise<void> {
+    this.logger.debug(`Dragging from ${sourceSelector} to ${targetSelector}`);
+    await this.page.dragAndDrop(sourceSelector, targetSelector);
+  }
+
+  // ====== Wait Methods ======
+
+  /**
+   * Wait for an element to be visible
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   * @returns Promise<Locator> - Locator for the element
+   */
+  async waitForVisible(selector: string, timeout?: number): Promise<Locator> {
+    this.logger.debug(`Waiting for element to be visible: ${selector}`);
+    const locator = this.page.locator(selector);
+    await locator.waitFor({ state: 'visible', timeout: timeout || this.defaultTimeout });
+    return locator;
+  }
+
+  /**
+   * Wait for an element to be hidden
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   */
+  async waitForHidden(selector: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element to be hidden: ${selector}`);
+    await this.page.locator(selector).waitFor({ 
+      state: 'hidden', 
+      timeout: timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for an element to be enabled
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   * @returns Promise<Locator> - Locator for the element
+   */
+  async waitForEnabled(selector: string, timeout?: number): Promise<Locator> {
+    this.logger.debug(`Waiting for element to be enabled: ${selector}`);
+    const locator = this.page.locator(selector);
+    await expect(locator).toBeEnabled({ timeout: timeout || this.defaultTimeout });
+    return locator;
+  }
+
+  /**
+   * Wait for element to contain specific text
+   * @param selector - CSS or XPath selector
+   * @param text - Text to wait for
+   * @param timeout - Timeout in ms
+   */
+  async waitForText(selector: string, text: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element ${selector} to contain text: "${text}"`);
+    await expect(this.page.locator(selector)).toContainText(text, { 
+      timeout: timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a network request to complete
+   * @param urlPattern - URL pattern to match
+   * @param options - Options for waiting
+   * @returns Promise<Request> - The matched request
+   */
+  async waitForRequest(urlPattern: string | RegExp, options?: { timeout?: number }): Promise<Request> {
+    this.logger.debug(`Waiting for request: ${urlPattern}`);
+    return await this.page.waitForRequest(urlPattern, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a network response to complete
+   * @param urlPattern - URL pattern to match
+   * @param options - Options for waiting
+   * @returns Promise<Response> - The matched response
+   */
+  async waitForResponse(urlPattern: string | RegExp, options?: { timeout?: number }): Promise<Response> {
+    this.logger.debug(`Waiting for response: ${urlPattern}`);
+    return await this.page.waitForResponse(urlPattern, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a specific load state
+   * @param state - Load state to wait for
+   * @param options - Options for waiting
+   */
+  async waitForLoadState(state: 'load' | 'domcontentloaded' | 'networkidle', options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Waiting for load state: ${state}`);
+    await this.page.waitForLoadState(state, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a specific amount of time (use sparingly)
+   * @param ms - Time to wait in milliseconds
+   */
+  async wait(ms: number): Promise<void> {
+    this.logger.debug(`Waiting for ${ms}ms`);
+    await this.page.waitForTimeout(ms);
+  }
+
+  // ====== Assertion Methods ======
+
+  /**
+   * Assert that an element is visible
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertVisible(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is visible: ${selector}`);
+    await expect(this.page.locator(selector)).toBeVisible({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is hidden
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertHidden(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is hidden: ${selector}`);
+    await expect(this.page.locator(selector)).toBeHidden({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element contains specific text
+   * @param selector - CSS or XPath selector
+   * @param text - Text to check for
+   * @param options - Assertion options
+   */
+  async assertText(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element ${selector} contains text: "${text}"`);
+    await expect(this.page.locator(selector)).toContainText(text, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element has an exact text
+   * @param selector - CSS or XPath selector
+   * @param text - Exact text to check for
+   * @param options - Assertion options
+   */
+  async assertExactText(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element ${selector} has exact text: "${text}"`);
+    await expect(this.page.locator(selector)).toHaveText(text, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element has a specific attribute value
+   * @param selector - CSS or XPath selector
+   * @param attribute - Attribute name
+   * @param value - Expected attribute value
+   * @param options - Assertion options
+   */
+  async assertAttribute(selector: string, attribute: string, value: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element ${selector} has attribute ${attribute}="${value}"`);
+    await expect(this.page.locator(selector)).toHaveAttribute(attribute, value, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is enabled
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertEnabled(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is enabled: ${selector}`);
+    await expect(this.page.locator(selector)).toBeEnabled({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is disabled
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertDisabled(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is disabled: ${selector}`);
+    await expect(this.page.locator(selector)).toBeDisabled({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that a checkbox or radio button is checked
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertChecked(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is checked: ${selector}`);
+    await expect(this.page.locator(selector)).toBeChecked({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert URL contains a specific string
+   * @param urlSubstring - Substring to check for in the URL
+   * @param options - Assertion options
+   */
+  async assertUrlContains(urlSubstring: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting URL contains: ${urlSubstring}`);
+    await expect(this.page).toHaveURL(new RegExp(urlSubstring), { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert page title contains a specific string
+   * @param titleSubstring - Substring to check for in the title
+   * @param options - Assertion options
+   */
+  async assertTitleContains(titleSubstring: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting title contains: ${titleSubstring}`);
+    await expect(this.page).toHaveTitle(new RegExp(titleSubstring), { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  // ====== Screenshot and Logging Methods ======
+
+  /**
+   * Take a screenshot
+   * @param name - Name for the screenshot file
+   * @returns Promise<string> - Path to the screenshot
+   */
+  async takeScreenshot(name?: string): Promise<string> {
+    const screenshotName = name || `${this.constructor.name}_screenshot`;
+    const screenshotsDir = path.join(process.cwd(), 'reports', 'screenshots');
+    
+    // Ensure the screenshots directory exists
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const filename = `${screenshotName}_${timestamp}.png`;
+    const screenshotPath = path.join(screenshotsDir, filename);
+    
+    this.logger.info(`Taking screenshot: ${screenshotPath}`);
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    
+    return screenshotPath;
+  }
+
+  /**
+   * Take a screenshot of a specific element
+   * @param selector - CSS or XPath selector
+   * @param name - Name for the screenshot file
+   * @returns Promise<string> - Path to the screenshot
+   */
+  async takeElementScreenshot(selector: string, name?: string): Promise<string> {
+    const screenshotName = name || `${this.constructor.name}_element`;
+    const screenshotsDir = path.join(process.cwd(), 'reports', 'screenshots');
+    
+    // Ensure the screenshots directory exists
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const filename = `${screenshotName}_${timestamp}.png`;
+    const screenshotPath = path.join(screenshotsDir, filename);
+    
+    this.logger.info(`Taking element screenshot: ${screenshotPath}`);
+    await this.page.locator(selector).screenshot({ path: screenshotPath });
+    
+    return screenshotPath;
+  }
+
+  /**
+   * Get console logs
+   * @returns Promise<string[]> - Console logs
+   */
+  async getConsoleLogs(): Promise<string[]> {
+    return this.logger.getLogs();
+  }
+
+  // ====== Utility Methods ======
+
+  /**
+   * Execute JavaScript in the browser context
+   * @param script - JavaScript code to execute
+   * @param arg - Argument to pass to the script
+   * @returns Promise<any> - Result of the script execution
+   */
+  async executeScript<T>(script: string, arg?: any): Promise<T> {
+    this.logger.debug('Executing JavaScript in browser context');
+    return await this.page.evaluate(script, arg);
+  }
+
+  /**
+   * Get all cookies
+   * @returns Promise<object[]> - Array of cookies
+   */
+  async getCookies(): Promise<object[]> {
+    this.logger.debug('Getting all cookies');
+    return await this.context.cookies();
+  }
+
+  /**
+   * Set a cookie
+   * @param name - Cookie name
+   * @param value - Cookie value
+   * @param options - Cookie options
+   */
+  async setCookie(name: string, value: string, options?: { 
+    domain?: string, 
+    path?: string, 
+    expires?: number, 
+    httpOnly?: boolean, 
+    secure?: boolean,
+    sameSite?: 'Strict' | 'Lax' | 'None'
+  }): Promise<void> {
+    this.logger.debug(`Setting cookie: ${name}`);
+    await this.context.addCookies([{
+      name,
+      value,
+      domain: options?.domain || new URL(this.baseUrl).hostname,
+      path: options?.path || '/',
+      expires: options?.expires || Math.floor(Date.now() / 1000) + 3600,
+      httpOnly: options?.httpOnly || false,
+      secure: options?.secure || false,
+      sameSite: options?.sameSite || 'Lax'
+    }]);
+  }
+
+  /**
+   * Clear all cookies
+   */
+  async clearCookies(): Promise<void> {
+    this.logger.debug('Clearing all cookies');
+    await this.context.clearCookies();
+  }
+
+  /**
+   * Set localStorage item
+   * @param key - Storage key
+   * @param value - Storage value
+   */
+  async setLocalStorage(key: string, value: string): Promise<void> {
+    this.logger.debug(`Setting localStorage item: ${key}`);
+    await this.page.evaluate(([k, v]) => {
+      localStorage.setItem(k, v);
+    }, [key, value]);
+  }
+
+  /**
+   * Get localStorage item
+   * @param key - Storage key
+   * @returns Promise<string | null> - Storage value
+   */
+  async getLocalStorage(key: string): Promise<string | null> {
+    this.logger.debug(`Getting localStorage item: ${key}`);
+    return await this.page.evaluate((k) => {
+      return localStorage.getItem(k);
+    }, key);
+  }
+
+  /**
+   * Clear localStorage
+   */
+  async clearLocalStorage(): Promise<void> {
+    this.logger.debug('Clearing localStorage');
+    await this.page.evaluate(() => {
+      localStorage.clear();
+    });
+  }
+
+  /**
+   * Set sessionStorage item
+   * @param key - Storage key
+   * @param value - Storage value
+   */
+  async setSessionStorage(key: string, value: string): Promise<void> {
+    this.logger.debug(`Setting sessionStorage item: ${key}`);
+    await this.page.evaluate(([k, v]) => {
+      sessionStorage.setItem(k, v);
+    }, [key, value]);
+  }
+
+  /**
+   * Get sessionStorage item
+   * @param key - Storage key
+   * @returns Promise<string | null> - Storage value
+   */
+  async getSessionStorage(key: string): Promise<string | null> {
+    this.logger.debug(`Getting sessionStorage item: ${key}`);
+    return await this.page.evaluate((k) => {
+      return sessionStorage.getItem(k);
+    }, key);
+  }
+
+  /**
+   * Clear sessionStorage
+   */
+  async clearSessionStorage(): Promise<void> {
+    this.logger.debug('Clearing sessionStorage');
+    await this.page.evaluate(() => {
+      sessionStorage.clear();
+    });
+  }
+
+  /**
+   * Get all window handles
+   * @returns Promise<Page[]> - Array of pages
+   */
+  async getAllWindows(): Promise<Page[]> {
+    this.logger.debug('Getting all window handles');
+    return this.context.pages();
+  }
+
+  /**
+   * Switch to a specific window by index
+   * @param index - Index of the window to switch to
+   * @returns Promise<Page> - The switched to page
+   */
+  async switchToWindow(index: number): Promise<Page> {
+    this.logger.debug(`Switching to window index: ${index}`);
+    const pages = await this.context.pages();
+    if (index >= pages.length) {
+      throw new Error(`Window index ${index} is out of bounds. Only ${pages.length} windows exist.`);
+    }
+    const targetPage = pages[index];
+    await targetPage.bringToFront();
+    return targetPage;
+  }
+
+  /**
+   * Close the current window/tab
+   */
+  async closeCurrentWindow(): Promise<void> {
+    this.logger.debug('Closing current window');
+    await this.page.close();
+  }
+
+  /**
+   * Get element count
+   * @param selector - CSS or XPath selector
+   * @returns Promise<number> - Number of matching elements
+   */
+  async getElementCount(selector: string): Promise<number> {
+    this.logger.debug(`Getting element count for: ${selector}`);
+    return await this.page.locator(selector).count();
+  }
+
+  /**
+   * Check if element exists
+   * @param selector - CSS or XPath selector
+   * @returns Promise<boolean> - Whether the element exists
+   */
+  async elementExists(selector: string): Promise<boolean> {
+    this.logger.debug(`Checking if element exists: ${selector}`);
+    const count = await this.getElementCount(selector);
+    return count > 0;
+  }
+
+  /**
+   * Wait for a function to return true
+   * @param predicate - Function that returns a boolean
+   * @param options - Options for waiting
+   * @returns Promise<boolean> - Whether the condition was met
+   */
+  async waitForCondition(
+    predicate: () => Promise<boolean>, 
+    options?: { timeout?: number, pollingInterval?: number }
+  ): Promise<boolean> {
+    const timeout = options?.timeout || this.defaultTimeout;
+    const pollingInterval = options?.pollingInterval || 100;
+    this.logger.debug(`Waiting for condition with timeout: ${timeout}ms`);
+    
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+      if (await predicate()) {
+        return true;
+      }
+      await this.page.waitForTimeout(pollingInterval);
+    }
+    return false;
+  }
+
+  /**
+   * Retry an action until it succeeds
+   * @param action - Function to retry
+   * @param options - Retry options
+   * @returns Promise<T> - Result of the action
+   */
+  async retry<T>(
+    action: () => Promise<T>, 
+    options?: { 
+      maxAttempts?: number, 
+      interval?: number, 
+      timeout?: number,
+      onError?: (error: Error, attempt: number) => void 
+    }
+  ): Promise<T> {
+    const maxAttempts = options?.maxAttempts || 3;
+    const interval = options?.interval || 1000;
+    const timeout = options?.timeout || this.defaultTimeout;
+    
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.logger.debug(`Retry attempt ${attempt}/${maxAttempts}`);
+        
+        // Create a promise that times out
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`Timeout of ${timeout}ms exceeded`)), timeout);
+        });
+        
+        // Race the action against the timeout
+        return await Promise.race([action(), timeoutPromise]) as T;
+      } catch (error) {
+        lastError = error as Error;
+        this.logger.debug(`Attempt ${attempt} failed: ${lastError.message}`);
+        
+        if (options?.onError) {
+          options.onError(lastError, attempt);
+        }
+        
+        if (attempt < maxAttempts) {
+          await this.page.waitForTimeout(interval);
+        }
+      }
+    }
+    
+    throw lastError || new Error('Retry failed for unknown reason');
+  }
+
+  // ====== Private Methods ======
+
+  /**
+   * Set up listeners for network events
+   * @private
+   */
+  private setupNetworkListeners(): void {
+    // Listen for all requests
+    this.page.on('request', request => {
+      this.logger.debug(`>> Request: ${request.method()} ${request.url()}`);
+    });
+
+    // Listen for all responses
+    this.page.on('response', response => {
+      this.logger.debug(`<< Response: ${response.status()} ${response.url()}`);
+    });
+
+    // Listen for console messages
+    this.page.on('console', msg => {
+      const type = msg.type();
+      const text = msg.text();
+      
+      switch (type) {
+        case 'error':
+          this.logger.error(`Console Error: ${text}`);
+          break;
+        case 'warning':
+          this.logger.warn(`Console Warning: ${text}`);
+          break;
+        default:
+          this.logger.debug(`Console ${type}: ${text}`);
+      }
+    });
+
+    // Listen for page errors
+    this.page.on('pageerror', error => {
+      this.logger.error(`Page Error: ${error.message}`);
+    });
+
+    // Listen for dialog events (alerts, confirms, prompts)
+    this.page.on('dialog', dialog => {
+      this.logger.info(`Dialog (${dialog.type()}): ${dialog.message()}`);
+      // Auto-dismiss dialogs to prevent test hanging
+      dialog.dismiss().catch(e => this.logger.error(`Failed to dismiss dialog: ${e.message}`));
+    });
+  }
+}
+
+// File: src/framework/base-api-client.ts
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import { expect } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
+
+/**
+ * Interface for API request options
+ */
+export interface ApiRequestOptions {
+  headers?: Record<string, string>;
+  params?: Record<string, any>;
+  data?: any;
+  timeout?: number;
+  validateStatus?: boolean;
+}
+
+/**
+ * Base API client for all API interactions
+ */
+export class BaseApiClient {
+  readonly apiBaseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly defaultHeaders: Record<string, string>;
+  readonly config: ConfigManager;
+
+  /**
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
+   */
+  constructor(
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
+  ) {
+    this.config = ConfigManager.getInstance();
+    this.apiBaseUrl = apiBaseUrl || this.config.get<string>('apiBaseUrl', process.env.API_BASE_URL || 'https://api.example.com');
+    this.defaultTimeout = this.config.get<number>('defaultTimeout', parseInt(process.env.DEFAULT_TIMEOUT || '30000'));
+    this.logger = new Logger(this.constructor.name);
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
+    };
+  }
+
+  /**
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async get(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making GET request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Add request timing metadata
+      config.metadata = { startTime: Date.now() };
+      
+      const response = await axios.get(url, config);
+      
+      // Add response timing metadata
+      response.config.metadata = { ...response.config.metadata, endTime: Date.now() };
+      
+      this.logResponse(response);
+      return response;
+    } catch (error) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async post(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making POST request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Add request timing metadata
+      config.metadata = { startTime: Date.now() };
+      
+      const response = await axios.post(url, data || {}, config);
+      
+      // Add response timing metadata
+      response.config.metadata = { ...response.config.metadata, endTime: Date.now() };
+      
+      this.logResponse(response);
+      return response;
+    } catch (error) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async put(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Add request timing metadata
+      config.metadata = { startTime: Date.now() };
+      
+      const response = await axios.put(url, data || {}, config);
+      
+      // Add response timing metadata
+      response.config.metadata = { ...response.config.metadata, endTime: Date.now() };
+      
+      this.logResponse(response);
+      return response;
+    } catch (error) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async patch(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Add request timing metadata
+      config.metadata = { startTime: Date.now() };
+      
+      const response = await axios.patch(url, data || {}, config);
+      
+      // Add response timing metadata
+      response.config.metadata = { ...response.config.metadata, endTime: Date.now() };
+      
+      this.logResponse(response);
+      return response;
+    } catch (error) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Make a DELETE request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async delete(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      data: options?.data || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Add request timing metadata
+      config.metadata = { startTime: Date.now() };
+      
+      const response = await axios.delete(url, config);
+      
+      // Add response timing metadata
+      response.config.metadata = { ...response.config.metadata, endTime: Date.now() };
+      
+      this.logResponse(response);
+      return response;
+    } catch (error) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    this.logger.debug(`Asserting status code: ${expectedStatus}`);
+    expect(response.status).toBe(expectedStatus);
+  }
+
+  /**
+   * Assert API response contains specific data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting response data`);
+    expect(response.data).toMatchObject(expectedData);
+  }
+
+  /**
+   * Assert response header has a specific value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValue - Expected header value
+   */
+  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
+    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toBe(expectedValue);
+  }
+
+  /**
+   * Assert response time is within acceptable limits
+   * @param response - Axios response
+   * @param maxTime - Maximum acceptable response time in ms
+   */
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    if (response.config && response.config.metadata && response.config.metadata.endTime && response.config.metadata.startTime) {
+      const duration = response.config.metadata.endTime - response.config.metadata.startTime;
+      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
+      expect(duration).toBeLessThanOrEqual(maxTime);
+    } else {
+      this.logger.warn('Response time metrics not available');
+    }
+  }
+
+  /**
+   * Get authentication token (to be implemented by derived classes)
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(): Promise<string> {
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
+
+  /**
+   * Create auth header with token
+   * @param token - Authentication token
+   * @returns Record<string, string> - Headers with authentication
+   */
+  createAuthHeader(token: string): Record<string, string> {
+    return { 'Authorization': `Bearer ${token}` };
+  }
+
+  /**
+   * Retry a request until it succeeds or max attempts reached
+   * @param requestFn - Function to retry
+   * @param options - Retry options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async retryRequest(
+    requestFn: () => Promise<AxiosResponse>,
+    options?: {
+      maxAttempts?: number;
+      retryDelay?: number;
+      retryCondition?: (error: any) => boolean;
+    }
+  ): Promise<AxiosResponse> {
+    const maxAttempts = options?.maxAttempts || 3;
+    const retryDelay = options?.retryDelay || 1000;
+    const retryCondition = options?.retryCondition || (() => true);
+    
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.logger.debug(`Request attempt ${attempt}/${maxAttempts}`);
+        return await requestFn();
+      } catch (error) {
+        lastError = error;
+        this.logger.debug(`Attempt ${attempt} failed: ${error.message}`);
+        
+        if (attempt < maxAttempts && retryCondition(error)) {
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        } else {
+          break;
+        }
+      }
+    }
+    
+    throw lastError;
+  }
+
+  /**
+   * Log response details
+   * @private
+   * @param response - Axios response
+   */
+  private logResponse(response: AxiosResponse): void {
+    this.logger.debug(`Response status: ${response.status}`);
+    this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
+    
+    // Calculate response time if metadata is available
+    if (response.config && response.config.metadata && response.config.metadata.endTime && response.config.metadata.startTime) {
+      const duration = response.config.metadata.endTime - response.config.metadata.startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+    }
+    
+    // Log response body in a safe way (truncate if too large)
+    try {
+      const responseBody = JSON.stringify(response.data);
+      if (responseBody.length > 1000) {
+        this.logger.debug(`Response body (truncated): ${responseBody.substring(0, 1000)}...`);
+      } else {
+        this.logger.debug(`Response body: ${responseBody}`);
+      }
+    } catch (error) {
+      this.logger.debug('Response body: [Could not stringify response data]');
+    }
+  }
+
+  /**
+   * Log error details
+   * @private
+   * @param error - Axios error
+   */
+  private logError(error: any): void {
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+      this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+      this.logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
+    } else if (error.request) {
+      // The request was made but no response was received
+      this.logger.error(`Request error: ${error.message}`);
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      this.logger.error(`Error: ${error.message}`);
+    }
+  }
+}
+
+/******************************
+ * 2. PAGE OBJECTS
+ ******************************/
+
+// File: src/pages/login-page.ts
+import { Page, BrowserContext } from '@playwright/test';
+import { BaseWebPage } from '../framework/base-web-page';
+
+export class LoginPage extends BaseWebPage {
+  // Selectors
+  private readonly usernameInput = '#username';
+  private readonly passwordInput = '#password';
+  private readonly loginButton = 'button[type="submit"]';
+  private readonly errorMessage = '.error-message';
+  private readonly rememberMeCheckbox = '#remember-me';
+  private readonly forgotPasswordLink = 'a.forgot-password';
+
+  // Constructor with URL for initial navigation
+  constructor(page: Page, context: BrowserContext) {
+    super(page, context, 'https://example.com/login');
+  }
+
+  // Page actions
+  async navigateToLoginPage(): Promise<void> {
+    await this.navigateToPage('/login');
+  }
+
+  async enterUsername(username: string): Promise<void> {
+    await this.fill(this.usernameInput, username);
+  }
+
+  async enterPassword(password: string): Promise<void> {
+    await this.fill(this.passwordInput, password);
+  }
+
+  async clickLoginButton(): Promise<void> {
+    await this.click(this.loginButton);
+    await this.waitForLoadState('networkidle');
+  }
+
+  async login(username: string, password: string, rememberMe: boolean = false): Promise<void> {
+    await this.enterUsername(username);
+    await this.enterPassword(password);
+    
+    if (rememberMe) {
+      await this.check(this.rememberMeCheckbox);
+    }
+    
+    await this.clickLoginButton();
+  }
+
+  async clickForgotPassword(): Promise<void> {
+    await this.click(this.forgotPasswordLink);
+    await this.waitForLoadState('networkidle');
+  }
+
+  async getErrorMessage(): Promise<string> {
+    await this.waitForVisible(this.errorMessage);
+    return this.getText(this.errorMessage);
+  }
+
+  async isRememberMeChecked(): Promise<boolean> {
+    return await this.page.isChecked(this.rememberMeCheckbox);
+  }
+}
+
+// File: src/pages/dashboard-page.ts
+import { Page, BrowserContext } from '@playwright/test';
+import { BaseWebPage } from '../framework/base-web-page';
+
+export class DashboardPage extends BaseWebPage {
+  // Selectors
+  private readonly welcomeMessage = '.welcome-message';
+  private readonly userProfile = '.user-profile';
+  private readonly logoutButton = '.logout-btn';
+  private readonly menuItems = '.menu-item';
+  private readonly notifications = '.notification-icon';
+  private readonly searchInput = '#search-input';
+  private readonly searchButton = '#search-button';
+
+  // Constructor - Note we don't pass a URL here as we navigate to this page after login
+  constructor(page: Page, context: BrowserContext) {
+    super(page, context);
+  }
+
+  // Page actions
+  async getWelcomeMessage(): Promise<string> {
+    await this.waitForVisible(this.welcomeMessage);
+    return this.getText(this.welcomeMessage);
+  }
+
+  async navigateToMenuItem(menuName: string): Promise<void> {
+    const menuSelector = `${this.menuItems}:has-text("${menuName}")`;
+    await this.waitForVisible(menuSelector);
+    await this.click(menuSelector);
+    await this.waitForLoadState('networkidle');
+  }
+
+  async logout(): Promise<void> {
+    await this.click(this.logoutButton);
+    await this.waitForLoadState('networkidle');
+  }
+
+  async isLoggedIn(): Promise<boolean> {
+    return await this.elementExists(this.userProfile);
+  }
+
+  async getUserFullName(): Promise<string> {
+    return await this.getText(this.userProfile);
+  }
+
+  async search(query: string): Promise<void> {
+    await this.fill(this.searchInput, query);
+    await this.click(this.searchButton);
+    await this.waitForLoadState('networkidle');
+  }
+
+  async getNotificationCount(): Promise<number> {
+    const countText = await this.getText(`${this.notifications} .count`);
+    return parseInt(countText, 10);
+  }
+
+  async waitForDashboardLoad(): Promise<void> {
+    await this.waitForVisible(this.welcomeMessage);
+    await this.waitForVisible(this.userProfile);
+    await this.waitForLoadState('networkidle');
+  }
+}
+
+// File: src/pages/user-profile-page.ts
+import { Page, BrowserContext } from '@playwright/test';
+import { BaseWebPage } from '../framework/base-web-page';
+
+export class UserProfilePage extends BaseWebPage {
+  // Selectors
+  private readonly profileForm = '#profile-form';
+  private readonly nameInput = '#profile-name';
+  private readonly emailInput = '#profile-email';
+  private readonly phoneInput = '#profile-phone';
+  private readonly saveButton = '#save-profile';
+  private readonly cancelButton = '#cancel-profile';
+  private readonly successMessage = '.success-message';
+
+  constructor(page: Page, context: BrowserContext) {
+    super(page, context);
+  }
+
+  async navigateToProfile(): Promise<void> {
+    // Navigate to profile page from any page
+    await this.navigateToPage('/profile');
+  }
+
+  async updateProfile(name: string, email: string, phone: string): Promise<void> {
+    await this.clearInput(this.nameInput);
+    await this.fill(this.nameInput, name);
+    
+    await this.clearInput(this.emailInput);
+    await this.fill(this.emailInput, email);
+    
+    await this.clearInput(this.phoneInput);
+    await this.fill(this.phoneInput, phone);
+    
+    await this.click(this.saveButton);
+    await this.waitForVisible(this.successMessage);
+  }
+
+  async getCurrentProfileData(): Promise<{ name: string; email: string; phone: string }> {
+    const name = await this.getValue(this.nameInput);
+    const email = await this.getValue(this.emailInput);
+    const phone = await this.getValue(this.phoneInput);
+    
+    return { name, email, phone };
+  }
+
+  async cancelEditing(): Promise<void> {
+    await this.click(this.cancelButton);
+  }
+
+  async isProfileFormVisible(): Promise<boolean> {
+    return await this.elementExists(this.profileForm);
+  }
+
+  async getSuccessMessage(): Promise<string> {
+    return await this.getText(this.successMessage);
+  }
+}
+
+/******************************
+ * 3. API CLIENTS
+ ******************************/
+
+// File: src/api/user-api-client.ts
+import { BaseApiClient } from '../framework/base-api-client';
+import { AxiosResponse } from 'axios';
+
+interface User {
+  id: string;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CreateUserRequest {
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  password: string;
+  role?: string;
+}
+
+export class UserApiClient extends BaseApiClient {
+  constructor() {
+    super();
+  }
+
+  /**
+   * Get all users
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async getUsers(options?: { limit?: number; offset?: number }): Promise<AxiosResponse> {
+    const params: Record<string, any> = {};
+    
+    if (options?.limit !== undefined) {
+      params.limit = options.limit;
+    }
+    
+    if (options?.offset !== undefined) {
+      params.offset = options.offset;
+    }
+    
+    return await this.get('/users', { params });
+  }
+
+  /**
+   * Get user by ID
+   * @param id - User ID
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async getUserById(id: string): Promise<AxiosResponse> {
+    return await this.get(`/users/${id}`);
+  }
+
+  /**
+   * Create a new user
+   * @param userData - User data
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async createUser(userData: CreateUserRequest, token?: string): Promise<AxiosResponse> {
+    const options: ApiRequestOptions = {};
+    
+    if (token) {
+      options.headers = this.createAuthHeader(token);
+    }
+    
+    return await this.post('/users', userData, options);
+  }
+
+  /**
+   * Update a user
+   * @param id - User ID
+   * @param userData - Partial user data to update
+   * @param token - Authentication token
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async updateUser(id: string, userData: Partial<User>, token?: string): Promise<AxiosResponse> {
+    const options: ApiRequestOptions = {};
+    
+    if (token) {
+      options.headers = this.createAuthHeader(token);
+    }
+    
+    return await this.put(`/users/${id}`, userData, options);
+  }
+
+  /**
+   * Delete a user
+   * @param id - User ID
+   * @param token - Authentication token
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async deleteUser(id: string, token?: string): Promise<AxiosResponse> {
+    const options: ApiRequestOptions = {};
+    
+    if (token) {
+      options.headers = this.createAuthHeader(token);
+    }
+    
+    return await this.delete(`/users/${id}`, options);
+  }
+
+  /**
+   * Get authentication token
+   * @param username - Username
+   * @param password - Password
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(username?: string, password?: string): Promise<string> {
+    const creds = {
+      username: username || this.config.get<string>('auth.username', process.env.API_USERNAME || 'admin'),
+      password: password || this.config.get<string>('auth.password', process.env.API_PASSWORD || 'admin123')
+    };
+    
+    const response = await this.post('/auth/login', creds);
+    
+    if (response.data && response.data.token) {
+      return response.data.token;
+    }
+    
+    throw new Error('Authentication failed');
+  }
+}
+
+// File: src/api/product-api-client.ts
+import { BaseApiClient } from '../framework/base-api-client';
+import { AxiosResponse } from 'axios';
+
+interface Product {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  category: string;
+  stockQuantity: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CreateProductRequest {
+  name: string;
+  description: string;
+  price: number;
+  category: string;
+  stockQuantity: number;
+}
+
+export class ProductApiClient extends BaseApiClient {
+  constructor() {
+    super();
+  }
+
+  /**
+   * Get all products
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async getProducts(options?: { 
+    limit?: number; 
+    offset?: number;
+    category?: string;
+    minPrice?: number;
+    maxPrice?: number;
+  }): Promise<AxiosResponse> {
+    return await this.get('/products', { params: options });
+  }
+
+  /**
+   * Get product by ID
+   * @param id - Product ID
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async getProductById(id: string): Promise<AxiosResponse> {
+    return await this.get(`/products/${id}`);
+  }
+
+  /**
+   * Create a new product
+   * @param productData - Product data
+   * @param token - Authentication token
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async createProduct(productData: CreateProductRequest, token: string): Promise<AxiosResponse> {
+    const headers = this.createAuthHeader(token);
+    return await this.post('/products', productData, { headers });
+  }
+
+  /**
+   * Update a product
+   * @param id - Product ID
+   * @param productData - Partial product data to update
+   * @param token - Authentication token
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async updateProduct(id: string, productData: Partial<Product>, token: string): Promise<AxiosResponse> {
+    const headers = this.createAuthHeader(token);
+    return await this.put(`/products/${id}`, productData, { headers });
+  }
+
+  /**
+   * Delete a product
+   * @param id - Product ID
+   * @param token - Authentication token
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async deleteProduct(id: string, token: string): Promise<AxiosResponse> {
+    const headers = this.createAuthHeader(token);
+    return await this.delete(`/products/${id}`, { headers });
+  }
+}
+
+/******************************
+ * 4. STEP DEFINITIONS
+ ******************************/
+
+// File: src/step-definitions/ui-steps/login-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { LoginPage } from '../../pages/login-page';
+import { DashboardPage } from '../../pages/dashboard-page';
+import { TestContext } from '../../support/test-context';
+import { DataGenerator } from '../../framework/utils/data-generator';
+
+// We use a TestContext to share state between steps
+Given('I am on the login page', async function(this: TestContext) {
+  this.loginPage = new LoginPage(this.page, this.context);
+  await this.loginPage.navigateToLoginPage();
+});
+
+When('I enter username {string}', async function(this: TestContext, username: string) {
+  await this.loginPage.enterUsername(username);
+});
+
+When('I enter password {string}', async function(this: TestContext, password: string) {
+  await this.loginPage.enterPassword(password);
+});
+
+When('I enter random login credentials', async function(this: TestContext) {
+  const username = DataGenerator.username();
+  const password = DataGenerator.password();
+  
+  // Store for later use
+  this.testData.username = username;
+  this.testData.password = password;
+  
+  await this.loginPage.enterUsername(username);
+  await this.loginPage.enterPassword(password);
+});
+
+When('I click the remember me checkbox', async function(this: TestContext) {
+  await this.loginPage.check('#remember-me');
+});
+
+When('I click the login button', async function(this: TestContext) {
+  await this.loginPage.clickLoginButton();
+});
+
+When('I login with username {string} and password {string}', async function(this: TestContext, username: string, password: string) {
+  await this.loginPage.login(username, password);
+});
+
+When('I login with stored credentials', async function(this: TestContext) {
+  await this.loginPage.login(this.testData.username, this.testData.password);
+});
+
+When('I click the forgot password link', async function(this: TestContext) {
+  await this.loginPage.clickForgotPassword();
+});
+
+Then('I should be redirected to the dashboard', async function(this: TestContext) {
+  this.dashboardPage = new DashboardPage(this.page, this.context);
+  await this.dashboardPage.waitForDashboardLoad();
+  const isLoggedIn = await this.dashboardPage.isLoggedIn();
+  expect(isLoggedIn).toBeTruthy();
+});
+
+Then('I should see a welcome message containing {string}', async function(this: TestContext, text: string) {
+  const welcomeText = await this.dashboardPage.getWelcomeMessage();
+  expect(welcomeText).toContain(text);
+});
+
+Then('I should see an error message {string}', async function(this: TestContext, errorMessage: string) {
+  const actualError = await this.loginPage.getErrorMessage();
+  expect(actualError).toContain(errorMessage);
+});
+
+Then('I should be on the password reset page', async function(this: TestContext) {
+  await this.page.waitForURL(/.*\/reset-password/);
+  await expect(this.page).toHaveTitle(/Reset Password/);
+});
+
+// File: src/step-definitions/ui-steps/profile-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { DashboardPage } from '../../pages/dashboard-page';
+import { UserProfilePage } from '../../pages/user-profile-page';
+import { LoginPage } from '../../pages/login-page';
+import { TestContext } from '../../support/test-context';
+import { DataGenerator } from '../../framework/utils/data-generator';
+
+Given('I am logged in as {string} with password {string}', async function(this: TestContext, username: string, password: string) {
+  this.loginPage = new LoginPage(this.page, this.context);
+  await this.loginPage.navigateToLoginPage();
+  await this.loginPage.login(username, password);
+  
+  this.dashboardPage = new DashboardPage(this.page, this.context);
+  await this.dashboardPage.waitForDashboardLoad();
+});
+
+When('I navigate to the {string} menu', async function(this: TestContext, menuName: string) {
+  await this.dashboardPage.navigateToMenuItem(menuName);
+});
+
+When('I search for {string}', async function(this: TestContext, query: string) {
+  await this.dashboardPage.search(query);
+});
+
+When('I click on my user profile', async function(this: TestContext) {
+  await this.dashboardPage.click('.user-profile');
+  this.userProfilePage = new UserProfilePage(this.page, this.context);
+  await this.userProfilePage.waitForVisible('#profile-form');
+});
+
+When('I update my profile information', async function(this: TestContext) {
+  const name = DataGenerator.name();
+  const email = DataGenerator.email();
+  const phone = DataGenerator.phoneNumber();
+  
+  await this.userProfilePage.updateProfile(name, email, phone);
+  
+  // Store for later verification
+  this.testData.name = name;
+  this.testData.email = email;
+  this.testData.phone = phone;
+});
+
+When('I log out', async function(this: TestContext) {
+  await this.dashboardPage.logout();
+});
+
+Then('I should see my updated profile information', async function(this: TestContext) {
+  const profileData = await this.userProfilePage.getCurrentProfileData();
+  
+  expect(profileData.name).toBe(this.testData.name);
+  expect(profileData.email).toBe(this.testData.email);
+  expect(profileData.phone).toBe(this.testData.phone);
+});
+
+Then('I should see a success message', async function(this: TestContext) {
+  const message = await this.userProfilePage.getSuccessMessage();
+  expect(message).toContain('Profile updated successfully');
+});
+
+Then('I should be redirected to the login page', async function(this: TestContext) {
+  await this.page.waitForURL(/.*\/login/);
+  expect(await this.page.title()).toContain('Login');
+});
+
+// File: src/step-definitions/api-steps/user-api-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { UserApiClient } from '../../api/user-api-client';
+import { ApiContext } from '../../support/test-context';
+import { DataGenerator } from '../../framework/utils/data-generator';
+
+Given('I have a valid API token', async function(this: ApiContext) {
+  this.userApiClient = new UserApiClient();
+  this.authToken = await this.userApiClient.getAuthToken();
+  expect(this.authToken).toBeTruthy();
+});
+
+When('I request a list of users', async function(this: ApiContext) {
+  const headers = this.userApiClient.createAuthHeader(this.authToken);
+  this.response = await this.userApiClient.getUsers({ limit: 10 });
+});
+
+When('I request user details for a user with ID {string}', async function(this: ApiContext, userId: string) {
+  const headers = this.userApiClient.createAuthHeader(this.authToken);
+  this.response = await this.userApiClient.getUserById(userId);
+});
+
+When('I create a new user with the following details:', async function(this: ApiContext, dataTable: any) {
+  const userData = dataTable.rowsHash();
+  
+  // Generate a unique username and email to avoid conflicts
+  const timestamp = Date.now();
+  userData.username = `${userData.username}_${timestamp}`;
+  userData.email = `${timestamp}_${userData.email}`;
+  
+  // Store the data for later assertions
+  this.testData = userData;
+  
+  const headers = this.userApiClient.createAuthHeader(this.authToken);
+  this.response = await this.userApiClient.createUser(userData, this.authToken);
+  
+  // Store the created user ID
+  if (this.response.data && this.response.data.id) {
+    this.testData.userId = this.response.data.id;
+  }
+});
+
+When('I create a new random user', async function(this: ApiContext) {
+  const userData = {
+    username: DataGenerator.username(),
+    email: DataGenerator.email(),
+    firstName: DataGenerator.name().split(' ')[0],
+    lastName: DataGenerator.name().split(' ')[1],
+    password: DataGenerator.password()
+  };
+  
+  // Store the data for later assertions
+  this.testData = userData;
+  
+  this.response = await this.userApiClient.createUser(userData, this.authToken);
+  
+  // Store the created user ID
+  if (this.response.data && this.response.data.id) {
+    this.testData.userId = this.response.data.id;
+  }
+});
+
+When('I update the user with the following details:', async function(this: ApiContext, dataTable: any) {
+  const updateData = dataTable.rowsHash();
+  const userId = this.testData.userId;
+  
+  // Ensure we have a user ID
+  expect(userId).toBeTruthy();
+  
+  this.response = await this.userApiClient.updateUser(userId, updateData, this.authToken);
+  
+  // Update test data for later assertions
+  Object.assign(this.testData, updateData);
+});
+
+When('I delete the user', async function(this: ApiContext) {
+  const userId = this.testData.userId;
+  
+  // Ensure we have a user ID
+  expect(userId).toBeTruthy();
+  
+  this.response = await this.userApiClient.deleteUser(userId, this.authToken);
+});
+
+Then('the API should return a successful response', async function(this: ApiContext) {
+  expect(this.response.status).toBeGreaterThanOrEqual(200);
+  expect(this.response.status).toBeLessThan(300);
+});
+
+Then('the API should return a {int} status code', async function(this: ApiContext, statusCode: number) {
+  this.userApiClient.assertStatusCode(this.response, statusCode);
+});
+
+Then('the response should contain at least {int} users', async function(this: ApiContext, count: number) {
+  expect(this.response.data).toBeDefined();
+  expect(Array.isArray(this.response.data)).toBeTruthy();
+  expect(this.response.data.length).toBeGreaterThanOrEqual(count);
+});
+
+Then('the user details should match the provided data', async function(this: ApiContext) {
+  const userData = this.testData;
+  const responseUser = this.response.data;
+  
+  expect(responseUser).toBeDefined();
+  expect(responseUser.username).toBe(userData.username);
+  expect(responseUser.email).toBe(userData.email);
+  expect(responseUser.firstName).toBe(userData.firstName);
+  expect(responseUser.lastName).toBe(userData.lastName);
+});
+
+Then('the user should no longer exist in the system', async function(this: ApiContext) {
+  const userId = this.testData.userId;
+  
+  try {
+    // This request should fail since the user is deleted
+    await this.userApiClient.getUserById(userId);
+    throw new Error('Expected request to fail but it succeeded');
+  } catch (error) {
+    expect(error.response).toBeDefined();
+    expect(error.response.status).toBe(404);
+  }
+});
+
+// File: src/step-definitions/api-steps/product-api-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { ProductApiClient } from '../../api/product-api-client';
+import { UserApiClient } from '../../api/user-api-client';
+import { ApiContext } from '../../support/test-context';
+import { DataGenerator } from '../../framework/utils/data-generator';
+
+Given('I have a product API client', async function(this: ApiContext) {
+  this.productApiClient = new ProductApiClient();
+});
+
+When('I request a list of products', async function(this: ApiContext) {
+  this.response = await this.productApiClient.getProducts();
+});
+
+When('I request products in the {string} category', async function(this: ApiContext, category: string) {
+  this.response = await this.productApiClient.getProducts({ category });
+});
+
+When('I request products with price between {int} and {int}', async function(this: ApiContext, minPrice: number, maxPrice: number) {
+  this.response = await this.productApiClient.getProducts({ minPrice, maxPrice });
+});
+
+When('I create a new product with the following details:', async function(this: ApiContext, dataTable: any) {
+  // Ensure we have an auth token
+  if (!this.authToken) {
+    this.userApiClient = new UserApiClient();
+    this.authToken = await this.userApiClient.getAuthToken();
+  }
+  
+  const productData = dataTable.rowsHash();
+  
+  // Convert numeric fields
+  if (productData.price) {
+    productData.price = parseFloat(productData.price);
+  }
+  
+  if (productData.stockQuantity) {
+    productData.stockQuantity = parseInt(productData.stockQuantity);
+  }
+  
+  // Store the data for later assertions
+  this.testData = productData;
+  
+  this.response = await this.productApiClient.createProduct(productData, this.authToken);
+  
+  // Store the created product ID
+  if (this.response.data && this.response.data.id) {
+    this.testData.productId = this.response.data.id;
+  }
+});
+
+When('I create a new random product', async function(this: ApiContext) {
+  // Ensure we have an auth token
+  if (!this.authToken) {
+    this.userApiClient = new UserApiClient();
+    this.authToken = await this.userApiClient.getAuthToken();
+  }
+  
+  const productData = {
+    name: `Test Product ${Date.now()}`,
+    description: `Description for test product ${Date.now()}`,
+    price: DataGenerator.number(1, 1000),
+    category: DataGenerator.fromArray(['Electronics', 'Clothing', 'Food', 'Books', 'Toys']),
+    stockQuantity: DataGenerator.number(1, 100)
+  };
+  
+  // Store the data for later assertions
+  this.testData = productData;
+  
+  this.response = await this.productApiClient.createProduct(productData, this.authToken);
+  
+  // Store the created product ID
+  if (this.response.data && this.response.data.id) {
+    this.testData.productId = this.response.data.id;
+  }
+});
+
+// Continuing from part 1...
+
+When('I delete the product', async function(this: ApiContext) {
+  const productId = this.testData.productId;
+  
+  // Ensure we have a product ID and auth token
+  expect(productId).toBeTruthy();
+  expect(this.authToken).toBeTruthy();
+  
+  this.response = await this.productApiClient.deleteProduct(productId, this.authToken);
+});
+
+Then('the response should contain products in the {string} category only', async function(this: ApiContext, category: string) {
+  expect(this.response.data).toBeDefined();
+  expect(Array.isArray(this.response.data)).toBeTruthy();
+  
+  for (const product of this.response.data) {
+    expect(product.category).toBe(category);
+  }
+});
+
+Then('the response should contain products with price between {int} and {int} only', async function(this: ApiContext, minPrice: number, maxPrice: number) {
+  expect(this.response.data).toBeDefined();
+  expect(Array.isArray(this.response.data)).toBeTruthy();
+  
+  for (const product of this.response.data) {
+    expect(product.price).toBeGreaterThanOrEqual(minPrice);
+    expect(product.price).toBeLessThanOrEqual(maxPrice);
+  }
+});
+
+Then('the product details should match the provided data', async function(this: ApiContext) {
+  const productData = this.testData;
+  const responseProduct = this.response.data;
+  
+  expect(responseProduct).toBeDefined();
+  expect(responseProduct.name).toBe(productData.name);
+  expect(responseProduct.description).toBe(productData.description);
+  expect(responseProduct.price).toBe(parseFloat(productData.price));
+  expect(responseProduct.category).toBe(productData.category);
+  expect(responseProduct.stockQuantity).toBe(parseInt(productData.stockQuantity));
+});
+
+/******************************
+ * 5. SUPPORT FILES
+ ******************************/
+
+// File: src/support/test-context.ts
+import { Page, BrowserContext } from '@playwright/test';
+import { AxiosResponse } from 'axios';
+import { Logger } from '../framework/utils/logger';
+import { LoginPage } from '../pages/login-page';
+import { DashboardPage } from '../pages/dashboard-page';
+import { UserProfilePage } from '../pages/user-profile-page';
+import { UserApiClient } from '../api/user-api-client';
+import { ProductApiClient } from '../api/product-api-client';
+
+/**
+ * Comprehensive test context that can be used for both UI and API tests
+ * Shared between steps to maintain state
+ */
+export interface TestContext {
+  // Playwright objects
+  page: Page;
+  context: BrowserContext;
+  
+  // Logger instance
+  logger: Logger;
+  
+  // UI Page Objects
+  loginPage: LoginPage;
+  dashboardPage: DashboardPage;
+  userProfilePage: UserProfilePage;
+  
+  // API Clients
+  userApiClient: UserApiClient;
+  productApiClient: ProductApiClient;
+  
+  // API testing properties
+  authToken: string;
+  response: AxiosResponse;
+  
+  // Common properties
+  testData: any; // For storing data between steps
+  result?: { status: string }; // For tracking test result status
+  
+  // Cucumber attachment function
+  attach: (data: any, mimeType: string) => void;
+}
+
+// For type compatibility with existing step definitions
+export interface ApiContext extends TestContext {}
+
+// File: src/support/hooks.ts
+import { Before, After, BeforeStep, AfterStep, setDefaultTimeout } from '@cucumber/cucumber';
+import { chromium, Browser } from '@playwright/test';
+import { TestContext } from './test-context';
+import { Logger } from '../framework/utils/logger';
+import { debugBreakpoint } from './debug-helper';
+
+// Set default timeout
+setDefaultTimeout(30000);
+
+let browser: Browser;
+
+// Before each scenario
+Before(async function(this: TestContext, scenario) {
+  // Create a unique test ID based on scenario name and timestamp
+  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  
+  // Initialize logger with test ID
+  this.logger = new Logger(testId);
+  this.logger.setScenario(scenario.pickle.name);
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
+  
+  // For UI tests, initialize browser
+  if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
+    // Launch browser if not already launched
+    if (!browser) {
+      this.logger.info('Launching browser');
+      browser = await chromium.launch({
+        headless: process.env.HEADLESS !== 'false',
+        slowMo: process.env.SLOW_MO ? parseInt(process.env.SLOW_MO) : 0
+      });
+    }
+    
+    // Create a new context and page for each scenario
+    this.context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      recordVideo: { dir: 'videos/' }
+    });
+    
+    // Add ability to set breakpoints if needed
+    if (process.env.DEBUG === 'true') {
+      this.context.setDefaultTimeout(0); // No timeout during debugging
+    }
+    
+    this.page = await this.context.newPage();
+    this.logger.info('Browser initialized');
+  } 
+  // For API tests, initialize API-specific objects
+  else if (scenario.pickle.tags.some(tag => tag.name === '@api')) {
+    this.logger.info('Initializing API test');
+    
+    // API clients will be initialized in step definitions when needed
+  }
+});
+
+// Before each step
+BeforeStep(async function(this: TestContext, step) {
+  if (this.logger) {
+    this.logger.info(`Executing step: ${step.pickleStep.text}`);
+  }
+});
+
+// After each step
+AfterStep(async function(this: TestContext, step, result) {
+  if (this.logger) {
+    if (result.status === 'PASSED') {
+      this.logger.info(`Step passed: ${step.pickleStep.text}`);
+    } else if (result.status === 'FAILED') {
+      this.logger.error(`Step failed: ${step.pickleStep.text}`);
+      if (result.error) {
+        this.logger.error(`Error: ${result.error.message}`);
+      }
+      
+      // For UI tests, take a screenshot on failure
+      if (this.page) {
+        const timestamp = Date.now();
+        const screenshotPath = `./screenshots/failed-${timestamp}.png`;
+        this.logger.info(`Taking screenshot: ${screenshotPath}`);
+        
+        try {
+          const screenshot = await this.page.screenshot({ 
+            path: screenshotPath,
+            fullPage: true 
+          });
+          this.attach(screenshot, 'image/png');
+        } catch (error) {
+          this.logger.error(`Failed to take screenshot: ${error.message}`);
+        }
+      }
+    }
+  }
+});
+
+// After each scenario
+After(async function(this: TestContext, scenario) {
+  // Store result status for use in clean-up
+  this.result = { status: scenario.result.status };
+  
+  // Log scenario result
+  if (this.logger) {
+    this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name}`);
+  }
+  
+  // Clean up UI resources
+  if (this.page && this.context) {
+    // Close context and page
+    this.logger.info('Closing browser context');
+    await this.context.close();
+  }
+  
+  // Clean up API resources if needed
+  if (this.testData.userId && this.userApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
+      await this.userApiClient.deleteUser(this.testData.userId);
+    } catch (error) {
+      // Ignore errors during cleanup
+      this.logger.warn(`Cleanup error: ${error.message}`);
+    }
+  }
+  
+  if (this.testData.productId && this.productApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
+      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
+    } catch (error) {
+      // Ignore errors during cleanup
+      this.logger.warn(`Cleanup error: ${error.message}`);
+    }
+  }
+  
+  // Add logs to Cucumber report
+  if (this.logger) {
+    const logs = this.logger.getLogs();
+    if (logs.length > 0) {
+      this.attach(logs.join('\n'), 'text/plain');
+    }
+  }
+});
+
+// After all scenarios
+After(async function() {
+  if (browser) {
+    await browser.close();
+    browser = null;
+  }
+});
+
+// File: src/support/debug-helper.ts
+/**
+ * Helper function for setting breakpoints in code
+ * Use this when you need to pause execution during debugging
+ */
+export async function debugBreakpoint(): Promise<void> {
+  if (process.env.DEBUG === 'true') {
+    // eslint-disable-next-line no-debugger
+    debugger;
+    // This pauses execution if running with --inspect flag and dev tools are open
+  }
+}
+
+/******************************
+ * 6. FEATURE FILES
+ ******************************/
+
+// File: features/ui/login.feature
+/**
+Feature: User Login
+  As a user
+  I want to log in to the application
+  So that I can access my account
+
+  @web
+  Scenario: Successful login
+    Given I am on the login page
+    When I enter username "validuser"
+    And I enter password "validpassword"
+    And I click the login button
+    Then I should be redirected to the dashboard
+    And I should see a welcome message containing "Welcome back"
+
+  @web
+  Scenario: Failed login with invalid credentials
+    Given I am on the login page
+    When I enter username "invaliduser"
+    And I enter password "invalidpassword"
+    And I click the login button
+    Then I should see an error message "Invalid username or password"
+
+  @web
+  Scenario: Remember me functionality
+    Given I am on the login page
+    When I enter username "validuser"
+    And I enter password "validpassword"
+    And I click the remember me checkbox
+    And I click the login button
+    Then I should be redirected to the dashboard
+    
+    # Test that cookies persist
+    When I log out
+    And I am on the login page
+    Then I should see my username "validuser" is pre-filled
+
+  @web
+  Scenario: Forgot password
+    Given I am on the login page
+    When I click the forgot password link
+    Then I should be on the password reset page
+*/
+
+// File: features/ui/profile.feature
+/**
+Feature: User Profile Management
+  As a logged in user
+  I want to manage my profile
+  So that my information is up to date
+
+  @web
+  Scenario: Update profile information
+    Given I am logged in as "testuser" with password "Password123"
+    When I click on my user profile
+    And I update my profile information
+    Then I should see a success message
+    And I should see my updated profile information
+
+  @web
+  Scenario: Navigate through dashboard
+    Given I am logged in as "testuser" with password "Password123"
+    When I navigate to the "Reports" menu
+    Then I should see the reports dashboard
+    When I navigate to the "Settings" menu
+    Then I should see the settings page
+    
+  @web
+  Scenario: Logout
+    Given I am logged in as "testuser" with password "Password123"
+    When I log out
+    Then I should be redirected to the login page
+*/
+
+// File: features/api/user-api.feature
+/**
+Feature: User API
+  As an API client
+  I want to interact with the user endpoints
+  So that I can manage user data
+
+  @api
+  Scenario: Get all users
+    Given I have a valid API token
+    When I request a list of users
+    Then the API should return a successful response
+    And the response should contain at least 5 users
+
+  @api
+  Scenario: Get user by ID
+    Given I have a valid API token
+    When I request user details for a user with ID "1"
+    Then the API should return a successful response
+    And the response should include username and email fields
+
+  @api
+  Scenario: Create a new user
+    Given I have a valid API token
+    When I create a new user with the following details:
+      | username  | testuser     |
+      | email     | test@example.com |
+      | firstName | Test         |
+      | lastName  | User         |
+      | password  | P@ssw0rd     |
+      | role      | user         |
+    Then the API should return a 201 status code
+    And the user details should match the provided data
+
+  @api
+  Scenario: Update a user
+    Given I have a valid API token
+    When I create a new user with the following details:
+      | username  | updateuser   |
+      | email     | update@example.com |
+      | firstName | Update       |
+      | lastName  | User         |
+      | password  | P@ssw0rd     |
+    And I update the user with the following details:
+      | firstName | Modified     |
+      | lastName  | Name         |
+    Then the API should return a successful response
+    And the user details should match the provided data
+
+  @api
+  Scenario: Delete a user
+    Given I have a valid API token
+    When I create a new user with the following details:
+      | username  | deleteuser   |
+      | email     | delete@example.com |
+      | firstName | Delete       |
+      | lastName  | User         |
+      | password  | P@ssw0rd     |
+    And I delete the user
+    Then the API should return a successful response
+    And the user should no longer exist in the system
+*/
+
+// File: features/api/product-api.feature
+/**
+Feature: Product API
+  As an API client
+  I want to interact with the product endpoints
+  So that I can manage product data
+
+  @api
+  Scenario: Get all products
+    Given I have a product API client
+    When I request a list of products
+    Then the API should return a successful response
+    And the response should contain at least 10 products
+
+  @api
+  Scenario: Filter products by category
+    Given I have a product API client
+    When I request products in the "Electronics" category
+    Then the API should return a successful response
+    And the response should contain products in the "Electronics" category only
+
+  @api
+  Scenario: Filter products by price range
+    Given I have a product API client
+    When I request products with price between 10 and 50
+    Then the API should return a successful response
+    And the response should contain products with price between 10 and 50 only
+
+  @api @requiresAuth
+  Scenario: Create a new product
+    Given I have a valid API token
+    And I have a product API client
+    When I create a new product with the following details:
+      | name          | Test Product        |
+      | description   | A test product      |
+      | price         | 19.99               |
+      | category      | Test                |
+      | stockQuantity | 100                 |
+    Then the API should return a 201 status code
+    And the product details should match the provided data
+
+  @api @requiresAuth
+  Scenario: Delete a product
+    Given I have a valid API token
+    And I have a product API client
+    When I create a new product with the following details:
+      | name          | Product to Delete   |
+      | description   | Will be deleted     |
+      | price         | 9.99                |
+      | category      | Test                |
+      | stockQuantity | 50                  |
+    And I delete the product
+    Then the API should return a successful response
+*/
+
+/******************************
+ * 7. CONFIGURATION FILES
+ ******************************/
+
+// File: cucumber.js
+/**
+module.exports = {
+  default: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/cucumber-report.html',
+      'json:reports/json/cucumber-report.json'
+    ],
+    publishQuiet: true
+  },
+  web: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/web-report.html',
+      'json:reports/json/web-report.json'
+    ],
+    tags: '@web',
+    publishQuiet: true
+  },
+  api: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/api-report.html',
+      'json:reports/json/api-report.json'
+    ],
+    tags: '@api',
+    publishQuiet: true
+  }
+};
+*/
+
+// File: package.json
+/**
+{
+  "name": "enterprise-test-automation-framework",
+  "version": "1.0.0",
+  "description": "Enterprise Test Automation Framework with Playwright, TypeScript, and Cucumber",
+  "main": "index.js",
+  "scripts": {
+    "test": "cucumber-js",
+    "test:web": "cucumber-js --profile web",
+    "test:api": "cucumber-js --profile api",
+    "test:debug": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js",
+    "test:web:debug": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js --profile web",
+    "test:api:debug": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js --profile api",
+    "test:ui": "HEADLESS=false cucumber-js --profile web",
+    "lint": "eslint 'src/**/*.ts' 'features/**/*.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' 'features/**/*.ts' --fix",
+    "report": "open reports/html/cucumber-report.html"
+  },
+  "dependencies": {
+    "@cucumber/cucumber": "^8.0.0",
+    "@playwright/test": "^1.30.0",
+    "axios": "^1.3.4",
+    "ts-node": "^10.9.1",
+    "typescript": "^4.9.5",
+    "winston": "^3.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^18.14.5",
+    "eslint": "^8.35.0",
+    "eslint-plugin-cucumber": "^2.0.0",
+    "eslint-plugin-playwright": "^0.10.0"
+  }
+}
+*/
+
+// File: tsconfig.json
+/**
+{
+  "compilerOptions": {
+    "target": "ES2018",
+    "module": "commonjs",
+    "lib": ["ES2018", "DOM"],
+    "esModuleInterop": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "*": ["node_modules/*"]
+    }
+  },
+  "include": ["src/**/*", "features/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+*/
+
+// File: config/default.json
+/**
+{
+  "baseUrl": "https://example.com",
+  "apiBaseUrl": "https://api.example.com",
+  "defaultTimeout": 30000,
+  "auth": {
+    "username": "admin",
+    "password": "admin123"
+  },
+  "retryOptions": {
+    "maxAttempts": 3,
+    "retryDelay": 1000
+  },
+  "screenshot": {
+    "takeOnFailure": true,
+    "takeOnSuccess": false
+  },
+  "video": {
+    "record": true,
+    "mode": "on-failure"
+  }
+}
+*/
+
+// File: config/dev.json
+/**
+{
+  "baseUrl": "https://dev.example.com",
+  "apiBaseUrl": "https://api.dev.example.com",
+  "defaultTimeout": 60000
+}
+*/
+
+// File: config/test.json
+/**
+{
+  "baseUrl": "https://test.example.com",
+  "apiBaseUrl": "https://api.test.example.com",
+  "defaultTimeout": 30000
+}
+*/
+
+// File: README.md
+/**
+# Enterprise Test Automation Framework
+
+A comprehensive test automation framework built with:
+- Playwright for browser automation
+- TypeScript for type safety and better development experience
+- Cucumber.js for BDD-style testing
+- Axios for API testing
+- Winston for logging
+
+## Features
+
+- **Page Object Pattern** for UI testing
+- **API Client Pattern** for API testing
+- **BDD-style** test scenarios using Cucumber.js
+- **Parallel Test Execution** for faster feedback
+- **Cross-browser Testing** using Playwright's capabilities
+- **Comprehensive Reporting** with screenshots and videos
+- **Test Data Generation** utilities
+- **Configuration Management** across environments
+- **Debugging Support** with breakpoints and detailed logs
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 14 or higher
+- npm or yarn
+
+### Installation
+
+```bash
+npm install
+```
+
+### Running Tests
+
+#### All Tests
+
+```bash
+npm test
+```
+
+#### UI Tests Only
+
+```bash
+npm run test:web
+```
+
+#### API Tests Only
+
+```bash
+npm run test:api
+```
+
+#### Visual Mode (Non-headless)
+
+```bash
+npm run test:ui
+```
+
+#### Debugging with DevTools
+
+```bash
+npm run test:debug
+```
+
+### Project Structure
+
+- `src/framework` - Core framework components
+- `src/pages` - Page objects for UI testing
+- `src/api` - API clients for API testing
+- `src/step-definitions` - Step definitions for Cucumber scenarios
+- `src/support` - Support files like hooks, test context, and utilities
+- `features` - Cucumber feature files
+- `config` - Environment-specific configuration
+
+### Report Viewing
+
+Reports are generated in the `reports/html` directory. To open the latest report:
+
+```bash
+npm run report
+```
+
+## Advanced Usage
+
+### Environment Variables
+
+You can override configuration using environment variables:
+
+```bash
+BASE_URL=https://staging.example.com API_BASE_URL=https://api.staging.example.com npm test
+```
+
+### Run Tests with Breakpoints
+
+1. Add breakpoints in your code using `await debugBreakpoint();`
+2. Run tests with the debug flag: `npm run test:debug`
+3. Connect Chrome DevTools by navigating to chrome://inspect
+
+## Contributing
+
+Please follow the established patterns and coding standards when contributing to this project.
+
+*/
