@@ -1,19 +1,115 @@
-// src/framework/base-web-page.ts
-import { env, envNumber } from './utils/env';
+// src/framework/utils/env.ts
+import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
 
-// Inside the constructor
-constructor(
-  page: Page, 
-  context: BrowserContext,
-  baseUrl?: string
-) {
-  this.page = page;
-  this.context = context;
-  this.config = ConfigManager.getInstance();
-  this.baseUrl = baseUrl || this.config.get<string>('baseUrl', env('BASE_URL', 'https://example.com'));
-  this.defaultTimeout = this.config.get<number>('defaultTimeout', envNumber('DEFAULT_TIMEOUT', 30000));
-  this.logger = new Logger(this.constructor.name);
-  
-  // Set up listeners for network events
-  this.setupNetworkListeners();
+/**
+ * Environment utility to load and access environment variables
+ */
+export class EnvHelper {
+  private static instance: EnvHelper;
+  private loaded: boolean = false;
+  private environment: string;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    // Get environment from command line or default to 'dev'
+    this.environment = process.env.TEST_ENV || 'dev';
+    this.loadEnv();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns EnvHelper instance
+   */
+  public static getInstance(): EnvHelper {
+    if (!EnvHelper.instance) {
+      EnvHelper.instance = new EnvHelper();
+    }
+    return EnvHelper.instance;
+  }
+
+  /**
+   * Get current environment
+   * @returns Current environment name
+   */
+  public getEnvironment(): string {
+    return this.environment;
+  }
+
+  /**
+   * Load environment variables from .env files
+   * Prioritizes environment-specific files
+   */
+  private loadEnv(): void {
+    if (this.loaded) return;
+
+    // Try to load environment-specific file first, then fall back to default
+    const envFiles = [
+      `.env.${this.environment}`,
+      '.env'
+    ];
+
+    let loaded = false;
+    for (const file of envFiles) {
+      const envPath = path.resolve(process.cwd(), file);
+      if (fs.existsSync(envPath)) {
+        const result = dotenv.config({ path: envPath });
+        if (!result.error) {
+          console.log(`Loaded environment variables from ${file}`);
+          loaded = true;
+          break;
+        }
+      }
+    }
+
+    if (!loaded) {
+      console.warn(`No environment file found for ${this.environment}. Using process.env variables only.`);
+    }
+
+    this.loaded = true;
+  }
+
+  // Rest of the methods remain the same
+  public get(key: string, defaultValue?: string): string {
+    return process.env[key] || defaultValue || '';
+  }
+
+  public getNumber(key: string, defaultValue: number): number {
+    const value = process.env[key];
+    if (value === undefined) return defaultValue;
+    return Number(value) || defaultValue;
+  }
+
+  public getBoolean(key: string, defaultValue: boolean): boolean {
+    const value = process.env[key];
+    if (value === undefined) return defaultValue;
+    return value.toLowerCase() === 'true';
+  }
+
+  public has(key: string): boolean {
+    return process.env[key] !== undefined;
+  }
 }
+
+// Initialize when imported
+EnvHelper.getInstance();
+
+// Export a convenience function for getting environment variables
+export const env = (key: string, defaultValue?: string): string => {
+  return EnvHelper.getInstance().get(key, defaultValue);
+};
+
+export const envNumber = (key: string, defaultValue: number): number => {
+  return EnvHelper.getInstance().getNumber(key, defaultValue);
+};
+
+export const envBoolean = (key: string, defaultValue: boolean): boolean => {
+  return EnvHelper.getInstance().getBoolean(key, defaultValue);
+};
+
+export const getEnvironment = (): string => {
+  return EnvHelper.getInstance().getEnvironment();
+};
