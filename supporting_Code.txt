@@ -1,113 +1,44 @@
-// src/framework/utils/config-manager.ts
-import { env, envNumber, envBoolean, getEnvironment } from './env';
+// src/framework/base-web-page.ts
+import { Page, Locator, BrowserContext, Response, Request } from '@playwright/test';
+import { expect } from '@playwright/test';
+import fs from 'fs';
+import path from 'path';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
 
 /**
- * Configuration Manager for handling environment-specific configurations
+ * Base web page class for all UI page objects
+ * Provides common methods for UI interactions
  */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private environment: string;
+export class BaseWebPage {
+  readonly page: Page;
+  readonly context: BrowserContext;
+  readonly baseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly config: ConfigManager;
 
   /**
-   * Private constructor for singleton pattern
+   * Constructor for the BaseWebPage
+   * @param page - Playwright Page object
+   * @param context - Playwright Browser Context
+   * @param baseUrl - Base URL for UI navigation (optional)
    */
-  private constructor() {
-    this.environment = getEnvironment();
-    console.log(`ConfigManager initialized for ${this.environment} environment`);
-  }
-
-  /**
-   * Get singleton instance
-   * @returns ConfigManager instance
-   */
-  public static getInstance(): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
-    }
-    return ConfigManager.instance;
-  }
-
-  /**
-   * Get current environment
-   * @returns Current environment name
-   */
-  public getEnvironment(): string {
-    return this.environment;
-  }
-
-  /**
-   * Get base URL for UI tests
-   * @returns Base URL
-   */
-  public getBaseUrl(): string {
-    return env('BASE_URL', 'https://example.com');
-  }
-
-  /**
-   * Get API base URL for API tests
-   * @returns API base URL
-   */
-  public getApiBaseUrl(): string {
-    return env('API_BASE_URL', 'https://api.example.com');
-  }
-
-  /**
-   * Get default timeout for operations
-   * @returns Default timeout in milliseconds
-   */
-  public getDefaultTimeout(): number {
-    return envNumber('DEFAULT_TIMEOUT', 30000);
-  }
-
-  /**
-   * Get browser configuration
-   * @returns Browser configuration
-   */
-  public getBrowserConfig() {
-    return {
-      headless: envBoolean('HEADLESS', true),
-      slowMo: envNumber('SLOW_MO', 0),
-      args: env('BROWSER_ARGS', '').split(',').filter(Boolean)
-    };
-  }
-
-  /**
-   * Get API authentication credentials
-   * @returns API credentials
-   */
-  public getApiCredentials() {
-    return {
-      username: env('API_USERNAME', 'admin'),
-      password: env('API_PASSWORD', 'admin123')
-    };
-  }
-
-  /**
-   * Get debug mode
-   * @returns Debug mode enabled
-   */
-  public isDebugMode(): boolean {
-    return envBoolean('DEBUG', false);
-  }
-
-  /**
-   * Get a generic configuration value
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   * @returns Configuration value
-   */
-  public get<T>(key: string, defaultValue?: T): T {
-    // Try to get from environment variables
-    const envValue = env(key.toUpperCase());
-    if (envValue) {
-      // Try to parse as JSON if possible
-      try {
-        return JSON.parse(envValue) as T;
-      } catch {
-        return envValue as unknown as T;
-      }
-    }
+  constructor(
+    page: Page, 
+    context: BrowserContext,
+    baseUrl?: string
+  ) {
+    this.page = page;
+    this.context = context;
+    this.config = ConfigManager.getInstance();
+    this.baseUrl = baseUrl || this.config.getBaseUrl();
+    this.defaultTimeout = this.config.getDefaultTimeout();
+    this.logger = new Logger(this.constructor.name);
     
-    return defaultValue as T;
+    // Set up listeners for network events
+    this.setupNetworkListeners();
   }
+
+  // Rest of the class remains the same
 }
