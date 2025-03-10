@@ -138,3 +138,189 @@
     "eslint-plugin-playwright": "^0.10.0"
   }
 }
+
+// cucumber.js
+module.exports = {
+  default: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/cucumber-report.html',
+      'json:reports/json/cucumber-report.json'
+    ],
+    parallel: process.env.PARALLEL || 1,
+    retry: process.env.RETRY_FAILED || 0,
+    tags: process.env.TAG_EXPRESSION || '',
+    publishQuiet: true
+  },
+  web: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/web-report.html',
+      'json:reports/json/web-report.json'
+    ],
+    tags: process.env.TAG_EXPRESSION || '@web',
+    parallel: process.env.PARALLEL || 1,
+    retry: process.env.RETRY_FAILED || 0,
+    publishQuiet: true
+  },
+  api: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/api-report.html',
+      'json:reports/json/api-report.json'
+    ],
+    tags: process.env.TAG_EXPRESSION || '@api',
+    parallel: process.env.PARALLEL || 1,
+    retry: process.env.RETRY_FAILED || 0,
+    publishQuiet: true
+  }
+};
+
+// src/support/hooks.ts - partial update for browser initialization
+import { Before } from '@cucumber/cucumber';
+import { chromium, firefox, webkit, Browser, BrowserType, devices } from '@playwright/test';
+import { TestContext } from './test-context';
+import { ConfigManager } from '../framework/utils/config-manager';
+
+let browser: Browser | null;
+
+// Update ConfigManager to support the new options
+// Add these methods to your ConfigManager class:
+
+/*
+public getBrowserType(): string {
+  return env('BROWSER', 'chromium');
+}
+
+public getViewportSize(): { width: number; height: number } {
+  return {
+    width: envNumber('VIEWPORT_WIDTH', 1280),
+    height: envNumber('VIEWPORT_HEIGHT', 720)
+  };
+}
+
+public getDevicePreset(): string | undefined {
+  const device = env('DEVICE', '');
+  return device ? device : undefined;
+}
+
+public getParallelWorkers(): number {
+  return envNumber('PARALLEL', 1);
+}
+
+public shouldRetryFailed(): number {
+  return envNumber('RETRY_FAILED', 0);
+}
+
+public shouldTakeScreenshotOnFailure(): boolean {
+  return envBoolean('SCREENSHOT_ON_FAILURE', true);
+}
+
+public shouldRecordVideo(): boolean {
+  return envBoolean('VIDEO_RECORDING', true);
+}
+*/
+
+// In the Before hook:
+Before(async function(this: TestContext, scenario) {
+  const config = ConfigManager.getInstance();
+  
+  // For UI tests, initialize browser
+  if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
+    // Launch browser if not already launched
+    if (!browser) {
+      this.logger.info('Launching browser');
+      
+      // Get browser configuration
+      const browserConfig = config.getBrowserConfig();
+      const browserType = config.getBrowserType().toLowerCase();
+      
+      // Select browser based on configuration
+      let browserInstance: BrowserType;
+      switch (browserType) {
+        case 'firefox':
+          browserInstance = firefox;
+          break;
+        case 'webkit':
+          browserInstance = webkit;
+          break;
+        case 'chromium':
+        default:
+          browserInstance = chromium;
+          break;
+      }
+      
+      this.logger.info(`Using browser: ${browserType}`);
+      
+      // Launch browser
+      browser = await browserInstance.launch({
+        headless: browserConfig.headless,
+        slowMo: browserConfig.slowMo,
+        args: browserConfig.args
+      });
+    }
+    
+    // Context options
+    const contextOptions: any = {};
+    
+    // Set viewport size if device is not specified
+    const devicePreset = config.getDevicePreset();
+    if (devicePreset && devices[devicePreset]) {
+      this.logger.info(`Using device preset: ${devicePreset}`);
+      Object.assign(contextOptions, devices[devicePreset]);
+    } else {
+      const viewportSize = config.getViewportSize();
+      contextOptions.viewport = viewportSize;
+      this.logger.info(`Using viewport: ${viewportSize.width}x${viewportSize.height}`);
+    }
+    
+    // Record video if enabled
+    if (config.shouldRecordVideo()) {
+      contextOptions.recordVideo = { dir: 'videos/' };
+    }
+    
+    // Create a new context and page for each scenario
+    this.context = await browser.newContext(contextOptions);
+    
+    // Add ability to set breakpoints if needed
+    if (config.isDebugMode()) {
+      this.context.setDefaultTimeout(0); // No timeout during debugging
+    }
+    
+    this.page = await this.context.newPage();
+    this.logger.info('Browser initialized');
+  }
+});
+
+# .env.template (as a reference for users)
+# Base URLs
+BASE_URL=https://example.com
+API_BASE_URL=https://api.example.com
+
+# Browser Configuration
+BROWSER=chromium       # Options: chromium, firefox, webkit
+HEADLESS=true          # true or false
+SLOW_MO=0              # Delay in ms between actions
+BROWSER_ARGS=          # Comma-separated browser arguments
+VIEWPORT_WIDTH=1280    # Browser viewport width
+VIEWPORT_HEIGHT=720    # Browser viewport height
+DEVICE=                # Use a specific device preset (e.g., "iPhone 12")
+
+# Test Configuration
+DEFAULT_TIMEOUT=30000  # Default timeout in ms
+DEBUG=false            # Enable debug mode
+SCREENSHOT_ON_FAILURE=true  # Take screenshots on test failure
+VIDEO_RECORDING=true   # Record videos of test runs
+RETRY_FAILED=1         # Number of retries for failed tests
+PARALLEL=1             # Number of parallel workers
+TAG_EXPRESSION=        # Tag expression to filter scenarios
+
+# Authentication
+API_USERNAME=admin
+API_PASSWORD=admin123
