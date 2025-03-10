@@ -1,540 +1,1023 @@
+import { Page, Locator, BrowserContext, Response, Request, ElementHandle } from '@playwright/test';
+import { expect } from '@playwright/test';
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import fs from 'fs';
+import path from 'path';
+import { Logger } from '../utils/Logger';
+
 /**
- * Extract enum switch methods specifically
- * This function handles switch statements with enum cases
+ * Interface for API request options
  */
-function extractEnumSwitchMethods(content: string, returnType: string): MethodInfo[] {
-  const methodsList: MethodInfo[] = [];
-  
-  // Special pattern to capture switch methods with element assignment
-  // This pattern looks for "element = null" followed by a switch statement
-  const switchElementMethodRegex = new RegExp(
-    `(?:public|private|protected)\\s+${returnType}\\s+(\\w+)\\s*\\(([^)]*)\\)\\s*\\{\\s*${returnType}\\s+element\\s*=\\s*null;\\s*switch\\s*\\(([^)]*)\\)\\s*\\{([\\s\\S]*?)\\}\\s*return\\s+element;\\s*\\}`, 
-    'gs'
-  );
-  
-  let methodMatch: RegExpExecArray | null;
-  while ((methodMatch = switchElementMethodRegex.exec(content)) !== null) {
-    try {
-      const methodName = methodMatch[1];
-      const params = methodMatch[2] || '';
-      const switchVar = methodMatch[3] || '';
-      const switchBody = methodMatch[4] || '';
-      
-      if (DEBUG) {
-        console.log(`Found switch-enum method: ${methodName}`);
-        console.log(`Switch variable: ${switchVar}`);
+interface ApiRequestOptions {
+  headers?: Record<string, string>;
+  params?: Record<string, any>;
+  data?: any;
+  timeout?: number;
+  validateStatus?: boolean;
+}
+
+/**
+ * Base page class for all page objects
+ * Provides common methods for both UI and API interactions
+ */
+export class BasePage {
+  readonly page: Page;
+  readonly context: BrowserContext;
+  readonly baseUrl: string;
+  readonly apiBaseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+
+  /**
+   * Constructor for the BasePage
+   * @param page - Playwright Page object
+   * @param context - Playwright Browser Context
+   * @param baseUrl - Base URL for UI navigation
+   * @param apiBaseUrl - Base URL for API requests
+   */
+  constructor(
+    page: Page, 
+    context: BrowserContext,
+    baseUrl: string = process.env.BASE_URL || 'https://example.com',
+    apiBaseUrl: string = process.env.API_BASE_URL || 'https://api.example.com'
+  ) {
+    this.page = page;
+    this.context = context;
+    this.baseUrl = baseUrl;
+    this.apiBaseUrl = apiBaseUrl;
+    this.defaultTimeout = parseInt(process.env.DEFAULT_TIMEOUT || '30000');
+    this.logger = new Logger('BasePage');
+    
+    // Set up listeners for network events
+    this.setupNetworkListeners();
+  }
+
+  // ====== Navigation Methods ======
+
+  /**
+   * Navigate to a specific URL
+   * @param url - URL to navigate to
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateTo(url: string): Promise<Response | null> {
+    this.logger.info(`Navigating to: ${url}`);
+    return await this.page.goto(url, { waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate to a specific page using the base URL
+   * @param path - Path to append to the base URL
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateToPage(path: string): Promise<Response | null> {
+    const url = new URL(path, this.baseUrl).toString();
+    return this.navigateTo(url);
+  }
+
+  /**
+   * Refresh the current page
+   * @returns Promise<Response | null> - The main response
+   */
+  async refreshPage(): Promise<Response | null> {
+    this.logger.info('Refreshing page');
+    return await this.page.reload({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate back in browser history
+   */
+  async goBack(): Promise<void> {
+    this.logger.info('Navigating back');
+    await this.page.goBack({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate forward in browser history
+   */
+  async goForward(): Promise<void> {
+    this.logger.info('Navigating forward');
+    await this.page.goForward({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Get the current URL
+   * @returns string - Current URL
+   */
+  async getCurrentUrl(): Promise<string> {
+    return this.page.url();
+  }
+
+  /**
+   * Get the page title
+   * @returns Promise<string> - Page title
+   */
+  async getPageTitle(): Promise<string> {
+    return await this.page.title();
+  }
+
+  // ====== Element Interaction Methods ======
+
+  /**
+   * Get a locator for an element
+   * @param selector - CSS or XPath selector
+   * @returns Locator - Playwright locator object
+   */
+  getLocator(selector: string): Locator {
+    return this.page.locator(selector);
+  }
+
+  /**
+   * Click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright click options
+   */
+  async click(selector: string, options?: { force?: boolean, timeout?: number, noWaitAfter?: boolean }): Promise<void> {
+    this.logger.debug(`Clicking on element: ${selector}`);
+    await this.page.click(selector, { 
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false,
+      noWaitAfter: options?.noWaitAfter || false
+    });
+  }
+
+  /**
+   * Double click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright dblclick options
+   */
+  async doubleClick(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Double-clicking on element: ${selector}`);
+    await this.page.dblclick(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Right click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright click options
+   */
+  async rightClick(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Right-clicking on element: ${selector}`);
+    await this.page.click(selector, {
+      button: 'right',
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Hover over an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright hover options
+   */
+  async hover(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Hovering over element: ${selector}`);
+    await this.page.hover(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Type text into an input field
+   * @param selector - CSS or XPath selector
+   * @param text - Text to type
+   * @param options - Playwright fill options
+   */
+  async fill(selector: string, text: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Filling text in element: ${selector}`);
+    await this.page.fill(selector, text, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Type text character by character (simulates human typing)
+   * @param selector - CSS or XPath selector
+   * @param text - Text to type
+   * @param options - Playwright type options
+   */
+  async type(selector: string, text: string, options?: { delay?: number, timeout?: number }): Promise<void> {
+    this.logger.debug(`Typing text in element: ${selector}`);
+    await this.page.type(selector, text, {
+      delay: options?.delay || 100,
+      timeout: options?.timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Clear an input field
+   * @param selector - CSS or XPath selector
+   */
+  async clearInput(selector: string): Promise<void> {
+    this.logger.debug(`Clearing input field: ${selector}`);
+    await this.page.fill(selector, '');
+  }
+
+  /**
+   * Select an option from a dropdown
+   * @param selector - CSS or XPath selector for the select element
+   * @param value - Value to select
+   */
+  async selectOption(selector: string, value: string | string[] | { value?: string, label?: string, index?: number }): Promise<string[]> {
+    this.logger.debug(`Selecting option in dropdown: ${selector}`);
+    return await this.page.selectOption(selector, value);
+  }
+
+  /**
+   * Check a checkbox or radio button
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright check options
+   */
+  async check(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Checking checkbox/radio: ${selector}`);
+    await this.page.check(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Uncheck a checkbox
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright uncheck options
+   */
+  async uncheck(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    this.logger.debug(`Unchecking checkbox: ${selector}`);
+    await this.page.uncheck(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Get text from an element
+   * @param selector - CSS or XPath selector
+   * @returns Promise<string> - Text content of the element
+   */
+  async getText(selector: string): Promise<string> {
+    this.logger.debug(`Getting text from element: ${selector}`);
+    return await this.page.locator(selector).innerText();
+  }
+
+  /**
+   * Get attribute value from an element
+   * @param selector - CSS or XPath selector
+   * @param attributeName - Name of the attribute
+   * @returns Promise<string | null> - Attribute value
+   */
+  async getAttribute(selector: string, attributeName: string): Promise<string | null> {
+    this.logger.debug(`Getting attribute "${attributeName}" from element: ${selector}`);
+    return await this.page.locator(selector).getAttribute(attributeName);
+  }
+
+  /**
+   * Get value of an input element
+   * @param selector - CSS or XPath selector
+   * @returns Promise<string> - Input value
+   */
+  async getValue(selector: string): Promise<string> {
+    this.logger.debug(`Getting value from input: ${selector}`);
+    return await this.page.inputValue(selector);
+  }
+
+  /**
+   * Upload a file
+   * @param selector - CSS or XPath selector for the file input
+   * @param filePaths - Path(s) to the file(s) to upload
+   */
+  async uploadFile(selector: string, filePaths: string | string[]): Promise<void> {
+    this.logger.debug(`Uploading file(s) to: ${selector}`);
+    await this.page.setInputFiles(selector, filePaths);
+  }
+
+  /**
+   * Press a key or key combination
+   * @param selector - CSS or XPath selector
+   * @param key - Key or key combination to press
+   */
+  async pressKey(selector: string, key: string): Promise<void> {
+    this.logger.debug(`Pressing key "${key}" on element: ${selector}`);
+    await this.page.locator(selector).press(key);
+  }
+
+  /**
+   * Drag and drop an element
+   * @param sourceSelector - CSS or XPath selector for the source element
+   * @param targetSelector - CSS or XPath selector for the target element
+   */
+  async dragAndDrop(sourceSelector: string, targetSelector: string): Promise<void> {
+    this.logger.debug(`Dragging from ${sourceSelector} to ${targetSelector}`);
+    await this.page.dragAndDrop(sourceSelector, targetSelector);
+  }
+
+  // ====== Wait Methods ======
+
+  /**
+   * Wait for an element to be visible
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   * @returns Promise<Locator> - Locator for the element
+   */
+  async waitForVisible(selector: string, timeout?: number): Promise<Locator> {
+    this.logger.debug(`Waiting for element to be visible: ${selector}`);
+    const locator = this.page.locator(selector);
+    await locator.waitFor({ state: 'visible', timeout: timeout || this.defaultTimeout });
+    return locator;
+  }
+
+  /**
+   * Wait for an element to be hidden
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   */
+  async waitForHidden(selector: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element to be hidden: ${selector}`);
+    await this.page.locator(selector).waitFor({ 
+      state: 'hidden', 
+      timeout: timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for an element to be enabled
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   * @returns Promise<Locator> - Locator for the element
+   */
+  async waitForEnabled(selector: string, timeout?: number): Promise<Locator> {
+    this.logger.debug(`Waiting for element to be enabled: ${selector}`);
+    const locator = this.page.locator(selector);
+    await locator.waitFor({ state: 'enabled', timeout: timeout || this.defaultTimeout });
+    return locator;
+  }
+
+  /**
+   * Wait for element to contain specific text
+   * @param selector - CSS or XPath selector
+   * @param text - Text to wait for
+   * @param timeout - Timeout in ms
+   */
+  async waitForText(selector: string, text: string, timeout?: number): Promise<void> {
+    this.logger.debug(`Waiting for element ${selector} to contain text: "${text}"`);
+    await expect(this.page.locator(selector)).toContainText(text, { 
+      timeout: timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a network request to complete
+   * @param urlPattern - URL pattern to match
+   * @param options - Options for waiting
+   * @returns Promise<Request> - The matched request
+   */
+  async waitForRequest(urlPattern: string | RegExp, options?: { timeout?: number }): Promise<Request> {
+    this.logger.debug(`Waiting for request: ${urlPattern}`);
+    return await this.page.waitForRequest(urlPattern, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a network response to complete
+   * @param urlPattern - URL pattern to match
+   * @param options - Options for waiting
+   * @returns Promise<Response> - The matched response
+   */
+  async waitForResponse(urlPattern: string | RegExp, options?: { timeout?: number }): Promise<Response> {
+    this.logger.debug(`Waiting for response: ${urlPattern}`);
+    return await this.page.waitForResponse(urlPattern, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a specific load state
+   * @param state - Load state to wait for
+   * @param options - Options for waiting
+   */
+  async waitForLoadState(state: 'load' | 'domcontentloaded' | 'networkidle', options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Waiting for load state: ${state}`);
+    await this.page.waitForLoadState(state, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a specific amount of time (use sparingly)
+   * @param ms - Time to wait in milliseconds
+   */
+  async wait(ms: number): Promise<void> {
+    this.logger.debug(`Waiting for ${ms}ms`);
+    await this.page.waitForTimeout(ms);
+  }
+
+  // ====== Assertion Methods ======
+
+  /**
+   * Assert that an element is visible
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertVisible(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is visible: ${selector}`);
+    await expect(this.page.locator(selector)).toBeVisible({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is hidden
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertHidden(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is hidden: ${selector}`);
+    await expect(this.page.locator(selector)).toBeHidden({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element contains specific text
+   * @param selector - CSS or XPath selector
+   * @param text - Text to check for
+   * @param options - Assertion options
+   */
+  async assertText(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element ${selector} contains text: "${text}"`);
+    await expect(this.page.locator(selector)).toContainText(text, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element has an exact text
+   * @param selector - CSS or XPath selector
+   * @param text - Exact text to check for
+   * @param options - Assertion options
+   */
+  async assertExactText(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element ${selector} has exact text: "${text}"`);
+    await expect(this.page.locator(selector)).toHaveText(text, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element has a specific attribute value
+   * @param selector - CSS or XPath selector
+   * @param attribute - Attribute name
+   * @param value - Expected attribute value
+   * @param options - Assertion options
+   */
+  async assertAttribute(selector: string, attribute: string, value: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element ${selector} has attribute ${attribute}="${value}"`);
+    await expect(this.page.locator(selector)).toHaveAttribute(attribute, value, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is enabled
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertEnabled(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is enabled: ${selector}`);
+    await expect(this.page.locator(selector)).toBeEnabled({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is disabled
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertDisabled(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is disabled: ${selector}`);
+    await expect(this.page.locator(selector)).toBeDisabled({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that a checkbox or radio button is checked
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertChecked(selector: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting element is checked: ${selector}`);
+    await expect(this.page.locator(selector)).toBeChecked({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert URL contains a specific string
+   * @param urlSubstring - Substring to check for in the URL
+   * @param options - Assertion options
+   */
+  async assertUrlContains(urlSubstring: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting URL contains: ${urlSubstring}`);
+    await expect(this.page).toHaveURL(new RegExp(urlSubstring), { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert page title contains a specific string
+   * @param titleSubstring - Substring to check for in the title
+   * @param options - Assertion options
+   */
+  async assertTitleContains(titleSubstring: string, options?: { timeout?: number }): Promise<void> {
+    this.logger.debug(`Asserting title contains: ${titleSubstring}`);
+    await expect(this.page).toHaveTitle(new RegExp(titleSubstring), { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  // ====== API Methods ======
+
+  /**
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async apiGet(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making GET request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: options?.headers || {},
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    return await axios.get(url, config);
+  }
+
+  /**
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async apiPost(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making POST request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: options?.headers || {},
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    return await axios.post(url, data || {}, config);
+  }
+
+  /**
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async apiPut(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: options?.headers || {},
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    return await axios.put(url, data || {}, config);
+  }
+
+  /**
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async apiPatch(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: options?.headers || {},
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    return await axios.patch(url, data || {}, config);
+  }
+
+  /**
+   * Make a DELETE request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async apiDelete(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: options?.headers || {},
+      params: options?.params || {},
+      data: options?.data || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    return await axios.delete(url, config);
+  }
+
+  /**
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    this.logger.debug(`Asserting status code: ${expectedStatus}`);
+    expect(response.status).toBe(expectedStatus);
+  }
+
+  /**
+   * Assert API response contains specific data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting response data`);
+    expect(response.data).toMatchObject(expectedData);
+  }
+
+  // ====== Screenshot and Logging Methods ======
+
+  /**
+   * Take a screenshot
+   * @param name - Name for the screenshot file
+   * @returns Promise<string> - Path to the screenshot
+   */
+  async takeScreenshot(name?: string): Promise<string> {
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const screenshotName = name ? `${name}_${timestamp}.png` : `screenshot_${timestamp}.png`;
+    const screenshotsDir = path.join(process.cwd(), 'screenshots');
+    
+    // Ensure the screenshots directory exists
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const screenshotPath = path.join(screenshotsDir, screenshotName);
+    this.logger.info(`Taking screenshot: ${screenshotPath}`);
+    
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    return screenshotPath;
+  }
+
+  /**
+   * Take a screenshot of a specific element
+   * @param selector - CSS or XPath selector
+   * @param name - Name for the screenshot file
+   * @returns Promise<string> - Path to the screenshot
+   */
+  async takeElementScreenshot(selector: string, name?: string): Promise<string> {
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const screenshotName = name ? `${name}_${timestamp}.png` : `element_${timestamp}.png`;
+    const screenshotsDir = path.join(process.cwd(), 'screenshots');
+    
+    // Ensure the screenshots directory exists
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const screenshotPath = path.join(screenshotsDir, screenshotName);
+    this.logger.info(`Taking element screenshot: ${screenshotPath}`);
+    
+    await this.page.locator(selector).screenshot({ path: screenshotPath });
+    return screenshotPath;
+  }
+
+  /**
+   * Get console logs
+   * @returns Promise<string[]> - Console logs
+   */
+  async getConsoleLogs(): Promise<string[]> {
+    return this.logger.getLogs();
+  }
+
+  // ====== Utility Methods ======
+
+  /**
+   * Execute JavaScript in the browser context
+   * @param script - JavaScript code to execute
+   * @param arg - Argument to pass to the script
+   * @returns Promise<any> - Result of the script execution
+   */
+  async executeScript<T>(script: string, arg?: any): Promise<T> {
+    this.logger.debug('Executing JavaScript in browser context');
+    return await this.page.evaluate(script, arg);
+  }
+
+  /**
+   * Get all cookies
+   * @returns Promise<object[]> - Array of cookies
+   */
+  async getCookies(): Promise<object[]> {
+    this.logger.debug('Getting all cookies');
+    return await this.context.cookies();
+  }
+
+  /**
+   * Set a cookie
+   * @param name - Cookie name
+   * @param value - Cookie value
+   * @param options - Cookie options
+   */
+  async setCookie(name: string, value: string, options?: { 
+    domain?: string, 
+    path?: string, 
+    expires?: number, 
+    httpOnly?: boolean, 
+    secure?: boolean,
+    sameSite?: 'Strict' | 'Lax' | 'None'
+  }): Promise<void> {
+    this.logger.debug(`Setting cookie: ${name}`);
+    await this.context.addCookies([{
+      name,
+      value,
+      domain: options?.domain || new URL(this.baseUrl).hostname,
+      path: options?.path || '/',
+      expires: options?.expires || Math.floor(Date.now() / 1000) + 3600,
+      httpOnly: options?.httpOnly || false,
+      secure: options?.secure || false,
+      sameSite: options?.sameSite || 'Lax'
+    }]);
+  }
+
+  /**
+   * Clear all cookies
+   */
+  async clearCookies(): Promise<void> {
+    this.logger.debug('Clearing all cookies');
+    await this.context.clearCookies();
+  }
+
+  /**
+   * Set localStorage item
+   * @param key - Storage key
+   * @param value - Storage value
+   */
+  async setLocalStorage(key: string, value: string): Promise<void> {
+    this.logger.debug(`Setting localStorage item: ${key}`);
+    await this.page.evaluate(([k, v]) => {
+      localStorage.setItem(k, v);
+    }, [key, value]);
+  }
+
+  /**
+   * Get localStorage item
+   * @param key - Storage key
+   * @returns Promise<string | null> - Storage value
+   */
+  async getLocalStorage(key: string): Promise<string | null> {
+    this.logger.debug(`Getting localStorage item: ${key}`);
+    return await this.page.evaluate((k) => {
+      return localStorage.getItem(k);
+    }, key);
+  }
+
+  /**
+   * Clear localStorage
+   */
+  async clearLocalStorage(): Promise<void> {
+    this.logger.debug('Clearing localStorage');
+    await this.page.evaluate(() => {
+      localStorage.clear();
+    });
+  }
+
+  /**
+   * Set sessionStorage item
+   * @param key - Storage key
+   * @param value - Storage value
+   */
+  async setSessionStorage(key: string, value: string): Promise<void> {
+    this.logger.debug(`Setting sessionStorage item: ${key}`);
+    await this.page.evaluate(([k, v]) => {
+      sessionStorage.setItem(k, v);
+    }, [key, value]);
+  }
+
+  /**
+   * Get sessionStorage item
+   * @param key - Storage key
+   * @returns Promise<string | null> - Storage value
+   */
+  async getSessionStorage(key: string): Promise<string | null> {
+    this.logger.debug(`Getting sessionStorage item: ${key}`);
+    return await this.page.evaluate((k) => {
+      return sessionStorage.getItem(k);
+    }, key);
+  }
+
+  /**
+   * Clear sessionStorage
+   */
+  async clearSessionStorage(): Promise<void> {
+    this.logger.debug('Clearing sessionStorage');
+    await this.page.evaluate(() => {
+      sessionStorage.clear();
+    });
+  }
+
+  /**
+   * Get all window handles
+   * @returns Promise<Page[]> - Array of pages
+   */
+  async getAllWindows(): Promise<Page[]> {
+    this.logger.debug('Getting all window handles');
+    return this.context.pages();
+  }
+
+  /**
+   * Switch to a specific window by index
+   * @param index - Index of the window to switch to
+   * @returns Promise<Page> - The switched to page
+   */
+  async switchToWindow(index: number): Promise<Page> {
+    this.logger.debug(`Switching to window index: ${index}`);
+    const pages = await this.context.pages();
+    if (index >= pages.length) {
+      throw new Error(`Window index ${index} is out of bounds. Only ${pages.length} windows exist.`);
+    }
+    const targetPage = pages[index];
+    await targetPage.bringToFront();
+    return targetPage;
+  }
+
+  /**
+   * Close the current window/tab
+   */
+  async closeCurrentWindow(): Promise<void> {
+    this.logger.debug('Closing current window');
+    await this.page.close();
+  }
+
+  /**
+   * Get element count
+   * @param selector - CSS or XPath selector
+   * @returns Promise<number> - Number of matching elements
+   */
+  async getElementCount(selector: string): Promise<number> {
+    this.logger.debug(`Getting element count for: ${selector}`);
+    return await this.page.locator(selector).count();
+  }
+
+  /**
+   * Check if element exists
+   * @param selector - CSS or XPath selector
+   * @returns Promise<boolean> - Whether the element exists
+   */
+  async elementExists(selector: string): Promise<boolean> {
+    this.logger.debug(`Checking if element exists: ${selector}`);
+    const count = await this.getElementCount(selector);
+    return count > 0;
+  }
+
+  /**
+   * Wait for a function to return true
+   * @param predicate - Function that returns a boolean
+   * @param options - Options for waiting
+   * @returns Promise<boolean> - Whether the condition was met
+   */
+  async waitForCondition(
+    predicate: () => Promise<boolean>, 
+    options?: { timeout?: number, pollingInterval?: number }
+  ): Promise<boolean> {
+    const timeout = options?.timeout || this.defaultTimeout;
+    const pollingInterval = options?.pollingInterval || 100;
+    this.logger.debug(`Waiting for condition with timeout: ${timeout}ms`);
+    
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+      if (await predicate()) {
+        return true;
       }
+      await this.page.waitForTimeout(pollingInterval);
+    }
+    return false;
+  }
+
+  /**
+   * Retry an action until it succeeds
+   * @param action - Function to retry
+   * @param options - Retry options
+   * @returns Promise<T> - Result of the action
+   */
+  async retry<T>(
+    action: () => Promise<T>, 
+    options?: { 
+      maxAttempts?: number, 
+      interval?: number, 
+      timeout?: number,
+      onError?: (error: Error, attempt: number) => void 
+    }
+  ): Promise<T> {
+    const maxAttempts = options?.maxAttempts || 3;
+    const interval = options?.interval || 1000;
+    const timeout = options?.timeout || this.defaultTimeout;
+    
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.logger.debug(`Retry attempt ${attempt}/${maxAttempts}`);
+        
+        // Create a promise that times out
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`Timeout of ${timeout}ms exceeded`)), timeout);
+        });
+        
+        // Race the action against the timeout
+        return await Promise.race([action(), timeoutPromise]) as T;
+      } catch (error) {
+        lastError = error as Error;
+        this.logger.debug(`Attempt ${attempt} failed: ${lastError.message}`);
+        
+        if (options?.onError) {
+          options.onError(lastError, attempt);
+        }
+        
+        if (attempt < maxAttempts) {
+          await this.page.waitForTimeout(interval);
+        }
+      }
+    }
+    
+    throw lastError || new Error('Retry failed for unknown reason');
+  }
+
+  // ====== Private Methods ======
+
+  /**
+   * Set up listeners for network events
+   * @private
+   */
+  private setupNetworkListeners(): void {
+    // Listen for all requests
+    this.page.on('request', request => {
+      this.logger.debug(`>> Request: ${request.method()} ${request.url()}`);
+    });
+
+    // Listen for all responses
+    this.page.on('response', response => {
+      this.logger.debug(`<< Response: ${response.status()} ${response.url()}`);
+    });
+
+    // Listen for console messages
+    this.page.on('console', msg => {
+      const type = msg.type();
+      const text = msg.text();
       
-      // Extract parameter information
-      const paramsList = extractParameters(params);
-      
-      // Identify the enum parameter
-      let enumParam: MethodParam | undefined;
-      for (const param of paramsList) {
-        if (switchVar.includes(param.name)) {
-          enumParam = param;
+      switch (type) {
+        case 'error':
+          this.logger.error(`Console Error: ${text}`);
           break;
-        }
+        case 'warning':
+          this.logger.warn(`Console Warning: ${text}`);
+          break;
+        default:
+          this.logger.debug(`Console ${type}: ${text}`);
       }
-      
-      // Extract case statements with better enum case handling
-      const cases = extractEnumCases(switchBody, paramsList);
-      
-      if (DEBUG) {
-        console.log(`Found ${cases.length} enum cases`);
-      }
-      
-      // Create the complex method info
-      methodsList.push({
-        name: methodName,
-        params: paramsList,
-        locator: 'COMPLEX_ENUM_METHOD',  // Special marker for enum switch methods
-        type: returnType,
-        isList: false,
-        isComplex: true,
-        complexData: {
-          switchVar,
-          cases,
-          beforeSwitch: '',
-          afterSwitch: '',
-          enumParams: enumParam ? [enumParam] : [],
-          isEnumSwitch: true  // Flag to identify this special type of method
-        }
-      });
-    } catch (error) {
-      console.error(`Error processing complex enum method: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  
-  return methodsList;
-}
+    });
 
-/**
- * Extract case statements specifically for enum switch cases
- */
-function extractEnumCases(switchBody: string, paramsList: MethodParam[]): CaseInfo[] {
-  const cases: CaseInfo[] = [];
-  
-  // Pattern to match enum cases: case ENUM_VALUE: element = new CSWebElement(...); break;
-  const enumCaseRegex = /case\s+([A-Z_][A-Z0-9_]*):\s*element\s*=\s*new\s+CSWebElement\(\s*([^;]+)\);\s*break;/g;
-  
-  let caseMatch;
-  while ((caseMatch = enumCaseRegex.exec(switchBody)) !== null) {
-    const enumValue = caseMatch[1];  // The enum value (e.g., FIELD_LABEL)
-    const constructorArgs = caseMatch[2];  // The CSWebElement constructor args
-    
-    // Extract the locator from the constructor args
-    let locator = '';
-    try {
-      // First unescape any escaped quotes
-      const unescapedArgs = constructorArgs.replace(/\\"/g, '"');
-      
-      // Look for JSON format with locator key
-      const jsonMatch = unescapedArgs.match(/"locator"\s*:\s*"xpath=([^"]+)"/);
-      if (jsonMatch) {
-        locator = jsonMatch[1];
-        
-        // Process parameters in the locator
-        for (const param of paramsList) {
-          const paramPatterns = [
-            `"+${param.name}+"`,
-            `" + ${param.name} + "`,
-            `"+${param.name} + "`,
-            `" + ${param.name}+"`
-          ];
-          
-          // Try each pattern
-          for (const pattern of paramPatterns) {
-            if (unescapedArgs.includes(pattern)) {
-              // Found a parameter reference, replace with template literal
-              locator = locator.replace(/text\(\)\s*=\s*'[^']*'/, `text()='\${${param.name}}'`);
-              break;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.error(`Error extracting locator for case ${enumValue}:`, e);
-      locator = `//Error-extracting-locator-for-${enumValue}`;
-    }
-    
-    // Add the case info
-    cases.push({
-      value: enumValue,
-      hasCondition: false,
-      conditions: [],
-      locators: [{
-        condition: null,
-        locator
-      }]
+    // Listen for page errors
+    this.page.on('pageerror', error => {
+      this.logger.error(`Page Error: ${error.message}`);
     });
-  }
-  
-  return cases;
-}
 
-/**
- * Enhanced complex method generator that handles enum switch statements specifically
- */
-function generateEnumSwitchMethod(method: MethodInfo): string {
-  if (!method.isComplex || !method.complexData || !method.complexData.isEnumSwitch) {
-    return '';
-  }
-  
-  const { switchVar, cases, enumParams } = method.complexData;
-  const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-  
-  // Find the enum parameter
-  const enumParam = enumParams && enumParams.length > 0 ? enumParams[0] : null;
-  
-  let output = `  ${method.name}(${paramList}) {\n`;
-  output += `    // Method with enum switch/case logic\n`;
-  output += `    let locator = '';\n`;
-  output += `    \n`;
-  
-  // Generate the switch statement
-  if (enumParam) {
-    output += `    switch (${switchVar.trim()}) {\n`;
-    
-    // Generate each case
-    cases.forEach(c => {
-      output += `      case ${c.value}:\n`;
-      
-      if (c.locators.length > 0) {
-        // Simple case with a single locator
-        output += `        locator = \`${c.locators[0].locator}\`;\n`;
-      }
-      
-      output += `        break;\n`;
-    });
-    
-    // Default case
-    output += `      default:\n`;
-    output += `        locator = \`//element-not-found\`;\n`;
-    output += `        break;\n`;
-    
-    // Close switch
-    output += `    }\n`;
-  } else {
-    // Fallback for when we can't identify the enum parameter
-    output += `    // Unable to identify enum parameter, using first case\n`;
-    if (cases.length > 0 && cases[0].locators.length > 0) {
-      output += `    locator = \`${cases[0].locators[0].locator}\`;\n`;
-    } else {
-      output += `    locator = \`//element-not-found\`;\n`;
-    }
-  }
-  
-  output += `    \n`;
-  output += `    return this.page.locator(locator);\n`;
-  output += `  }\n\n`;
-  
-  return output;
-}
-
-/**
- * Enhance the MethodInfo interface to support enum switch methods
- */
-interface EnhancedMethodInfo extends MethodInfo {
-  complexData?: {
-    switchVar: string;
-    cases: CaseInfo[];
-    beforeSwitch: string;
-    afterSwitch: string;
-    enumParams?: MethodParam[];
-    isEnumSwitch?: boolean;
-    returnStatement?: string;
-  };
-}
-
-/**
- * Update your convertFile function to include enum switch methods
- */
-function convertFile(inputFile: string, outputFile: string): void {
-  try {
-    console.log(`Reading ${inputFile}...`);
-    if (!fs.existsSync(inputFile)) {
-      console.error(`Error: Input file ${inputFile} does not exist`);
-      process.exit(1);
-    }
-    
-    // Read the file content
-    const content = fs.readFileSync(inputFile, 'utf8');
-    
-    // Remove comments from the Java code
-    const contentWithoutComments = removeJavaComments(content);
-    
-    // Extract class and package information
-    const packageInfo = extractPackageInfo(contentWithoutComments);
-    const className = extractClassName(contentWithoutComments) || path.basename(inputFile, '.java');
-    
-    // Check if we need to add List import
-    const hasListElements = contentWithoutComments.includes('List<WebElement>') || 
-                           contentWithoutComments.includes('List<CSWebElement>') ||
-                           contentWithoutComments.includes('List<CSDropDownListWebElement>');
-    
-    // Extract enums from the Java code
-    const enumsList = extractEnums(contentWithoutComments);
-    
-    // Process elements - all elements are processed in a single pass
-    console.log('Extracting WebElement and CSWebElement elements...');
-    const allWebElements = extractAndConvertElements(contentWithoutComments, 'CSWebElement');
-    
-    // Process WebElement separately if needed
-    console.log('Checking for direct WebElement elements...');
-    const directWebElements = extractAndConvertElements(contentWithoutComments, 'WebElement');
-    
-    // Process dropdown elements
-    console.log('Extracting dropdown elements...');
-    const dropdownElements = extractAndConvertElements(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Merge direct WebElements into the standard elements list if they don't exist already
-    const standardElements = [...allWebElements];
-    directWebElements.forEach(element => {
-      const exists = standardElements.some(e => e.originalName === element.originalName);
-      if (!exists) {
-        standardElements.push(element);
-      }
-    });
-    
-    // Process dynamic locator methods by return type
-    console.log('Extracting standard methods...');
-    const standardMethods = extractAndConvertMethods(contentWithoutComments, 'CSWebElement');
-    
-    console.log('Extracting dropdown methods...');
-    const dropdownMethods = extractAndConvertMethods(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Extract regular complex methods
-    console.log('Extracting complex methods with switch statements...');
-    const complexStandardMethods = extractAndConvertComplexMethods(contentWithoutComments, 'CSWebElement');
-    const complexDropdownMethods = extractAndConvertComplexMethods(contentWithoutComments, 'CSDropDownListWebElement');
-    
-    // Extract enum switch methods
-    console.log('Extracting enum switch methods...');
-    const enumSwitchMethods = extractEnumSwitchMethods(contentWithoutComments, 'CSWebElement');
-    
-    // Combine all complex methods
-    const complexMethods = [
-      ...complexStandardMethods, 
-      ...complexDropdownMethods,
-      ...enumSwitchMethods
-    ];
-    
-    // Generate the final TypeScript output
-    const finalOutput = generateTypeScriptOutput(
-      className, 
-      packageInfo,
-      standardElements, 
-      dropdownElements,
-      standardMethods, 
-      dropdownMethods,
-      complexMethods,
-      hasListElements,
-      enumsList
-    );
-    
-    // Write the result
-    const outputDir = path.dirname(outputFile);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    fs.writeFileSync(outputFile, finalOutput);
-    console.log(`Converted file successfully written to ${outputFile}`);
-  } catch (error) {
-    console.error(`Error converting file: ${error instanceof Error ? error.message : String(error)}`);
-    if (error instanceof Error && error.stack) {
-      console.error(error.stack);
-    }
-  }
-}
-
-/**
- * Enhanced generateTypeScriptOutput that handles enum switch methods
- */
-function generateTypeScriptOutput(
-  className: string, 
-  packageInfo: string | null,
-  standardElements: ElementInfo[], 
-  dropdownElements: ElementInfo[],
-  standardMethods: MethodInfo[], 
-  dropdownMethods: MethodInfo[],
-  complexMethods: EnhancedMethodInfo[],
-  hasListElements: boolean,
-  enums: EnumInfo[]
-): string {
-  // Build imports with the enhanced import statements
-  let output = `// Converted from ${packageInfo ? packageInfo + '.' : ''}${className}\n`;
-  output += `import { Page } from 'playwright';\n`;
-  output += `import { BasePage } from './base.page';\n`;
-  output += `import { Logger } from '../utils/logger';\n`;
-  output += `import config from '@config/environment.config';\n\n`;
-  
-  // Add enum definitions
-  if (enums && enums.length > 0) {
-    output += generateEnumTypeScript(enums);
-  }
-  
-  // Start class definition with BasePage extension
-  output += `export class ${className} extends BasePage {\n`;
-  
-  // Add the enhanced constructor with logger
-  output += `  constructor(page: Page, logger: Logger) {\n`;
-  output += `    super(page, logger, '');\n`;
-  output += `  }\n\n`;
-  
-  // Add standard element locators
-  if (standardElements.length > 0) {
-    output += `  // Standard Element Locators\n`;
-    standardElements.forEach(element => {
-      output += `  private readonly ${element.name} = \`${element.locator}\`;\n`;
-    });
-    output += `\n`;
-  }
-  
-  // Add dropdown element locators
-  if (dropdownElements.length > 0) {
-    output += `  // Dropdown Element Locators\n`;
-    dropdownElements.forEach(element => {
-      output += `  private readonly ${element.name} = \`${element.locator}\`;\n`;
-    });
-    output += `\n`;
-  }
-  
-  // Add standard dynamic locator methods
-  if (standardMethods.length > 0) {
-    output += `  // Dynamic Standard Locators\n`;
-    standardMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-      output += `  private readonly ${method.name} = (${paramList}): string => \`${method.locator}\`;\n`;
-    });
-    output += `\n`;
-  }
-  
-  // Add dropdown dynamic locator methods
-  if (dropdownMethods.length > 0) {
-    output += `  // Dynamic Dropdown Locators\n`;
-    dropdownMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-      output += `  private readonly ${method.name} = (${paramList}): string => \`${method.locator}\`;\n`;
-    });
-    output += `\n`;
-  }
-  
-  // Add getters for standard elements
-  if (standardElements.length > 0) {
-    output += `  // Standard Element Getters\n`;
-    standardElements.forEach(element => {
-      const capitalizedName = element.originalName;
-      
-      if (element.isList) {
-        // For List<WebElement> types, create a method that returns an array of Locators
-        output += `  get${capitalizedName}() {\n`;
-        output += `    return this.page.locator(this.${element.name});\n`;
-        output += `  }\n\n`;
-        
-        // Add an additional method to get all elements
-        output += `  async getAll${capitalizedName}() {\n`;
-        output += `    const elements = this.page.locator(this.${element.name});\n`;
-        output += `    const count = await elements.count();\n`;
-        output += `    const result = [];\n`;
-        output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      result.push(elements.nth(i));\n`;
-        output += `    }\n`;
-        output += `    return result;\n`;
-        output += `  }\n\n`;
-      } else {
-        // Standard element getter
-        output += `  get${capitalizedName}() {\n`;
-        output += `    return this.page.locator(this.${element.name});\n`;
-        output += `  }\n\n`;
-      }
+    // Listen for dialog events (alerts, confirms, prompts)
+    this.page.on('dialog', dialog => {
+      this.logger.info(`Dialog (${dialog.type()}): ${dialog.message()}`);
+      // Auto-dismiss dialogs to prevent test hanging
+      dialog.dismiss().catch(e => this.logger.error(`Failed to dismiss dialog: ${e.message}`));
     });
   }
-  
-  // Add getters for dropdown elements
-  if (dropdownElements.length > 0) {
-    output += `  // Dropdown Element Getters\n`;
-    dropdownElements.forEach(element => {
-      const capitalizedName = element.originalName;
-      
-      if (element.isList) {
-        // For list of dropdown elements
-        output += `  get${capitalizedName}() {\n`;
-        output += `    return this.page.locator(this.${element.name});\n`;
-        output += `  }\n\n`;
-        
-        // Add method to get all dropdown elements
-        output += `  async getAll${capitalizedName}() {\n`;
-        output += `    const elements = this.page.locator(this.${element.name});\n`;
-        output += `    const count = await elements.count();\n`;
-        output += `    const result = [];\n`;
-        output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      result.push(elements.nth(i));\n`;
-        output += `    }\n`;
-        output += `    return result;\n`;
-        output += `  }\n\n`;
-      } else {
-        // Standard dropdown element
-        output += `  get${capitalizedName}() {\n`;
-        output += `    return this.page.locator(this.${element.name});\n`;
-        output += `  }\n\n`;
-      }
-    });
-  }
-  
-  // Add methods for standard dynamic locators
-  if (standardMethods.length > 0) {
-    output += `  // Dynamic Standard Element Getters\n`;
-    standardMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-      const paramNames = method.params.map(p => p.name).join(', ');
-      
-      if (method.isList) {
-        // Method for list type elements
-        output += `  ${method.name}(${paramList}) {\n`;
-        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `  }\n\n`;
-        
-        // Add method to get all elements
-        output += `  async getAll${method.name.charAt(0).toUpperCase() + method.name.slice(1)}(${paramList}) {\n`;
-        output += `    const selector = this.${method.name}(${paramNames});\n`;
-        output += `    const elements = this.page.locator(selector);\n`;
-        output += `    const count = await elements.count();\n`;
-        output += `    const result = [];\n`;
-        output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      result.push(elements.nth(i));\n`;
-        output += `    }\n`;
-        output += `    return result;\n`;
-        output += `  }\n\n`;
-      } else {
-        // Standard method for single element
-        output += `  ${method.name}(${paramList}) {\n`;
-        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `  }\n\n`;
-      }
-    });
-  }
-  
-  // Add methods for dropdown dynamic locators
-  if (dropdownMethods.length > 0) {
-    output += `  // Dynamic Dropdown Element Getters\n`;
-    dropdownMethods.forEach(method => {
-      const paramList = method.params.map(p => `${p.name}: ${mapJavaTypeToTypeScript(p.type)}`).join(', ');
-      const paramNames = method.params.map(p => p.name).join(', ');
-      
-      if (method.isList) {
-        // For list of dropdown elements
-        output += `  ${method.name}(${paramList}) {\n`;
-        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `  }\n\n`;
-        
-        // Add method to get all dropdown elements
-        output += `  async getAll${method.name.charAt(0).toUpperCase() + method.name.slice(1)}(${paramList}) {\n`;
-        output += `    const selector = this.${method.name}(${paramNames});\n`;
-        output += `    const elements = this.page.locator(selector);\n`;
-        output += `    const count = await elements.count();\n`;
-        output += `    const result = [];\n`;
-        output += `    for (let i = 0; i < count; i++) {\n`;
-        output += `      result.push(elements.nth(i));\n`;
-        output += `    }\n`;
-        output += `    return result;\n`;
-        output += `  }\n\n`;
-      } else {
-        // Standard method for single element
-        output += `  ${method.name}(${paramList}) {\n`;
-        output += `    return this.page.locator(this.${method.name}(${paramNames}));\n`;
-        output += `  }\n\n`;
-      }
-    });
-  }
-  
-  // Add complex methods with switch/case logic
-  if (complexMethods.length > 0) {
-    output += `  // Complex Methods with Switch/Case Logic\n`;
-    complexMethods.forEach(method => {
-      // Check if this is an enum switch method
-      if (method.complexData?.isEnumSwitch) {
-        output += generateEnumSwitchMethod(method);
-      } else {
-        // Use the original method generator for regular complex methods
-        output += generateComplexMethod(method);
-      }
-    });
-  }
-  
-  // Common page actions 
-  output += `  // Common Page Actions\n`;
-  output += `  async waitForPageToLoad(): Promise<void> {\n`;
-  output += `    await this.page.waitForLoadState('networkidle');\n`;
-  output += `  }\n\n`;
-  
-  output += `  async sleep(ms: number): Promise<void> {\n`;
-  output += `    return new Promise(resolve => setTimeout(resolve, ms));\n`;
-  output += `  }\n`;
-  
-  // Close class
-  output += `}\n`;
-  
-  return output;
 }
