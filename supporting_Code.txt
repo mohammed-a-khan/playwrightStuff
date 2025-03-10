@@ -1,34 +1,30 @@
-// src/framework/utils/env.ts
-import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs';
+// src/framework/utils/config-manager.ts
+import { env, envNumber, envBoolean, getEnvironment } from './env';
 
 /**
- * Environment utility to load and access environment variables
+ * Configuration Manager for handling environment-specific configurations
  */
-export class EnvHelper {
-  private static instance: EnvHelper;
-  private loaded: boolean = false;
+export class ConfigManager {
+  private static instance: ConfigManager;
   private environment: string;
 
   /**
    * Private constructor for singleton pattern
    */
   private constructor() {
-    // Get environment from command line or default to 'dev'
-    this.environment = process.env.TEST_ENV || 'dev';
-    this.loadEnv();
+    this.environment = getEnvironment();
+    console.log(`ConfigManager initialized for ${this.environment} environment`);
   }
 
   /**
    * Get singleton instance
-   * @returns EnvHelper instance
+   * @returns ConfigManager instance
    */
-  public static getInstance(): EnvHelper {
-    if (!EnvHelper.instance) {
-      EnvHelper.instance = new EnvHelper();
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
     }
-    return EnvHelper.instance;
+    return ConfigManager.instance;
   }
 
   /**
@@ -40,76 +36,78 @@ export class EnvHelper {
   }
 
   /**
-   * Load environment variables from .env files
-   * Prioritizes environment-specific files
+   * Get base URL for UI tests
+   * @returns Base URL
    */
-  private loadEnv(): void {
-    if (this.loaded) return;
+  public getBaseUrl(): string {
+    return env('BASE_URL', 'https://example.com');
+  }
 
-    // Try to load environment-specific file first, then fall back to default
-    const envFiles = [
-      `.env.${this.environment}`,
-      '.env'
-    ];
+  /**
+   * Get API base URL for API tests
+   * @returns API base URL
+   */
+  public getApiBaseUrl(): string {
+    return env('API_BASE_URL', 'https://api.example.com');
+  }
 
-    let loaded = false;
-    for (const file of envFiles) {
-      const envPath = path.resolve(process.cwd(), file);
-      if (fs.existsSync(envPath)) {
-        const result = dotenv.config({ path: envPath });
-        if (!result.error) {
-          console.log(`Loaded environment variables from ${file}`);
-          loaded = true;
-          break;
-        }
+  /**
+   * Get default timeout for operations
+   * @returns Default timeout in milliseconds
+   */
+  public getDefaultTimeout(): number {
+    return envNumber('DEFAULT_TIMEOUT', 30000);
+  }
+
+  /**
+   * Get browser configuration
+   * @returns Browser configuration
+   */
+  public getBrowserConfig() {
+    return {
+      headless: envBoolean('HEADLESS', true),
+      slowMo: envNumber('SLOW_MO', 0),
+      args: env('BROWSER_ARGS', '').split(',').filter(Boolean)
+    };
+  }
+
+  /**
+   * Get API authentication credentials
+   * @returns API credentials
+   */
+  public getApiCredentials() {
+    return {
+      username: env('API_USERNAME', 'admin'),
+      password: env('API_PASSWORD', 'admin123')
+    };
+  }
+
+  /**
+   * Get debug mode
+   * @returns Debug mode enabled
+   */
+  public isDebugMode(): boolean {
+    return envBoolean('DEBUG', false);
+  }
+
+  /**
+   * Get a generic configuration value
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   * @returns Configuration value
+   */
+  public get<T>(key: string, defaultValue?: T): T {
+    // Try to get from environment variables
+    const envValue = env(key.toUpperCase());
+    if (envValue) {
+      // Try to parse as JSON if possible
+      try {
+        return JSON.parse(envValue) as T;
+      } catch {
+        return envValue as unknown as T;
       }
     }
-
-    if (!loaded) {
-      console.warn(`No environment file found for ${this.environment}. Using process.env variables only.`);
-    }
-
-    this.loaded = true;
-  }
-
-  // Rest of the methods remain the same
-  public get(key: string, defaultValue?: string): string {
-    return process.env[key] || defaultValue || '';
-  }
-
-  public getNumber(key: string, defaultValue: number): number {
-    const value = process.env[key];
-    if (value === undefined) return defaultValue;
-    return Number(value) || defaultValue;
-  }
-
-  public getBoolean(key: string, defaultValue: boolean): boolean {
-    const value = process.env[key];
-    if (value === undefined) return defaultValue;
-    return value.toLowerCase() === 'true';
-  }
-
-  public has(key: string): boolean {
-    return process.env[key] !== undefined;
+    
+    return defaultValue as T;
   }
 }
-
-// Initialize when imported
-EnvHelper.getInstance();
-
-// Export a convenience function for getting environment variables
-export const env = (key: string, defaultValue?: string): string => {
-  return EnvHelper.getInstance().get(key, defaultValue);
-};
-
-export const envNumber = (key: string, defaultValue: number): number => {
-  return EnvHelper.getInstance().getNumber(key, defaultValue);
-};
-
-export const envBoolean = (key: string, defaultValue: boolean): boolean => {
-  return EnvHelper.getInstance().getBoolean(key, defaultValue);
-};
-
-export const getEnvironment = (): string => {
-  return EnvHelper.getInstance().getEnvironment();
-};
