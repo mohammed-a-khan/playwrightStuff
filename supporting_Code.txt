@@ -1,44 +1,51 @@
-// src/framework/base-web-page.ts
-import { Page, Locator, BrowserContext, Response, Request } from '@playwright/test';
+// src/framework/base-api-client.ts
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { expect } from '@playwright/test';
-import fs from 'fs';
-import path from 'path';
 import { Logger } from './utils/logger';
 import { ConfigManager } from './utils/config-manager';
 
+// Rest of imports and interfaces
+
 /**
- * Base web page class for all UI page objects
- * Provides common methods for UI interactions
+ * Base API client for all API interactions
  */
-export class BaseWebPage {
-  readonly page: Page;
-  readonly context: BrowserContext;
-  readonly baseUrl: string;
+export class BaseApiClient {
+  readonly apiBaseUrl: string;
   readonly defaultTimeout: number;
   readonly logger: Logger;
+  readonly defaultHeaders: Record<string, string>;
   readonly config: ConfigManager;
 
   /**
-   * Constructor for the BaseWebPage
-   * @param page - Playwright Page object
-   * @param context - Playwright Browser Context
-   * @param baseUrl - Base URL for UI navigation (optional)
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
    */
   constructor(
-    page: Page, 
-    context: BrowserContext,
-    baseUrl?: string
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
   ) {
-    this.page = page;
-    this.context = context;
     this.config = ConfigManager.getInstance();
-    this.baseUrl = baseUrl || this.config.getBaseUrl();
+    this.apiBaseUrl = apiBaseUrl || this.config.getApiBaseUrl();
     this.defaultTimeout = this.config.getDefaultTimeout();
     this.logger = new Logger(this.constructor.name);
-    
-    // Set up listeners for network events
-    this.setupNetworkListeners();
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
+    };
   }
 
   // Rest of the class remains the same
+
+  /**
+   * Get authentication token
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(): Promise<string> {
+    const credentials = this.config.getApiCredentials();
+    
+    // Implementation depends on derived classes
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
 }
