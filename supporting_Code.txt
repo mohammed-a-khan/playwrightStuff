@@ -1,39 +1,19 @@
-// src/framework/utils/config-manager.ts
-import fs from 'fs';
-import path from 'path';
-import { env } from './env';
+// src/framework/base-web-page.ts
+import { env, envNumber } from './utils/env';
 
-/**
- * Configuration Manager for handling environment-specific configurations
- */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private config: Record<string, any>;
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    const nodeEnv = env('NODE_ENV', 'default');
-    const configPath = path.join(process.cwd(), 'config', `${nodeEnv}.json`);
-    
-    try {
-      if (fs.existsSync(configPath)) {
-        this.config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      } else {
-        const defaultConfigPath = path.join(process.cwd(), 'config', 'default.json');
-        this.config = fs.existsSync(defaultConfigPath) 
-          ? JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'))
-          : {};
-      }
-    } catch (error) {
-      console.error(`Error loading configuration: ${error}`);
-      this.config = {};
-    }
-    
-    // Override with environment variables
-    this.mergeEnvironmentVariables();
-  }
-
-  // ... rest of the class remains the same
+// Inside the constructor
+constructor(
+  page: Page, 
+  context: BrowserContext,
+  baseUrl?: string
+) {
+  this.page = page;
+  this.context = context;
+  this.config = ConfigManager.getInstance();
+  this.baseUrl = baseUrl || this.config.get<string>('baseUrl', env('BASE_URL', 'https://example.com'));
+  this.defaultTimeout = this.config.get<number>('defaultTimeout', envNumber('DEFAULT_TIMEOUT', 30000));
+  this.logger = new Logger(this.constructor.name);
+  
+  // Set up listeners for network events
+  this.setupNetworkListeners();
 }
