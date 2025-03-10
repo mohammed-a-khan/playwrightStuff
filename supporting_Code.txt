@@ -5,10 +5,14 @@ import { TestContext } from './test-context';
 import { Logger } from '../framework/utils/logger';
 import { ConfigManager } from '../framework/utils/config-manager';
 
-// Before all scenarios
+// Set default timeout from configuration
+const config = ConfigManager.getInstance();
+setDefaultTimeout(config.getDefaultTimeout());
+
+let browser: Browser | null;
+
+// Before each scenario
 Before(async function(this: TestContext, scenario) {
-  const config = ConfigManager.getInstance();
-  
   // Create a unique test ID based on scenario name and timestamp
   const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
   
@@ -18,6 +22,9 @@ Before(async function(this: TestContext, scenario) {
   
   // Log environment information
   this.logger.info(`Running tests in ${config.getEnvironment().toUpperCase()} environment`);
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
   
   // For UI tests, initialize browser
   if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
@@ -32,6 +39,143 @@ Before(async function(this: TestContext, scenario) {
       });
     }
     
-    // Rest of browser initialization
+    // Create a new context and page for each scenario
+    this.context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      recordVideo: { dir: 'videos/' }
+    });
+    
+    // Add ability to set breakpoints if needed
+    if (config.isDebugMode()) {
+      this.context.setDefaultTimeout(0); // No timeout during debugging
+    }
+    
+    this.page = await this.context.newPage();
+    this.logger.info('Browser initialized');
+  } 
+  // For API tests, initialize API-specific objects
+  else if (scenario.pickle.tags.some(tag => tag.name === '@api')) {
+    this.logger.info('Initializing API test');
+    
+    // API clients will be initialized in step definitions when needed
+  }
+});
+
+// Before each step
+BeforeStep(async function(this: TestContext, testStepResult) {
+  if (this.logger) {
+    this.logger.info(`Executing step: ${testStepResult.pickleStep.text}`);
+  }
+});
+
+// After each step
+AfterStep(async function(this: TestContext, testStepResult) {
+  if (this.logger) {
+    if (testStepResult.result.status === 'PASSED') {
+      this.logger.info(`Step passed: ${testStepResult.pickleStep.text}`);
+    } else if (testStepResult.result.status === 'FAILED') {
+      this.logger.error(`Step failed: ${testStepResult.pickleStep.text}`);
+      
+      // In newer versions, the error might be stored differently
+      // Let's use a type-safe approach
+      const stepResult = testStepResult.result;
+      const errorMessage = (stepResult as any).message 
+        || (stepResult as any).error?.message 
+        || 'Unknown error';
+      
+      this.logger.error(`Error: ${errorMessage}`);
+      
+      // For UI tests, take a screenshot on failure
+      if (this.page) {
+        const timestamp = Date.now();
+        const screenshotPath = `./screenshots/failed-${timestamp}.png`;
+        this.logger.info(`Taking screenshot: ${screenshotPath}`);
+        
+        try {
+          const screenshot = await this.page.screenshot({ 
+            path: screenshotPath,
+            fullPage: true 
+          });
+          this.attach(screenshot, 'image/png');
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.error(`Failed to take screenshot: ${errorMessage}`);
+        }
+      }
+    }
+  }
+});
+
+// After each scenario
+After(async function(this: TestContext, scenario) {
+  // Store result status for use in clean-up
+  if (scenario.result) {
+    this.result = { status: scenario.result.status };
+    
+    // Log scenario result
+    if (this.logger) {
+      this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name}`);
+    }
+  } else {
+    this.result = { status: 'unknown' };
+    if (this.logger) {
+      this.logger.info(`Scenario status unknown: ${scenario.pickle.name}`);
+    }
+  }
+  
+  // Clean up UI resources
+  if (this.page && this.context) {
+    // Close context and page
+    this.logger.info('Closing browser context');
+    await this.context.close();
+  }
+  
+  // Clean up API resources if needed
+  if (this.testData.userId && this.userApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
+      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
+    } catch (error) {
+      // Ignore errors during cleanup
+      this.logger.warn(`Cleanup error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  if (this.testData.productId && this.productApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
+      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
+    } catch (error) {
+      // Ignore errors during cleanup
+      this.logger.warn(`Cleanup error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  // Add logs to Cucumber report
+  if (this.logger) {
+    const logs = this.logger.getLogs();
+    if (logs.length > 0) {
+      this.attach(logs.join('\n'), 'text/plain');
+    }
+  }
+});
+
+// After all scenarios
+After(async function() {
+  if (browser) {
+    await browser.close();
+    browser = null;
+  }
+});
+
+/**
+ * Debug breakpoint helper function
+ * Add this to your code where you want to set a breakpoint
+ */
+export async function debugBreakpoint(): Promise<void> {
+  if (ConfigManager.getInstance().isDebugMode()) {
+    // eslint-disable-next-line no-debugger
+    debugger;
+    // This pauses execution if running with --inspect flag and dev tools are open
   }
 }
