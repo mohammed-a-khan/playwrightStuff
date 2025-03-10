@@ -1,47 +1,140 @@
-# .env.dev (Development environment)
-# Base URLs
-BASE_URL=https://dev.example.com
-API_BASE_URL=https://api.dev.example.com
-
-# Authentication
-API_USERNAME=devuser
-API_PASSWORD=devpass
-
-# Test Configuration
-HEADLESS=false
-
-# .env.test (Test environment)
-# Base URLs
-BASE_URL=https://test.example.com
-API_BASE_URL=https://api.test.example.com
-
-# Authentication
-API_USERNAME=testuser
-API_PASSWORD=testpass
-
-# .env.prod (Production environment)
-# Base URLs
-BASE_URL=https://example.com
-API_BASE_URL=https://api.example.com
-
-# Authentication
-API_USERNAME=produser
-API_PASSWORD=prodpass
-
 {
+  "name": "enterprise-test-automation-framework",
+  "version": "1.0.0",
+  "description": "Enterprise Test Automation Framework with Playwright, TypeScript, and Cucumber",
+  "main": "index.js",
   "scripts": {
     "test": "cucumber-js",
+    
     "test:dev": "TEST_ENV=dev cucumber-js",
     "test:test": "TEST_ENV=test cucumber-js",
+    "test:sit": "TEST_ENV=sit cucumber-js",
+    "test:uat": "TEST_ENV=uat cucumber-js",
     "test:prod": "TEST_ENV=prod cucumber-js",
+    
     "test:web": "cucumber-js --profile web",
     "test:web:dev": "TEST_ENV=dev cucumber-js --profile web",
     "test:web:test": "TEST_ENV=test cucumber-js --profile web",
+    "test:web:sit": "TEST_ENV=sit cucumber-js --profile web",
+    "test:web:uat": "TEST_ENV=uat cucumber-js --profile web",
     "test:web:prod": "TEST_ENV=prod cucumber-js --profile web",
+    
     "test:api": "cucumber-js --profile api",
     "test:api:dev": "TEST_ENV=dev cucumber-js --profile api",
     "test:api:test": "TEST_ENV=test cucumber-js --profile api",
-    "test:api:prod": "TEST_ENV=prod cucumber-js --profile api"
+    "test:api:sit": "TEST_ENV=sit cucumber-js --profile api",
+    "test:api:uat": "TEST_ENV=uat cucumber-js --profile api",
+    "test:api:prod": "TEST_ENV=prod cucumber-js --profile api",
+    
+    "test:chrome": "BROWSER=chromium cucumber-js --profile web",
+    "test:firefox": "BROWSER=firefox cucumber-js --profile web",
+    "test:safari": "BROWSER=webkit cucumber-js --profile web",
+    
+    "test:chrome:dev": "BROWSER=chromium TEST_ENV=dev cucumber-js --profile web",
+    "test:chrome:test": "BROWSER=chromium TEST_ENV=test cucumber-js --profile web",
+    "test:chrome:sit": "BROWSER=chromium TEST_ENV=sit cucumber-js --profile web",
+    "test:chrome:uat": "BROWSER=chromium TEST_ENV=uat cucumber-js --profile web",
+    "test:chrome:prod": "BROWSER=chromium TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:firefox:dev": "BROWSER=firefox TEST_ENV=dev cucumber-js --profile web",
+    "test:firefox:test": "BROWSER=firefox TEST_ENV=test cucumber-js --profile web",
+    "test:firefox:sit": "BROWSER=firefox TEST_ENV=sit cucumber-js --profile web",
+    "test:firefox:uat": "BROWSER=firefox TEST_ENV=uat cucumber-js --profile web",
+    "test:firefox:prod": "BROWSER=firefox TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:safari:dev": "BROWSER=webkit TEST_ENV=dev cucumber-js --profile web",
+    "test:safari:test": "BROWSER=webkit TEST_ENV=test cucumber-js --profile web",
+    "test:safari:sit": "BROWSER=webkit TEST_ENV=sit cucumber-js --profile web",
+    "test:safari:uat": "BROWSER=webkit TEST_ENV=uat cucumber-js --profile web",
+    "test:safari:prod": "BROWSER=webkit TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:chrome:web:dev": "BROWSER=chromium TEST_ENV=dev cucumber-js --profile web",
+    "test:chrome:web:test": "BROWSER=chromium TEST_ENV=test cucumber-js --profile web",
+    "test:chrome:web:sit": "BROWSER=chromium TEST_ENV=sit cucumber-js --profile web",
+    "test:chrome:web:uat": "BROWSER=chromium TEST_ENV=uat cucumber-js --profile web",
+    "test:chrome:web:prod": "BROWSER=chromium TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:firefox:web:dev": "BROWSER=firefox TEST_ENV=dev cucumber-js --profile web",
+    "test:firefox:web:test": "BROWSER=firefox TEST_ENV=test cucumber-js --profile web",
+    "test:firefox:web:sit": "BROWSER=firefox TEST_ENV=sit cucumber-js --profile web",
+    "test:firefox:web:uat": "BROWSER=firefox TEST_ENV=uat cucumber-js --profile web",
+    "test:firefox:web:prod": "BROWSER=firefox TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:safari:web:dev": "BROWSER=webkit TEST_ENV=dev cucumber-js --profile web",
+    "test:safari:web:test": "BROWSER=webkit TEST_ENV=test cucumber-js --profile web",
+    "test:safari:web:sit": "BROWSER=webkit TEST_ENV=sit cucumber-js --profile web",
+    "test:safari:web:uat": "BROWSER=webkit TEST_ENV=uat cucumber-js --profile web",
+    "test:safari:web:prod": "BROWSER=webkit TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:chrome:headless": "BROWSER=chromium HEADLESS=true cucumber-js --profile web",
+    "test:chrome:ui": "BROWSER=chromium HEADLESS=false cucumber-js --profile web",
+    
+    "test:chrome:headless:dev": "BROWSER=chromium HEADLESS=true TEST_ENV=dev cucumber-js --profile web",
+    "test:chrome:headless:test": "BROWSER=chromium HEADLESS=true TEST_ENV=test cucumber-js --profile web",
+    "test:chrome:headless:sit": "BROWSER=chromium HEADLESS=true TEST_ENV=sit cucumber-js --profile web",
+    "test:chrome:headless:uat": "BROWSER=chromium HEADLESS=true TEST_ENV=uat cucumber-js --profile web",
+    "test:chrome:headless:prod": "BROWSER=chromium HEADLESS=true TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:chrome:ui:dev": "BROWSER=chromium HEADLESS=false TEST_ENV=dev cucumber-js --profile web",
+    "test:chrome:ui:test": "BROWSER=chromium HEADLESS=false TEST_ENV=test cucumber-js --profile web",
+    "test:chrome:ui:sit": "BROWSER=chromium HEADLESS=false TEST_ENV=sit cucumber-js --profile web",
+    "test:chrome:ui:uat": "BROWSER=chromium HEADLESS=false TEST_ENV=uat cucumber-js --profile web",
+    "test:chrome:ui:prod": "BROWSER=chromium HEADLESS=false TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:mobile": "DEVICE=\"iPhone 12\" cucumber-js --profile web",
+    "test:mobile:dev": "DEVICE=\"iPhone 12\" TEST_ENV=dev cucumber-js --profile web",
+    "test:mobile:test": "DEVICE=\"iPhone 12\" TEST_ENV=test cucumber-js --profile web",
+    "test:mobile:sit": "DEVICE=\"iPhone 12\" TEST_ENV=sit cucumber-js --profile web",
+    "test:mobile:uat": "DEVICE=\"iPhone 12\" TEST_ENV=uat cucumber-js --profile web",
+    "test:mobile:prod": "DEVICE=\"iPhone 12\" TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:tablet": "DEVICE=\"iPad Pro 11\" cucumber-js --profile web",
+    "test:tablet:dev": "DEVICE=\"iPad Pro 11\" TEST_ENV=dev cucumber-js --profile web",
+    "test:tablet:test": "DEVICE=\"iPad Pro 11\" TEST_ENV=test cucumber-js --profile web",
+    "test:tablet:sit": "DEVICE=\"iPad Pro 11\" TEST_ENV=sit cucumber-js --profile web",
+    "test:tablet:uat": "DEVICE=\"iPad Pro 11\" TEST_ENV=uat cucumber-js --profile web",
+    "test:tablet:prod": "DEVICE=\"iPad Pro 11\" TEST_ENV=prod cucumber-js --profile web",
+    
+    "test:parallel": "PARALLEL=4 cucumber-js",
+    "test:parallel:web": "PARALLEL=4 cucumber-js --profile web",
+    "test:parallel:api": "PARALLEL=4 cucumber-js --profile api",
+    "test:parallel:web:dev": "PARALLEL=4 TEST_ENV=dev cucumber-js --profile web",
+    "test:parallel:api:dev": "PARALLEL=4 TEST_ENV=dev cucumber-js --profile api",
+    
+    "test:retry": "RETRY_FAILED=3 cucumber-js",
+    "test:retry:web": "RETRY_FAILED=3 cucumber-js --profile web",
+    "test:retry:api": "RETRY_FAILED=3 cucumber-js --profile api",
+    
+    "test:debug": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js",
+    "test:debug:web": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js --profile web",
+    "test:debug:api": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js --profile api",
+    
+    "test:tag": "cucumber-js --tags",
+    
+    "test:report": "open reports/html/cucumber-report.html",
+    "test:report:web": "open reports/html/web-report.html",
+    "test:report:api": "open reports/html/api-report.html",
+    
+    "lint": "eslint 'src/**/*.ts' 'features/**/*.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' 'features/**/*.ts' --fix"
+  },
+  "dependencies": {
+    "@cucumber/cucumber": "^8.0.0",
+    "@playwright/test": "^1.30.0",
+    "axios": "^1.3.4",
+    "dotenv": "^16.0.3",
+    "ts-node": "^10.9.1",
+    "typescript": "^4.9.5",
+    "winston": "^3.8.2",
+    "winston-transport": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/cucumber": "^7.0.0",
+    "@types/dotenv": "^8.2.0",
+    "@types/node": "^18.14.5",
+    "@types/winston": "^2.4.4",
+    "eslint": "^8.35.0",
+    "eslint-plugin-cucumber": "^2.0.0",
+    "eslint-plugin-playwright": "^0.10.0"
   }
 }
-
