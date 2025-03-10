@@ -1,0 +1,116 @@
+// src/framework/utils/env.ts
+import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+
+/**
+ * Environment utility to load and access environment variables
+ */
+export class EnvHelper {
+  private static instance: EnvHelper;
+  private loaded: boolean = false;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.loadEnv();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns EnvHelper instance
+   */
+  public static getInstance(): EnvHelper {
+    if (!EnvHelper.instance) {
+      EnvHelper.instance = new EnvHelper();
+    }
+    return EnvHelper.instance;
+  }
+
+  /**
+   * Load environment variables from .env files
+   * Prioritizes environment-specific files
+   */
+  private loadEnv(): void {
+    if (this.loaded) return;
+
+    const nodeEnv = process.env.NODE_ENV || 'development';
+    const envFiles = [
+      `.env.${nodeEnv}.local`,
+      `.env.${nodeEnv}`,
+      '.env.local',
+      '.env'
+    ];
+
+    for (const file of envFiles) {
+      const envPath = path.resolve(process.cwd(), file);
+      if (fs.existsSync(envPath)) {
+        dotenv.config({ path: envPath });
+        console.log(`Loaded environment variables from ${file}`);
+        break;
+      }
+    }
+
+    this.loaded = true;
+  }
+
+  /**
+   * Get environment variable
+   * @param key - Environment variable key
+   * @param defaultValue - Default value if environment variable is not set
+   * @returns Environment variable value or default value
+   */
+  public get(key: string, defaultValue?: string): string {
+    return process.env[key] || defaultValue || '';
+  }
+
+  /**
+   * Get environment variable as number
+   * @param key - Environment variable key
+   * @param defaultValue - Default value if environment variable is not set
+   * @returns Environment variable value as number or default value
+   */
+  public getNumber(key: string, defaultValue: number): number {
+    const value = process.env[key];
+    if (value === undefined) return defaultValue;
+    return Number(value) || defaultValue;
+  }
+
+  /**
+   * Get environment variable as boolean
+   * @param key - Environment variable key
+   * @param defaultValue - Default value if environment variable is not set
+   * @returns Environment variable value as boolean or default value
+   */
+  public getBoolean(key: string, defaultValue: boolean): boolean {
+    const value = process.env[key];
+    if (value === undefined) return defaultValue;
+    return value.toLowerCase() === 'true';
+  }
+
+  /**
+   * Check if environment variable is set
+   * @param key - Environment variable key
+   * @returns Whether environment variable is set
+   */
+  public has(key: string): boolean {
+    return process.env[key] !== undefined;
+  }
+}
+
+// Initialize when imported
+EnvHelper.getInstance();
+
+// Export a convenience function for getting environment variables
+export const env = (key: string, defaultValue?: string): string => {
+  return EnvHelper.getInstance().get(key, defaultValue);
+};
+
+export const envNumber = (key: string, defaultValue: number): number => {
+  return EnvHelper.getInstance().getNumber(key, defaultValue);
+};
+
+export const envBoolean = (key: string, defaultValue: boolean): boolean => {
+  return EnvHelper.getInstance().getBoolean(key, defaultValue);
+};
