@@ -1,51 +1,37 @@
-// src/framework/base-api-client.ts
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-import { expect } from '@playwright/test';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
+// src/support/hooks.ts
+import { Before, After, BeforeStep, AfterStep, setDefaultTimeout } from '@cucumber/cucumber';
+import { chromium, Browser } from '@playwright/test';
+import { TestContext } from './test-context';
+import { Logger } from '../framework/utils/logger';
+import { ConfigManager } from '../framework/utils/config-manager';
 
-// Rest of imports and interfaces
-
-/**
- * Base API client for all API interactions
- */
-export class BaseApiClient {
-  readonly apiBaseUrl: string;
-  readonly defaultTimeout: number;
-  readonly logger: Logger;
-  readonly defaultHeaders: Record<string, string>;
-  readonly config: ConfigManager;
-
-  /**
-   * Constructor for the BaseApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   * @param defaultHeaders - Default headers to include in all requests
-   */
-  constructor(
-    apiBaseUrl?: string,
-    defaultHeaders: Record<string, string> = {}
-  ) {
-    this.config = ConfigManager.getInstance();
-    this.apiBaseUrl = apiBaseUrl || this.config.getApiBaseUrl();
-    this.defaultTimeout = this.config.getDefaultTimeout();
-    this.logger = new Logger(this.constructor.name);
-    this.defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...defaultHeaders
-    };
-  }
-
-  // Rest of the class remains the same
-
-  /**
-   * Get authentication token
-   * @returns Promise<string> - Authentication token
-   */
-  async getAuthToken(): Promise<string> {
-    const credentials = this.config.getApiCredentials();
+// Before all scenarios
+Before(async function(this: TestContext, scenario) {
+  const config = ConfigManager.getInstance();
+  
+  // Create a unique test ID based on scenario name and timestamp
+  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  
+  // Initialize logger with test ID
+  this.logger = new Logger(testId);
+  this.logger.setScenario(scenario.pickle.name);
+  
+  // Log environment information
+  this.logger.info(`Running tests in ${config.getEnvironment().toUpperCase()} environment`);
+  
+  // For UI tests, initialize browser
+  if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
+    // Launch browser if not already launched
+    if (!browser) {
+      this.logger.info('Launching browser');
+      const browserConfig = config.getBrowserConfig();
+      browser = await chromium.launch({
+        headless: browserConfig.headless,
+        slowMo: browserConfig.slowMo,
+        args: browserConfig.args
+      });
+    }
     
-    // Implementation depends on derived classes
-    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+    // Rest of browser initialization
   }
 }
