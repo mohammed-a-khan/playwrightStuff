@@ -1,235 +1,32 @@
-{
-  "name": "enterprise-test-automation-framework",
-  "version": "1.0.0",
-  "description": "Enterprise Test Automation Framework with Playwright, TypeScript, and Cucumber",
-  "main": "index.js",
-  "scripts": {
-    "test": "cucumber-js",
-    
-    "test:dev": "TEST_ENV=dev cucumber-js",
-    "test:test": "TEST_ENV=test cucumber-js",
-    "test:sit": "TEST_ENV=sit cucumber-js",
-    "test:uat": "TEST_ENV=uat cucumber-js",
-    "test:prod": "TEST_ENV=prod cucumber-js",
-    
-    "test:web": "cucumber-js --profile web",
-    "test:web:dev": "TEST_ENV=dev cucumber-js --profile web",
-    "test:web:test": "TEST_ENV=test cucumber-js --profile web",
-    "test:web:sit": "TEST_ENV=sit cucumber-js --profile web",
-    "test:web:uat": "TEST_ENV=uat cucumber-js --profile web",
-    "test:web:prod": "TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:api": "cucumber-js --profile api",
-    "test:api:dev": "TEST_ENV=dev cucumber-js --profile api",
-    "test:api:test": "TEST_ENV=test cucumber-js --profile api",
-    "test:api:sit": "TEST_ENV=sit cucumber-js --profile api",
-    "test:api:uat": "TEST_ENV=uat cucumber-js --profile api",
-    "test:api:prod": "TEST_ENV=prod cucumber-js --profile api",
-    
-    "test:chrome": "BROWSER=chromium cucumber-js --profile web",
-    "test:firefox": "BROWSER=firefox cucumber-js --profile web",
-    "test:safari": "BROWSER=webkit cucumber-js --profile web",
-    
-    "test:chrome:dev": "BROWSER=chromium TEST_ENV=dev cucumber-js --profile web",
-    "test:chrome:test": "BROWSER=chromium TEST_ENV=test cucumber-js --profile web",
-    "test:chrome:sit": "BROWSER=chromium TEST_ENV=sit cucumber-js --profile web",
-    "test:chrome:uat": "BROWSER=chromium TEST_ENV=uat cucumber-js --profile web",
-    "test:chrome:prod": "BROWSER=chromium TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:firefox:dev": "BROWSER=firefox TEST_ENV=dev cucumber-js --profile web",
-    "test:firefox:test": "BROWSER=firefox TEST_ENV=test cucumber-js --profile web",
-    "test:firefox:sit": "BROWSER=firefox TEST_ENV=sit cucumber-js --profile web",
-    "test:firefox:uat": "BROWSER=firefox TEST_ENV=uat cucumber-js --profile web",
-    "test:firefox:prod": "BROWSER=firefox TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:safari:dev": "BROWSER=webkit TEST_ENV=dev cucumber-js --profile web",
-    "test:safari:test": "BROWSER=webkit TEST_ENV=test cucumber-js --profile web",
-    "test:safari:sit": "BROWSER=webkit TEST_ENV=sit cucumber-js --profile web",
-    "test:safari:uat": "BROWSER=webkit TEST_ENV=uat cucumber-js --profile web",
-    "test:safari:prod": "BROWSER=webkit TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:chrome:web:dev": "BROWSER=chromium TEST_ENV=dev cucumber-js --profile web",
-    "test:chrome:web:test": "BROWSER=chromium TEST_ENV=test cucumber-js --profile web",
-    "test:chrome:web:sit": "BROWSER=chromium TEST_ENV=sit cucumber-js --profile web",
-    "test:chrome:web:uat": "BROWSER=chromium TEST_ENV=uat cucumber-js --profile web",
-    "test:chrome:web:prod": "BROWSER=chromium TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:firefox:web:dev": "BROWSER=firefox TEST_ENV=dev cucumber-js --profile web",
-    "test:firefox:web:test": "BROWSER=firefox TEST_ENV=test cucumber-js --profile web",
-    "test:firefox:web:sit": "BROWSER=firefox TEST_ENV=sit cucumber-js --profile web",
-    "test:firefox:web:uat": "BROWSER=firefox TEST_ENV=uat cucumber-js --profile web",
-    "test:firefox:web:prod": "BROWSER=firefox TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:safari:web:dev": "BROWSER=webkit TEST_ENV=dev cucumber-js --profile web",
-    "test:safari:web:test": "BROWSER=webkit TEST_ENV=test cucumber-js --profile web",
-    "test:safari:web:sit": "BROWSER=webkit TEST_ENV=sit cucumber-js --profile web",
-    "test:safari:web:uat": "BROWSER=webkit TEST_ENV=uat cucumber-js --profile web",
-    "test:safari:web:prod": "BROWSER=webkit TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:chrome:headless": "BROWSER=chromium HEADLESS=true cucumber-js --profile web",
-    "test:chrome:ui": "BROWSER=chromium HEADLESS=false cucumber-js --profile web",
-    
-    "test:chrome:headless:dev": "BROWSER=chromium HEADLESS=true TEST_ENV=dev cucumber-js --profile web",
-    "test:chrome:headless:test": "BROWSER=chromium HEADLESS=true TEST_ENV=test cucumber-js --profile web",
-    "test:chrome:headless:sit": "BROWSER=chromium HEADLESS=true TEST_ENV=sit cucumber-js --profile web",
-    "test:chrome:headless:uat": "BROWSER=chromium HEADLESS=true TEST_ENV=uat cucumber-js --profile web",
-    "test:chrome:headless:prod": "BROWSER=chromium HEADLESS=true TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:chrome:ui:dev": "BROWSER=chromium HEADLESS=false TEST_ENV=dev cucumber-js --profile web",
-    "test:chrome:ui:test": "BROWSER=chromium HEADLESS=false TEST_ENV=test cucumber-js --profile web",
-    "test:chrome:ui:sit": "BROWSER=chromium HEADLESS=false TEST_ENV=sit cucumber-js --profile web",
-    "test:chrome:ui:uat": "BROWSER=chromium HEADLESS=false TEST_ENV=uat cucumber-js --profile web",
-    "test:chrome:ui:prod": "BROWSER=chromium HEADLESS=false TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:mobile": "DEVICE=\"iPhone 12\" cucumber-js --profile web",
-    "test:mobile:dev": "DEVICE=\"iPhone 12\" TEST_ENV=dev cucumber-js --profile web",
-    "test:mobile:test": "DEVICE=\"iPhone 12\" TEST_ENV=test cucumber-js --profile web",
-    "test:mobile:sit": "DEVICE=\"iPhone 12\" TEST_ENV=sit cucumber-js --profile web",
-    "test:mobile:uat": "DEVICE=\"iPhone 12\" TEST_ENV=uat cucumber-js --profile web",
-    "test:mobile:prod": "DEVICE=\"iPhone 12\" TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:tablet": "DEVICE=\"iPad Pro 11\" cucumber-js --profile web",
-    "test:tablet:dev": "DEVICE=\"iPad Pro 11\" TEST_ENV=dev cucumber-js --profile web",
-    "test:tablet:test": "DEVICE=\"iPad Pro 11\" TEST_ENV=test cucumber-js --profile web",
-    "test:tablet:sit": "DEVICE=\"iPad Pro 11\" TEST_ENV=sit cucumber-js --profile web",
-    "test:tablet:uat": "DEVICE=\"iPad Pro 11\" TEST_ENV=uat cucumber-js --profile web",
-    "test:tablet:prod": "DEVICE=\"iPad Pro 11\" TEST_ENV=prod cucumber-js --profile web",
-    
-    "test:parallel": "PARALLEL=4 cucumber-js",
-    "test:parallel:web": "PARALLEL=4 cucumber-js --profile web",
-    "test:parallel:api": "PARALLEL=4 cucumber-js --profile api",
-    "test:parallel:web:dev": "PARALLEL=4 TEST_ENV=dev cucumber-js --profile web",
-    "test:parallel:api:dev": "PARALLEL=4 TEST_ENV=dev cucumber-js --profile api",
-    
-    "test:retry": "RETRY_FAILED=3 cucumber-js",
-    "test:retry:web": "RETRY_FAILED=3 cucumber-js --profile web",
-    "test:retry:api": "RETRY_FAILED=3 cucumber-js --profile api",
-    
-    "test:debug": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js",
-    "test:debug:web": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js --profile web",
-    "test:debug:api": "DEBUG=true node --inspect-brk ./node_modules/.bin/cucumber-js --profile api",
-    
-    "test:tag": "cucumber-js --tags",
-    
-    "test:report": "open reports/html/cucumber-report.html",
-    "test:report:web": "open reports/html/web-report.html",
-    "test:report:api": "open reports/html/api-report.html",
-    
-    "lint": "eslint 'src/**/*.ts' 'features/**/*.ts'",
-    "lint:fix": "eslint 'src/**/*.ts' 'features/**/*.ts' --fix"
-  },
-  "dependencies": {
-    "@cucumber/cucumber": "^8.0.0",
-    "@playwright/test": "^1.30.0",
-    "axios": "^1.3.4",
-    "dotenv": "^16.0.3",
-    "ts-node": "^10.9.1",
-    "typescript": "^4.9.5",
-    "winston": "^3.8.2",
-    "winston-transport": "^4.5.0"
-  },
-  "devDependencies": {
-    "@types/cucumber": "^7.0.0",
-    "@types/dotenv": "^8.2.0",
-    "@types/node": "^18.14.5",
-    "@types/winston": "^2.4.4",
-    "eslint": "^8.35.0",
-    "eslint-plugin-cucumber": "^2.0.0",
-    "eslint-plugin-playwright": "^0.10.0"
-  }
-}
-
-// cucumber.js
-module.exports = {
-  default: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'html:reports/html/cucumber-report.html',
-      'json:reports/json/cucumber-report.json'
-    ],
-    parallel: process.env.PARALLEL || 1,
-    retry: process.env.RETRY_FAILED || 0,
-    tags: process.env.TAG_EXPRESSION || '',
-    publishQuiet: true
-  },
-  web: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'html:reports/html/web-report.html',
-      'json:reports/json/web-report.json'
-    ],
-    tags: process.env.TAG_EXPRESSION || '@web',
-    parallel: process.env.PARALLEL || 1,
-    retry: process.env.RETRY_FAILED || 0,
-    publishQuiet: true
-  },
-  api: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'html:reports/html/api-report.html',
-      'json:reports/json/api-report.json'
-    ],
-    tags: process.env.TAG_EXPRESSION || '@api',
-    parallel: process.env.PARALLEL || 1,
-    retry: process.env.RETRY_FAILED || 0,
-    publishQuiet: true
-  }
-};
-
-// src/support/hooks.ts - partial update for browser initialization
-import { Before } from '@cucumber/cucumber';
+// src/support/hooks.ts
+import { Before, After, BeforeStep, AfterStep, setDefaultTimeout } from '@cucumber/cucumber';
 import { chromium, firefox, webkit, Browser, BrowserType, devices } from '@playwright/test';
 import { TestContext } from './test-context';
+import { Logger } from '../framework/utils/logger';
 import { ConfigManager } from '../framework/utils/config-manager';
+
+// Get configuration
+const config = ConfigManager.getInstance();
+
+// Set default timeout from configuration
+setDefaultTimeout(config.getDefaultTimeout());
 
 let browser: Browser | null;
 
-// Update ConfigManager to support the new options
-// Add these methods to your ConfigManager class:
-
-/*
-public getBrowserType(): string {
-  return env('BROWSER', 'chromium');
-}
-
-public getViewportSize(): { width: number; height: number } {
-  return {
-    width: envNumber('VIEWPORT_WIDTH', 1280),
-    height: envNumber('VIEWPORT_HEIGHT', 720)
-  };
-}
-
-public getDevicePreset(): string | undefined {
-  const device = env('DEVICE', '');
-  return device ? device : undefined;
-}
-
-public getParallelWorkers(): number {
-  return envNumber('PARALLEL', 1);
-}
-
-public shouldRetryFailed(): number {
-  return envNumber('RETRY_FAILED', 0);
-}
-
-public shouldTakeScreenshotOnFailure(): boolean {
-  return envBoolean('SCREENSHOT_ON_FAILURE', true);
-}
-
-public shouldRecordVideo(): boolean {
-  return envBoolean('VIDEO_RECORDING', true);
-}
-*/
-
-// In the Before hook:
+// Before each scenario
 Before(async function(this: TestContext, scenario) {
-  const config = ConfigManager.getInstance();
+  // Create a unique test ID based on scenario name and timestamp
+  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  
+  // Initialize logger with test ID
+  this.logger = new Logger(testId);
+  this.logger.setScenario(scenario.pickle.name);
+  
+  // Log environment information
+  this.logger.info(`Running tests in ${config.getEnvironment().toUpperCase()} environment`);
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
   
   // For UI tests, initialize browser
   if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
@@ -295,32 +92,131 @@ Before(async function(this: TestContext, scenario) {
     
     this.page = await this.context.newPage();
     this.logger.info('Browser initialized');
+  } 
+  // For API tests, initialize API-specific objects
+  else if (scenario.pickle.tags.some(tag => tag.name === '@api')) {
+    this.logger.info('Initializing API test');
+    
+    // API clients will be initialized in step definitions when needed
   }
 });
 
-# .env.template (as a reference for users)
-# Base URLs
-BASE_URL=https://example.com
-API_BASE_URL=https://api.example.com
+// Before each step
+BeforeStep(async function(this: TestContext, testStepResult) {
+  if (this.logger) {
+    this.logger.info(`Executing step: ${testStepResult.pickleStep.text}`);
+  }
+});
 
-# Browser Configuration
-BROWSER=chromium       # Options: chromium, firefox, webkit
-HEADLESS=true          # true or false
-SLOW_MO=0              # Delay in ms between actions
-BROWSER_ARGS=          # Comma-separated browser arguments
-VIEWPORT_WIDTH=1280    # Browser viewport width
-VIEWPORT_HEIGHT=720    # Browser viewport height
-DEVICE=                # Use a specific device preset (e.g., "iPhone 12")
+// After each step
+AfterStep(async function(this: TestContext, testStepResult) {
+  if (this.logger) {
+    if (testStepResult.result.status === 'PASSED') {
+      this.logger.info(`Step passed: ${testStepResult.pickleStep.text}`);
+    } else if (testStepResult.result.status === 'FAILED') {
+      this.logger.error(`Step failed: ${testStepResult.pickleStep.text}`);
+      
+      // In newer versions, the error might be stored differently
+      // Let's use a type-safe approach
+      const stepResult = testStepResult.result;
+      const errorMessage = (stepResult as any).message 
+        || (stepResult as any).error?.message 
+        || 'Unknown error';
+      
+      this.logger.error(`Error: ${errorMessage}`);
+      
+      // For UI tests, take a screenshot on failure
+      if (this.page && config.shouldTakeScreenshotOnFailure()) {
+        const timestamp = Date.now();
+        const scenarioName = this.logger.getScenarioName()?.replace(/[^a-zA-Z0-9]/g, '-') || 'unknown';
+        const screenshotPath = `./screenshots/failed-${scenarioName}-${timestamp}.png`;
+        this.logger.info(`Taking screenshot: ${screenshotPath}`);
+        
+        try {
+          const screenshot = await this.page.screenshot({ 
+            path: screenshotPath,
+            fullPage: true 
+          });
+          this.attach(screenshot, 'image/png');
+        } catch (error: unknown) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.logger.error(`Failed to take screenshot: ${errorMessage}`);
+        }
+      }
+    }
+  }
+});
 
-# Test Configuration
-DEFAULT_TIMEOUT=30000  # Default timeout in ms
-DEBUG=false            # Enable debug mode
-SCREENSHOT_ON_FAILURE=true  # Take screenshots on test failure
-VIDEO_RECORDING=true   # Record videos of test runs
-RETRY_FAILED=1         # Number of retries for failed tests
-PARALLEL=1             # Number of parallel workers
-TAG_EXPRESSION=        # Tag expression to filter scenarios
+// After each scenario
+After(async function(this: TestContext, scenario) {
+  // Store result status for use in clean-up
+  if (scenario.result) {
+    this.result = { status: scenario.result.status };
+    
+    // Log scenario result
+    if (this.logger) {
+      this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name}`);
+    }
+  } else {
+    this.result = { status: 'unknown' };
+    if (this.logger) {
+      this.logger.info(`Scenario status unknown: ${scenario.pickle.name}`);
+    }
+  }
+  
+  // Clean up UI resources
+  if (this.page && this.context) {
+    // Close context and page
+    this.logger.info('Closing browser context');
+    await this.context.close();
+  }
+  
+  // Clean up API resources if needed
+  if (this.testData.userId && this.userApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
+      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
+    } catch (error) {
+      // Ignore errors during cleanup
+      this.logger.warn(`Cleanup error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  if (this.testData.productId && this.productApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
+      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
+    } catch (error) {
+      // Ignore errors during cleanup
+      this.logger.warn(`Cleanup error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  // Add logs to Cucumber report
+  if (this.logger) {
+    const logs = this.logger.getLogs();
+    if (logs.length > 0) {
+      this.attach(logs.join('\n'), 'text/plain');
+    }
+  }
+});
 
-# Authentication
-API_USERNAME=admin
-API_PASSWORD=admin123
+// After all scenarios
+After(async function() {
+  if (browser) {
+    await browser.close();
+    browser = null;
+  }
+});
+
+/**
+ * Debug breakpoint helper function
+ * Add this to your code where you want to set a breakpoint
+ */
+export async function debugBreakpoint(): Promise<void> {
+  if (ConfigManager.getInstance().isDebugMode()) {
+    // eslint-disable-next-line no-debugger
+    debugger;
+    // This pauses execution if running with --inspect flag and dev tools are open
+  }
+}
