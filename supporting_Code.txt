@@ -1,192 +1,180 @@
-// File: src/framework/utils/logger.ts
-import winston from 'winston';
+// File: src/framework/utils/config-manager.ts
+import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 
-// Create a map to store loggers by ID to avoid creating duplicates
-const loggerMap = new Map<string, Logger>();
-
 /**
- * Memory transport for Winston that stores logs in memory
+ * Configuration Manager for handling environment-specific configurations
+ * Implements singleton pattern to ensure configuration is loaded only once
+ * Uses .env files instead of JSON files
  */
-class MemoryTransport extends winston.Transport {
-  private logs: string[] = [];
-
-  constructor(opts?: winston.TransportOptions) {
-    super(opts);
-  }
-
-  log(info: winston.LogEntry, callback: () => void) {
-    setImmediate(() => {
-      this.emit('logged', info);
-    });
-
-    // Store the formatted log message
-    const formattedMessage = `[${info.timestamp}] [${info.level.toUpperCase()}] [${info.testId}]: ${info.message}`;
-    this.logs.push(formattedMessage);
-
-    callback();
-  }
-
-  getLogs(): string[] {
-    return this.logs;
-  }
-}
-
-/**
- * Enhanced Logger using Winston with memory storage for test automation
- */
-export class Logger {
-  private logger: winston.Logger;
-  private testId: string;
-  private memoryTransport: MemoryTransport;
-  private scenarioName?: string;
-  private static fileTransportInitialized = false;
-  private static consoleTransportInitialized = false;
-  private static sharedLoggers: Map<string, winston.transport> = new Map();
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private config: Record<string, any> = {};
+  private initialized: boolean = false;
 
   /**
-   * Get a logger instance by ID (creates one if it doesn't exist)
-   * @param testId - Identifier for the test/context
-   * @returns Logger instance
+   * Private constructor for singleton pattern
    */
-  public static getLogger(testId: string): Logger {
-    if (!loggerMap.has(testId)) {
-      const logger = new Logger(testId);
-      loggerMap.set(testId, logger);
-    }
-    return loggerMap.get(testId)!;
+  private constructor() {
+    this.loadConfiguration();
   }
 
   /**
-   * Constructor for the Logger
-   * @param testId - Identifier for the test/context
+   * Get singleton instance
+   * @returns ConfigManager instance
    */
-  constructor(testId: string) {
-    this.testId = testId;
-    const logsDir = path.join(process.cwd(), 'reports', 'logs');
-    
-    // Create logs directory if it doesn't exist
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
     }
-    
-    // Create memory transport for storing logs in memory
-    this.memoryTransport = new MemoryTransport();
-    
-    // Define shared transports if not already created
-    if (!Logger.consoleTransportInitialized) {
-      Logger.sharedLoggers.set('console', new winston.transports.Console({
-        format: winston.format.combine(
-          winston.format.colorize(),
-          winston.format.simple()
-        )
-      }));
-      Logger.consoleTransportInitialized = true;
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Load configuration from .env files and process.env
+   * @private
+   */
+  private loadConfiguration(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    try {
+      // Load base .env file first (if exists)
+      const baseEnvPath = path.resolve(process.cwd(), '.env');
+      if (fs.existsSync(baseEnvPath)) {
+        console.log(`Loading base environment from: ${baseEnvPath}`);
+        dotenv.config({ path: baseEnvPath });
+      }
+
+      // Load environment-specific .env file if specified
+      const env = process.env.NODE_ENV || 'development';
+      const envSpecificPath = path.resolve(process.cwd(), `.env.${env}`);
+      
+      if (fs.existsSync(envSpecificPath)) {
+        console.log(`Loading environment-specific config from: ${envSpecificPath}`);
+        // Override with environment-specific values
+        dotenv.config({ path: envSpecificPath, override: true });
+      }
+
+      // Copy all environment variables to our config object
+      // We'll convert them to appropriate types later in the get method
+      this.config = { ...process.env };
+      
+      this.initialized = true;
+    } catch (error) {
+      console.error(`Error loading environment configuration: ${error}`);
+    }
+  }
+
+  /**
+   * Get configuration value with type conversion
+   * @param key - Configuration key
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value with appropriate type
+   */
+  public get<T>(key: string, defaultValue?: T): T {
+    if (!this.initialized) {
+      this.loadConfiguration();
     }
     
-    if (!Logger.fileTransportInitialized) {
-      Logger.sharedLoggers.set('file', new winston.transports.File({
-        filename: path.join(logsDir, `test-run-${Date.now()}.log`)
-      }));
-      Logger.fileTransportInitialized = true;
+    // Check if the key exists in our config
+    const value = this.config[key];
+    
+    if (value === undefined) {
+      return defaultValue as T;
     }
     
-    // Create instance-specific file logger for this test ID
-    const testFileTransport = new winston.transports.File({
-      filename: path.join(logsDir, `test-${testId}.log`)
-    });
+    // Try to convert the string value to the appropriate type
+    // based on the defaultValue or just return as is
+    if (defaultValue !== undefined) {
+      const defaultType = typeof defaultValue;
+      
+      if (defaultType === 'number') {
+        const numberValue = Number(value);
+        return (isNaN(numberValue) ? defaultValue : numberValue) as T;
+      } else if (defaultType === 'boolean') {
+        if (value.toLowerCase() === 'true') return true as unknown as T;
+        if (value.toLowerCase() === 'false') return false as unknown as T;
+        return defaultValue;
+      } else if (defaultType === 'object' && Array.isArray(defaultValue)) {
+        try {
+          // Try to parse as JSON if it looks like an array
+          if (value.startsWith('[') && value.endsWith(']')) {
+            return JSON.parse(value) as T;
+          }
+          // Otherwise split by comma (common for env vars)
+          return value.split(',').map(item => item.trim()) as unknown as T;
+        } catch (e) {
+          return defaultValue;
+        }
+      } else if (defaultType === 'object') {
+        try {
+          return JSON.parse(value) as T;
+        } catch (e) {
+          return defaultValue;
+        }
+      }
+    }
     
-    // Create Winston logger with transports
-    this.logger = winston.createLogger({
-      level: process.env.LOG_LEVEL || 'info',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.printf((info) => {
-          // Add testId to info object for memory transport
-          info.testId = this.testId;
-          return `[${info.timestamp}] [${info.level.toUpperCase()}] [${this.testId}]: ${info.message}`;
-        })
-      ),
-      transports: [
-        Logger.sharedLoggers.get('console')!,
-        Logger.sharedLoggers.get('file')!,
-        testFileTransport,
-        this.memoryTransport
-      ]
-    });
+    // If no defaultValue or no special conversion needed, return as is
+    return value as unknown as T;
   }
 
   /**
-   * Log a debug message
-   * @param message - Message to log
+   * Set configuration value (mainly for testing)
+   * @param key - Configuration key
+   * @param value - Configuration value
    */
-  debug(message: string): void {
-    this.logger.debug(message);
+  public set<T>(key: string, value: T): void {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    // Store in our config object
+    this.config[key] = value;
+    
+    // Also set in process.env for consistency
+    process.env[key] = String(value);
   }
 
   /**
-   * Log an info message
-   * @param message - Message to log
+   * Get entire configuration object
+   * @returns Configuration object
    */
-  info(message: string): void {
-    this.logger.info(message);
+  public getAll(): Record<string, any> {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    return { ...this.config };
   }
 
   /**
-   * Log a warning message
-   * @param message - Message to log
+   * Get boolean value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
    */
-  warn(message: string): void {
-    this.logger.warn(message);
+  public getBoolean(key: string, defaultValue: boolean = false): boolean {
+    return this.get<boolean>(key, defaultValue);
   }
 
   /**
-   * Log an error message
-   * @param message - Message to log
+   * Get number value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
    */
-  error(message: string): void {
-    this.logger.error(message);
+  public getNumber(key: string, defaultValue: number = 0): number {
+    return this.get<number>(key, defaultValue);
   }
 
   /**
-   * Set the current scenario name for logging
-   * @param scenarioName - Name of the scenario
+   * Get string value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
    */
-  setScenario(scenarioName: string): void {
-    this.scenarioName = scenarioName;
-    this.info(`Starting scenario: ${scenarioName}`);
-  }
-
-  /**
-   * Get all logs from memory
-   * @returns string[] - Array of log messages
-   */
-  getLogs(): string[] {
-    return this.memoryTransport.getLogs();
-  }
-
-  /**
-   * Get the current test ID
-   * @returns string - Test ID
-   */
-  getTestId(): string {
-    return this.testId;
-  }
-
-  /**
-   * Get the current scenario name
-   * @returns string | undefined - Scenario name
-   */
-  getScenarioName(): string | undefined {
-    return this.scenarioName;
-  }
-  
-  /**
-   * Close and clean up logger resources
-   */
-  close(): void {
-    // Remove from map to allow garbage collection
-    loggerMap.delete(this.testId);
+  public getString(key: string, defaultValue: string = ''): string {
+    return this.get<string>(key, defaultValue);
   }
 }
