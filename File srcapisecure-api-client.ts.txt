@@ -1,13 +1,10 @@
-When('I search for trades with the following filters', async function(this: TestContext, dataTable) {
+When('I search for trades with following filters', async function(this: TestContext, dataTable: DataTable) {
   // Ensure trade API client exists
   if (!this.tradeApiClient) {
     throw new Error('Trade API client is not initialized');
   }
 
-  // Get file path or use data table
-  let requestData;
-  
-  if (dataTable) {
+  try {
     // Use data table to create filters
     const filters: Record<string, any> = dataTable.rowsHash();
     
@@ -27,35 +24,19 @@ When('I search for trades with the following filters', async function(this: Test
       filters.priorityOrder = filters.priorityOrder === 'true';
     }
     
-    requestData = filters;
-  } else {
-    // Use JSON file path - use path.resolve to get absolute path
-    const filePath = path.resolve(process.cwd(), 'requests', 'trade-search.json');
+    const requestData = filters;
     
+    // Store request data for later assertions
+    if (!this.testData) {
+      this.testData = {};
+    }
+    this.testData.tradeFilters = requestData;
+    
+    // Execute the search
     if (this.logger) {
-      this.logger.info(`Using request body from file: ${filePath}`);
+      this.logger.info(`Searching trades with filters: ${JSON.stringify(requestData)}`);
     }
     
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Request body file not found: ${filePath}`);
-    }
-    
-    requestData = filePath;
-  }
-  
-  // Store request data for later assertions
-  if (!this.testData) {
-    this.testData = {};
-  }
-  this.testData.tradeFilters = requestData;
-  
-  // Execute the search
-  if (this.logger) {
-    this.logger.info(`Searching trades with filters: ${JSON.stringify(requestData)}`);
-  }
-
-  try {
     const searchResult = await this.tradeApiClient.searchTrades(requestData);
     
     // Store the response for later access
@@ -66,7 +47,7 @@ When('I search for trades with the following filters', async function(this: Test
       headers: {},
       config: {} as any,
     };
-  } catch (error: unknown) {
+  } catch (error) {
     if (axios.isAxiosError(error) && error.response) {
       this.response = error.response;
     } else {
