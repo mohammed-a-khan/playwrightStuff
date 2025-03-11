@@ -1,0 +1,246 @@
+// File: src/api/secure-api-client.ts
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import { AxiosResponse, AxiosRequestConfig } from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as https from 'https';
+
+interface Product {
+  id: number;
+  name: string;
+  price: number;
+  category: string;
+  description: string;
+}
+
+interface ProductListResponse {
+  items: Product[];
+  totalCount: number;
+  pageSize: number;
+  pageNumber: number;
+}
+
+/**
+ * Secure API Client with proxy settings, auth token and client certificate
+ */
+export class SecureApiClient extends BaseApiClient {
+  private authToken: string | null = null;
+  private readonly proxyUrl: string;
+  private readonly certPath: string;
+  private readonly keyPath: string;
+  private readonly caPath: string;
+
+  /**
+   * Constructor for the SecureApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   */
+  constructor(apiBaseUrl?: string) {
+    super(apiBaseUrl);
+    
+    // Load proxy and certificate settings from config
+    this.proxyUrl = this.config.getString('PROXY_URL', '');
+    this.certPath = this.config.getString('CLIENT_CERT_PATH', '');
+    this.keyPath = this.config.getString('CLIENT_KEY_PATH', '');
+    this.caPath = this.config.getString('CA_CERT_PATH', '');
+  }
+
+  /**
+   * Create HTTPS agent with certificate configuration
+   * @returns HTTPS agent with proper certificates
+   */
+  private createHttpsAgent(): https.Agent {
+    // Create HTTPS agent with certificates
+    const httpsOptions: https.AgentOptions = {
+      rejectUnauthorized: true, // Verify server certificate
+    };
+
+    // Add client certificate and key if available
+    if (this.certPath && fs.existsSync(this.certPath) && 
+        this.keyPath && fs.existsSync(this.keyPath)) {
+      httpsOptions.cert = fs.readFileSync(this.certPath);
+      httpsOptions.key = fs.readFileSync(this.keyPath);
+      this.logger.info('Using client certificate for API requests');
+    }
+
+    // Add CA certificate if available
+    if (this.caPath && fs.existsSync(this.caPath)) {
+      httpsOptions.ca = fs.readFileSync(this.caPath);
+      this.logger.info('Using custom CA certificate for API requests');
+    }
+
+    return new https.Agent(httpsOptions);
+  }
+
+  /**
+   * Create common request configuration with auth and certificates
+   * @param options - Additional API request options
+   * @returns Axios request configuration
+   */
+  private async createRequestConfig(options?: ApiRequestOptions): Promise<AxiosRequestConfig> {
+    // Get auth token if not already available
+    if (!this.authToken) {
+      this.authToken = await this.getAuthToken();
+    }
+
+    // Prepare headers with auth token
+    const headers = { 
+      ...this.defaultHeaders,
+      ...options?.headers
+    };
+
+    if (this.authToken) {
+      headers.Authorization = `Bearer ${this.authToken}`;
+    }
+
+    // Create HTTPS agent with certificates
+    const httpsAgent = this.createHttpsAgent();
+    
+    // Create config including proxy if available
+    const config: AxiosRequestConfig = {
+      headers,
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      httpsAgent
+    };
+    
+    // Add proxy configuration if available
+    if (this.proxyUrl) {
+      this.logger.info(`Using proxy for API requests: ${this.proxyUrl}`);
+      
+      // Parse proxy URL to extract components
+      const proxyUrlObj = new URL(this.proxyUrl);
+      
+      config.proxy = {
+        host: proxyUrlObj.hostname,
+        port: parseInt(proxyUrlObj.port),
+        protocol: proxyUrlObj.protocol
+      };
+      
+      // Add proxy authentication if provided
+      if (proxyUrlObj.username && proxyUrlObj.password) {
+        config.proxy.auth = {
+          username: proxyUrlObj.username,
+          password: proxyUrlObj.password
+        };
+      }
+    }
+
+    return config;
+  }
+
+  /**
+   * Get products with filtering
+   * @param category - Filter by category
+   * @param pageSize - Number of items per page
+   * @param pageNumber - Page number (0-based)
+   * @returns Promise with product list response
+   */
+  async getProducts(category?: string, pageSize: number = 20, pageNumber: number = 0): Promise<ProductListResponse> {
+    // Prepare request parameters
+    const params: Record<string, any> = {
+      pageSize,
+      pageNumber
+    };
+
+    if (category) {
+      params.category = category;
+    }
+
+    // Get common request config
+    const config = await this.createRequestConfig({ params });
+    
+    // Make the request
+    const response = await this.get<ProductListResponse>('/api/products', { 
+      ...config,
+      params
+    });
+
+    return response.data;
+  }
+
+  /**
+   * Get a single product by ID
+   * @param id - Product ID
+   * @returns Promise with product data
+   */
+  async getProduct(id: number): Promise<Product> {
+    // Get common request config
+    const config = await this.createRequestConfig();
+    
+    // Make the request
+    const response = await this.get<Product>(`/api/products/${id}`, config);
+    
+    return response.data;
+  }
+
+  /**
+   * Update a product
+   * @param id - Product ID
+   * @param data - Product data to update
+   * @returns Promise with updated product
+   */
+  async updateProduct(id: number, data: Partial<Product>): Promise<Product> {
+    // Get common request config
+    const config = await this.createRequestConfig();
+    
+    // Make the request
+    const response = await this.put<Product>(`/api/products/${id}`, data, config);
+    
+    return response.data;
+  }
+
+  /**
+   * Get authentication token
+   * @returns Promise with auth token
+   */
+  async getAuthToken(): Promise<string> {
+    const username = this.config.getString('API_USERNAME', '');
+    const password = this.config.getString('API_PASSWORD', '');
+    
+    if (!username || !password) {
+      throw new Error('API credentials not configured');
+    }
+    
+    this.logger.info('Getting auth token from API');
+    
+    // Create HTTPS agent with certificates
+    const httpsAgent = this.createHttpsAgent();
+    
+    // Create config including proxy if available
+    const config: AxiosRequestConfig = {
+      headers: this.defaultHeaders,
+      httpsAgent
+    };
+    
+    // Add proxy configuration if available
+    if (this.proxyUrl) {
+      const proxyUrlObj = new URL(this.proxyUrl);
+      
+      config.proxy = {
+        host: proxyUrlObj.hostname,
+        port: parseInt(proxyUrlObj.port),
+        protocol: proxyUrlObj.protocol
+      };
+      
+      if (proxyUrlObj.username && proxyUrlObj.password) {
+        config.proxy.auth = {
+          username: proxyUrlObj.username,
+          password: proxyUrlObj.password
+        };
+      }
+    }
+    
+    // Make auth request
+    const response = await this.post<{token: string}>('/api/auth/token', {
+      username,
+      password
+    }, config);
+    
+    if (response.data && response.data.token) {
+      this.logger.info('Successfully retrieved auth token');
+      return response.data.token;
+    }
+    
+    throw new Error('Failed to get authentication token');
+  }
+}
