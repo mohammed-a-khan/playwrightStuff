@@ -1,138 +1,192 @@
-// File: src/framework/utils/config-manager.ts
-import fs from 'fs';
+// File: src/framework/utils/logger.ts
+import winston from 'winston';
 import path from 'path';
+import fs from 'fs';
+
+// Create a map to store loggers by ID to avoid creating duplicates
+const loggerMap = new Map<string, Logger>();
 
 /**
- * Configuration Manager for handling environment-specific configurations
- * Implements singleton pattern to ensure configuration is loaded only once
+ * Memory transport for Winston that stores logs in memory
  */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private config: Record<string, any>;
-  private initialized: boolean = false;
+class MemoryTransport extends winston.Transport {
+  private logs: string[] = [];
+
+  constructor(opts?: winston.TransportOptions) {
+    super(opts);
+  }
+
+  log(info: winston.LogEntry, callback: () => void) {
+    setImmediate(() => {
+      this.emit('logged', info);
+    });
+
+    // Store the formatted log message
+    const formattedMessage = `[${info.timestamp}] [${info.level.toUpperCase()}] [${info.testId}]: ${info.message}`;
+    this.logs.push(formattedMessage);
+
+    callback();
+  }
+
+  getLogs(): string[] {
+    return this.logs;
+  }
+}
+
+/**
+ * Enhanced Logger using Winston with memory storage for test automation
+ */
+export class Logger {
+  private logger: winston.Logger;
+  private testId: string;
+  private memoryTransport: MemoryTransport;
+  private scenarioName?: string;
+  private static fileTransportInitialized = false;
+  private static consoleTransportInitialized = false;
+  private static sharedLoggers: Map<string, winston.transport> = new Map();
 
   /**
-   * Private constructor for singleton pattern
+   * Get a logger instance by ID (creates one if it doesn't exist)
+   * @param testId - Identifier for the test/context
+   * @returns Logger instance
    */
-  private constructor() {
-    this.config = {};
-    this.loadConfiguration();
+  public static getLogger(testId: string): Logger {
+    if (!loggerMap.has(testId)) {
+      const logger = new Logger(testId);
+      loggerMap.set(testId, logger);
+    }
+    return loggerMap.get(testId)!;
   }
 
   /**
-   * Get singleton instance
-   * @returns ConfigManager instance
+   * Constructor for the Logger
+   * @param testId - Identifier for the test/context
    */
-  public static getInstance(): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
+  constructor(testId: string) {
+    this.testId = testId;
+    const logsDir = path.join(process.cwd(), 'reports', 'logs');
+    
+    // Create logs directory if it doesn't exist
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
     }
-    return ConfigManager.instance;
+    
+    // Create memory transport for storing logs in memory
+    this.memoryTransport = new MemoryTransport();
+    
+    // Define shared transports if not already created
+    if (!Logger.consoleTransportInitialized) {
+      Logger.sharedLoggers.set('console', new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.colorize(),
+          winston.format.simple()
+        )
+      }));
+      Logger.consoleTransportInitialized = true;
+    }
+    
+    if (!Logger.fileTransportInitialized) {
+      Logger.sharedLoggers.set('file', new winston.transports.File({
+        filename: path.join(logsDir, `test-run-${Date.now()}.log`)
+      }));
+      Logger.fileTransportInitialized = true;
+    }
+    
+    // Create instance-specific file logger for this test ID
+    const testFileTransport = new winston.transports.File({
+      filename: path.join(logsDir, `test-${testId}.log`)
+    });
+    
+    // Create Winston logger with transports
+    this.logger = winston.createLogger({
+      level: process.env.LOG_LEVEL || 'info',
+      format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf((info) => {
+          // Add testId to info object for memory transport
+          info.testId = this.testId;
+          return `[${info.timestamp}] [${info.level.toUpperCase()}] [${this.testId}]: ${info.message}`;
+        })
+      ),
+      transports: [
+        Logger.sharedLoggers.get('console')!,
+        Logger.sharedLoggers.get('file')!,
+        testFileTransport,
+        this.memoryTransport
+      ]
+    });
   }
 
   /**
-   * Load configuration from files and environment variables
-   * @private
+   * Log a debug message
+   * @param message - Message to log
    */
-  private loadConfiguration(): void {
-    if (this.initialized) {
-      return;
-    }
-
-    try {
-      // Load environment-specific config
-      const env = process.env.NODE_ENV || 'default';
-      const configPath = path.join(process.cwd(), 'config', `${env}.json`);
-      
-      if (fs.existsSync(configPath)) {
-        console.log(`Loading configuration from: ${configPath}`);
-        this.config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      } else {
-        // Load default config if environment-specific config doesn't exist
-        const defaultConfigPath = path.join(process.cwd(), 'config', 'default.json');
-        if (fs.existsSync(defaultConfigPath)) {
-          console.log(`Loading default configuration from: ${defaultConfigPath}`);
-          this.config = JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'));
-        } else {
-          console.warn('No configuration file found, using empty configuration');
-        }
-      }
-      
-      // Override with environment variables
-      this.mergeEnvironmentVariables();
-      
-      this.initialized = true;
-    } catch (error) {
-      console.error(`Error loading configuration: ${error}`);
-    }
+  debug(message: string): void {
+    this.logger.debug(message);
   }
 
   /**
-   * Get configuration value
-   * @param key - Configuration key (supports dot notation)
-   * @param defaultValue - Default value if configuration not found
-   * @returns Configuration value
+   * Log an info message
+   * @param message - Message to log
    */
-  public get<T>(key: string, defaultValue?: T): T {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    const keys = key.split('.');
-    let value: any = this.config;
-    
-    for (const k of keys) {
-      value = value && value[k] !== undefined ? value[k] : undefined;
-    }
-    
-    return (value !== undefined ? value : defaultValue) as T;
+  info(message: string): void {
+    this.logger.info(message);
   }
 
   /**
-   * Set configuration value
-   * @param key - Configuration key (supports dot notation)
-   * @param value - Configuration value
+   * Log a warning message
+   * @param message - Message to log
    */
-  public set<T>(key: string, value: T): void {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    const keys = key.split('.');
-    let current = this.config;
-    
-    for (let i = 0; i < keys.length - 1; i++) {
-      const k = keys[i];
-      current[k] = current[k] || {};
-      current = current[k];
-    }
-    
-    current[keys[keys.length - 1]] = value;
+  warn(message: string): void {
+    this.logger.warn(message);
   }
 
   /**
-   * Get entire configuration object
-   * @returns Configuration object
+   * Log an error message
+   * @param message - Message to log
    */
-  public getAll(): Record<string, any> {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    return { ...this.config };
+  error(message: string): void {
+    this.logger.error(message);
   }
 
   /**
-   * Override configuration with environment variables
-   * Only processes variables with TEST_ prefix
-   * @private
+   * Set the current scenario name for logging
+   * @param scenarioName - Name of the scenario
    */
-  private mergeEnvironmentVariables(): void {
-    for (const [key, value] of Object.entries(process.env)) {
-      if (key.startsWith('TEST_') && value !== undefined) {
-        const configKey = key.replace('TEST_', '').toLowerCase().replace(/_([a-z])/g, (g) => g[1].toUpperCase());
-        this.set(configKey, value);
-      }
-    }
+  setScenario(scenarioName: string): void {
+    this.scenarioName = scenarioName;
+    this.info(`Starting scenario: ${scenarioName}`);
+  }
+
+  /**
+   * Get all logs from memory
+   * @returns string[] - Array of log messages
+   */
+  getLogs(): string[] {
+    return this.memoryTransport.getLogs();
+  }
+
+  /**
+   * Get the current test ID
+   * @returns string - Test ID
+   */
+  getTestId(): string {
+    return this.testId;
+  }
+
+  /**
+   * Get the current scenario name
+   * @returns string | undefined - Scenario name
+   */
+  getScenarioName(): string | undefined {
+    return this.scenarioName;
+  }
+  
+  /**
+   * Close and clean up logger resources
+   */
+  close(): void {
+    // Remove from map to allow garbage collection
+    loggerMap.delete(this.testId);
   }
 }
