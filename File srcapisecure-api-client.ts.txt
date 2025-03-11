@@ -1,198 +1,254 @@
-// File: src/framework/browser-manager.ts
+// File: src/support/hooks.ts
+import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter, ITestStepHookParameter } from '@cucumber/cucumber';
+import { Page } from '@playwright/test';
+import { TestContext } from './test-context';
+import { Logger } from '../framework/utils/logger';
+import { BrowserManager } from '../framework/browser-manager';
+import { ConfigManager } from '../framework/utils/config-manager';
+import path from 'path';
+import fs from 'fs';
 
-import { Browser, BrowserContext, chromium } from '@playwright/test';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
+// Load configuration once at the start
+const config = ConfigManager.getInstance();
 
-/**
- * Singleton Browser Manager to handle browser lifecycle
- * This prevents multiple browser instances from being created
- */
-export class BrowserManager {
-  private static instance: BrowserManager;
-  private browser: Browser | null = null;
-  private contexts: BrowserContext[] = [];
-  private logger: Logger;
-  private config: ConfigManager;
-  private isInitializing: boolean = false;
-  private initPromise: Promise<void> | undefined;
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    this.logger = new Logger('BrowserManager');
-    this.config = ConfigManager.getInstance();
+// Set default timeout asynchronously
+(async () => {
+  try {
+    const defaultTimeout = await config.getNumber('DEFAULT_TIMEOUT', 30000);
+    setDefaultTimeout(defaultTimeout);
+  } catch (error) {
+    console.error('Error setting default timeout:', error);
+    setDefaultTimeout(30000); // Fallback to 30 seconds
   }
+})();
 
-  /**
-   * Get singleton instance
-   * @returns BrowserManager instance
-   */
-  public static getInstance(): BrowserManager {
-    if (!BrowserManager.instance) {
-      BrowserManager.instance = new BrowserManager();
+// Create a BrowserManager instance
+const browserManager = BrowserManager.getInstance();
+
+// Before all scenarios
+BeforeAll(async function() {
+  const globalLogger = new Logger('GlobalSetup');
+  globalLogger.info('Starting test execution');
+  
+  // Ensure report directories exist
+  const dirs = ['reports/screenshots', 'reports/videos', 'reports/logs', 'reports/html', 'reports/json'];
+  dirs.forEach(dir => {
+    const dirPath = path.join(process.cwd(), dir);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      globalLogger.info(`Created directory: ${dirPath}`);
     }
-    return BrowserManager.instance;
+  });
+  
+  // For web tests, initialize the browser once
+  try {
+    const preLaunchBrowser = process.env.PRELAUNCH_BROWSER === 'true';
+    if (preLaunchBrowser) {
+      globalLogger.info('Pre-launching browser');
+      await browserManager.initialize();
+      globalLogger.info('Browser pre-launched successfully');
+    }
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    globalLogger.error(`Failed to pre-launch browser: ${errorMessage}`);
   }
+});
 
-  /**
-   * Initialize browser if not already initialized
-   * Uses a promise to prevent multiple initializations
-   */
-  public async initialize(): Promise<void> {
-    if (this.browser) {
-      return;
-    }
-
-    if (this.isInitializing && this.initPromise) {
-      // If already initializing, wait for it to complete
-      await this.initPromise;
-      return;
-    }
-
-    this.isInitializing = true;
-    this.initPromise = this.initializeBrowser();
-    await this.initPromise;
-    this.isInitializing = false;
+// After all scenarios
+AfterAll(async function() {
+  const globalLogger = new Logger('GlobalTeardown');
+  globalLogger.info('Finishing test execution');
+  
+  // Close the browser if it's open
+  try {
+    await browserManager.closeBrowser();
+    globalLogger.info('All resources cleaned up');
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    globalLogger.error(`Error during cleanup: ${errorMessage}`);
   }
+});
 
-  /**
-   * Internal method to initialize the browser
-   */
-  private async initializeBrowser(): Promise<void> {
+// Before each scenario
+Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
+  this.startTime = Date.now();
+  this.scenarioName = scenario.pickle.name;
+  this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
+  
+  // Create a unique test ID based on scenario name and timestamp
+  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  
+  // Initialize logger with test ID
+  this.logger = new Logger(testId);
+  this.logger.info(`Starting scenario: ${scenario.pickle.name}`);
+  
+  // Log tags
+  if (this.scenarioTags.length > 0) {
+    this.logger.info(`Tags: ${this.scenarioTags.join(', ')}`);
+  }
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
+  
+  // For UI tests, initialize browser context and page
+  if (this.scenarioTags.some(tag => tag === '@web' || tag === '@ui')) {
+    this.logger.info('Initializing web test');
+    
     try {
-      this.logger.info('Launching browser');
+      // Create a new context
+      const recordVideo = await config.getBoolean('VIDEO_RECORD', false);
       
-      // Get configuration values asynchronously
-      const headless = await this.config.getBoolean('HEADLESS', true);
-      const slowMo = await this.config.getNumber('SLOW_MO', 0);
+      const contextOptions: Record<string, any> = {};
+      if (recordVideo) {
+        contextOptions.recordVideo = {
+          dir: 'videos/',
+          size: { 
+            width: await config.getNumber('VIDEO_WIDTH', 1280), 
+            height: await config.getNumber('VIDEO_HEIGHT', 720) 
+          }
+        };
+      }
       
-      // Parse browser args from env variable (comma-separated string)
-      const browserArgsString = await this.config.getString('BROWSER_ARGS', '--disable-gpu,--no-sandbox');
-      const browserArgs = browserArgsString
-        .split(',')
-        .map(arg => arg.trim())
-        .filter(arg => arg.length > 0);
+      this.context = await browserManager.createContext(contextOptions);
       
-      this.browser = await chromium.launch({
-        headless,
-        slowMo,
-        args: browserArgs
-      });
+      // Add ability to set breakpoints if needed
+      if (process.env.DEBUG === 'true') {
+        this.context.setDefaultTimeout(0); // No timeout during debugging
+      }
       
-      this.logger.info('Browser launched successfully');
+      // Create a new page
+      this.page = await this.context.newPage();
+      this.logger.info('Browser context and page initialized');
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to launch browser: ${errorMessage}`);
+      this.logger.error(`Failed to initialize browser: ${errorMessage}`);
       throw error;
     }
+  } 
+  // For API tests, we don't need browser initialization
+  else if (this.scenarioTags.some(tag => tag === '@api')) {
+    this.logger.info('Initializing API test');
+    // API clients will be initialized in step definitions when needed
   }
+});
 
-  /**
-   * Create a new browser context
-   * @param options - Context options
-   * @returns Promise<BrowserContext> - New context
-   */
-  public async createContext(options: any = {}): Promise<BrowserContext> {
-    await this.initialize();
-    
-    if (!this.browser) {
-      throw new Error('Browser not initialized');
-    }
-    
-    // Get video recording options asynchronously
-    const recordVideo = await this.config.getBoolean('VIDEO_RECORD', false);
-    const videoWidth = await this.config.getNumber('VIDEO_WIDTH', 1280);
-    const videoHeight = await this.config.getNumber('VIDEO_HEIGHT', 720);
-    const ignoreHttpsErrors = await this.config.getBoolean('IGNORE_HTTPS_ERRORS', true);
-    
-    const defaultOptions = {
-      viewport: { width: 1280, height: 720 },
-      recordVideo: recordVideo
-        ? { 
-            dir: 'videos/',
-            size: { 
-              width: videoWidth, 
-              height: videoHeight 
-            } 
-          } 
-        : undefined,
-      ignoreHTTPSErrors: ignoreHttpsErrors
-    };
-    
-    const mergedOptions = { ...defaultOptions, ...options };
-    const context = await this.browser.newContext(mergedOptions);
-    
-    // Store context for cleanup
-    this.contexts.push(context);
-    
-    return context;
-  }
-
-  /**
-   * Close a specific browser context
-   * @param context - Context to close
-   */
-  public async closeContext(context: BrowserContext): Promise<void> {
+// Before each step
+BeforeStep(async function(this: TestContext, step: ITestStepHookParameter) {
+  if (this.logger) {
     try {
-      await context.close();
-      this.contexts = this.contexts.filter(ctx => ctx !== context);
+      this.logger.info(`Executing step: ${step.pickleStep.text}`);
+    } catch (error: unknown) {
+      console.error('Error logging step execution:', error);
+    }
+  }
+});
+
+// After each step
+AfterStep(async function(this: TestContext, step: ITestStepHookParameter, result: any) {
+  if (this.logger) {
+    try {
+      if (result.status === 'PASSED') {
+        this.logger.info(`Step passed: ${step.pickleStep.text}`);
+      } else if (result.status === 'FAILED') {
+        this.logger.error(`Step failed: ${step.pickleStep.text}`);
+        if (result.error) {
+          this.logger.error(`Error: ${result.error.message}`);
+        }
+        
+        // For UI tests, take a screenshot on failure
+        if (this.page) {
+          try {
+            const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+            const screenshotPath = `./reports/screenshots/${screenshotName}.png`;
+            const screenshot = await this.page.screenshot({ 
+              path: screenshotPath,
+              fullPage: true 
+            });
+            this.logger.info(`Screenshot captured: ${screenshotPath}`);
+            if (this.attach) {
+              this.attach(screenshot, 'image/png');
+            }
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.logger.error(`Failed to take screenshot: ${errorMessage}`);
+          }
+        }
+      }
+    } catch (error: unknown) {
+      console.error('Error processing step result:', error);
+    }
+  }
+});
+
+// After each scenario
+After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
+  this.endTime = Date.now();
+  const executionTime = this.endTime - (this.startTime || this.endTime);
+  
+  // Store result status for use in clean-up
+  this.result = { status: scenario.result?.status || 'UNKNOWN' };
+  
+  // Log scenario result
+  if (this.logger) {
+    this.logger.info(`Scenario ${this.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
+  }
+  
+  // Clean up UI resources
+  if (this.page && this.context) {
+    try {
+      // Close context (and associated page)
+      this.logger.info('Closing browser context');
+      await browserManager.closeContext(this.context);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Error closing context: ${errorMessage}`);
+      if (this.logger) {
+        this.logger.error(`Error closing browser context: ${errorMessage}`);
+      }
     }
   }
-
-  /**
-   * Close all contexts
-   */
-  public async closeAllContexts(): Promise<void> {
-    for (const context of [...this.contexts]) {
-      await this.closeContext(context);
-    }
-    this.contexts = [];
-  }
-
-  /**
-   * Get the browser instance
-   * @returns Browser | null - Current browser instance
-   */
-  public getBrowser(): Browser | null {
-    return this.browser;
-  }
-
-  /**
-   * Check if the browser is initialized
-   * @returns boolean - Whether browser is initialized
-   */
-  public isBrowserInitialized(): boolean {
-    return this.browser !== null;
-  }
-
-  /**
-   * Close the browser and all contexts
-   */
-  public async closeBrowser(): Promise<void> {
-    if (!this.browser) {
-      return;
-    }
-    
+  
+  // Clean up API resources if needed
+  if (this.testData?.userId && this.userApiClient && this.authToken) {
     try {
-      // Close all contexts first
-      await this.closeAllContexts();
-      
-      // Close the browser
-      this.logger.info('Closing browser');
-      await this.browser.close();
-      this.browser = null;
-      this.logger.info('Browser closed successfully');
+      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
+      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
     } catch (error: unknown) {
+      // Ignore errors during cleanup
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Error closing browser: ${errorMessage}`);
-      // Reset state even if there was an error
-      this.browser = null;
-      this.contexts = [];
+      this.logger.warn(`Cleanup error: ${errorMessage}`);
     }
   }
-}
+  
+  if (this.testData?.productId && this.productApiClient && this.authToken) {
+    try {
+      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
+      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
+    } catch (error: unknown) {
+      // Ignore errors during cleanup
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`Cleanup error: ${errorMessage}`);
+    }
+  }
+  
+  // Add logs to Cucumber report
+  if (this.logger && this.attach) {
+    const logs = this.logger.getLogs();
+    if (logs.length > 0) {
+      try {
+        this.attach(logs.join('\n'), 'text/plain');
+      } catch (error: unknown) {
+        console.error('Error attaching logs:', error);
+      }
+    }
+  }
+  
+  // Explicitly clean up references to help garbage collection
+  delete this.page;
+  delete this.context;
+  delete this.loginPage;
+  delete this.dashboardPage;
+  delete this.userProfilePage;
+  delete this.userApiClient;
+  delete this.productApiClient;
+  delete this.tradeApiClient;
+});
