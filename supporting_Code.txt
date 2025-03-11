@@ -1,175 +1,52 @@
-// File: src/framework/browser-manager.ts
+// File: src/support/test-context.ts
 
-import { Browser, BrowserContext, chromium } from '@playwright/test';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
+import { Page, BrowserContext } from '@playwright/test';
+import { AxiosResponse } from 'axios';
+import { Logger } from '../framework/utils/logger';
+import { LoginPage } from '../pages/login-page';
+import { DashboardPage } from '../pages/dashboard-page';
+import { UserProfilePage } from '../pages/user-profile-page';
+import { UserApiClient } from '../api/user-api-client';
+import { ProductApiClient } from '../api/product-api-client';
 
 /**
- * Singleton Browser Manager to handle browser lifecycle
- * This prevents multiple browser instances from being created
+ * Comprehensive test context that can be used for both UI and API tests
+ * Shared between steps to maintain state
  */
-export class BrowserManager {
-  private static instance: BrowserManager;
-  private browser: Browser | null = null;
-  private contexts: BrowserContext[] = [];
-  private logger: Logger;
-  private config: ConfigManager;
-  private isInitializing: boolean = false;
-  private initPromise: Promise<void> | null = null;
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    this.logger = new Logger('BrowserManager');
-    this.config = ConfigManager.getInstance();
-  }
-
-  /**
-   * Get singleton instance
-   * @returns BrowserManager instance
-   */
-  public static getInstance(): BrowserManager {
-    if (!BrowserManager.instance) {
-      BrowserManager.instance = new BrowserManager();
-    }
-    return BrowserManager.instance;
-  }
-
-  /**
-   * Initialize browser if not already initialized
-   * Uses a promise to prevent multiple initializations
-   */
-  public async initialize(): Promise<void> {
-    if (this.browser) {
-      return;
-    }
-
-    if (this.isInitializing) {
-      // If already initializing, wait for it to complete
-      return this.initPromise;
-    }
-
-    this.isInitializing = true;
-    this.initPromise = this.initializeBrowser();
-    await this.initPromise;
-    this.isInitializing = false;
-  }
-
-  /**
-   * Internal method to initialize the browser
-   */
-  private async initializeBrowser(): Promise<void> {
-    try {
-      this.logger.info('Launching browser');
-      
-      const headless = process.env.HEADLESS !== 'false';
-      const slowMo = process.env.SLOW_MO ? parseInt(process.env.SLOW_MO) : 0;
-      
-      this.browser = await chromium.launch({
-        headless,
-        slowMo,
-        // Add additional launch options from config if needed
-        args: this.config.get<string[]>('browser.args', []),
-      });
-      
-      this.logger.info('Browser launched successfully');
-    } catch (error) {
-      this.logger.error(`Failed to launch browser: ${error}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Create a new browser context
-   * @param options - Context options
-   * @returns Promise<BrowserContext> - New context
-   */
-  public async createContext(options: any = {}): Promise<BrowserContext> {
-    await this.initialize();
-    
-    if (!this.browser) {
-      throw new Error('Browser not initialized');
-    }
-    
-    const defaultOptions = {
-      viewport: { width: 1280, height: 720 },
-      recordVideo: this.config.get<boolean>('video.record', false) 
-        ? { dir: 'videos/' } 
-        : undefined,
-      ignoreHTTPSErrors: true
-    };
-    
-    const mergedOptions = { ...defaultOptions, ...options };
-    const context = await this.browser.newContext(mergedOptions);
-    
-    // Store context for cleanup
-    this.contexts.push(context);
-    
-    return context;
-  }
-
-  /**
-   * Close a specific browser context
-   * @param context - Context to close
-   */
-  public async closeContext(context: BrowserContext): Promise<void> {
-    try {
-      await context.close();
-      this.contexts = this.contexts.filter(ctx => ctx !== context);
-    } catch (error) {
-      this.logger.error(`Error closing context: ${error}`);
-    }
-  }
-
-  /**
-   * Close all contexts
-   */
-  public async closeAllContexts(): Promise<void> {
-    for (const context of [...this.contexts]) {
-      await this.closeContext(context);
-    }
-    this.contexts = [];
-  }
-
-  /**
-   * Get the browser instance
-   * @returns Browser | null - Current browser instance
-   */
-  public getBrowser(): Browser | null {
-    return this.browser;
-  }
-
-  /**
-   * Check if the browser is initialized
-   * @returns boolean - Whether browser is initialized
-   */
-  public isBrowserInitialized(): boolean {
-    return this.browser !== null;
-  }
-
-  /**
-   * Close the browser and all contexts
-   */
-  public async closeBrowser(): Promise<void> {
-    if (!this.browser) {
-      return;
-    }
-    
-    try {
-      // Close all contexts first
-      await this.closeAllContexts();
-      
-      // Close the browser
-      this.logger.info('Closing browser');
-      await this.browser.close();
-      this.browser = null;
-      this.logger.info('Browser closed successfully');
-    } catch (error) {
-      this.logger.error(`Error closing browser: ${error}`);
-      // Reset state even if there was an error
-      this.browser = null;
-      this.contexts = [];
-    }
-  }
+export interface TestContext {
+  // Playwright objects
+  page: Page;
+  context: BrowserContext;
+  
+  // Logger instance
+  logger: Logger;
+  
+  // UI Page Objects
+  loginPage?: LoginPage;
+  dashboardPage?: DashboardPage;
+  userProfilePage?: UserProfilePage;
+  
+  // API Clients
+  userApiClient?: UserApiClient;
+  productApiClient?: ProductApiClient;
+  
+  // API testing properties
+  authToken?: string;
+  response?: AxiosResponse;
+  
+  // Common properties
+  testData: Record<string, any>; // For storing data between steps
+  scenarioName?: string;
+  scenarioTags?: string[];
+  result?: { status: string }; // For tracking test result status
+  
+  // Test execution metadata
+  startTime?: number;
+  endTime?: number;
+  
+  // Cucumber attachment function
+  attach: (data: any, mimeType: string) => void;
 }
+
+// For type compatibility with existing step definitions
+export interface ApiContext extends TestContext {}
