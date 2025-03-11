@@ -1,5 +1,5 @@
 // File: src/support/hooks.ts
-import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter, ITestStepHookParameter } from '@cucumber/cucumber';
+import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter } from '@cucumber/cucumber';
 import { Page } from '@playwright/test';
 import { TestContext } from './test-context';
 import { Logger } from '../framework/utils/logger';
@@ -133,51 +133,58 @@ Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
 });
 
 // Before each step
-BeforeStep(async function(this: TestContext, step: ITestStepHookParameter) {
+BeforeStep(async function(this: TestContext) {
   if (this.logger) {
     try {
-      this.logger.info(`Executing step: ${step.pickleStep.text}`);
+      // Get current step from Cucumber context if available
+      const stepText = this.currentStep?.text || 'unknown step';
+      this.logger.info(`Executing step: ${stepText}`);
     } catch (error: unknown) {
       console.error('Error logging step execution:', error);
     }
   }
 });
 
-// After each step
-AfterStep(async function(this: TestContext, step: ITestStepHookParameter, result: any) {
-  if (this.logger) {
-    try {
-      if (result.status === 'PASSED') {
-        this.logger.info(`Step passed: ${step.pickleStep.text}`);
-      } else if (result.status === 'FAILED') {
-        this.logger.error(`Step failed: ${step.pickleStep.text}`);
-        if (result.error) {
-          this.logger.error(`Error: ${result.error.message}`);
-        }
+// After each step - fix for the signature issue
+AfterStep(function(this: TestContext) {
+  // The hook will receive the world instance (this) as the first parameter
+  return async (result: any) => {
+    if (this.logger) {
+      try {
+        const stepText = result?.pickleStep?.text || 'unknown step';
         
-        // For UI tests, take a screenshot on failure
-        if (this.page) {
-          try {
-            const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-            const screenshotPath = `./reports/screenshots/${screenshotName}.png`;
-            const screenshot = await this.page.screenshot({ 
-              path: screenshotPath,
-              fullPage: true 
-            });
-            this.logger.info(`Screenshot captured: ${screenshotPath}`);
-            if (this.attach) {
-              this.attach(screenshot, 'image/png');
+        if (result?.status === 'PASSED') {
+          this.logger.info(`Step passed: ${stepText}`);
+        } else if (result?.status === 'FAILED') {
+          this.logger.error(`Step failed: ${stepText}`);
+          if (result.error) {
+            this.logger.error(`Error: ${result.error.message}`);
+          }
+          
+          // For UI tests, take a screenshot on failure
+          if (this.page) {
+            try {
+              const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+              const screenshotPath = `./reports/screenshots/${screenshotName}.png`;
+              const screenshot = await this.page.screenshot({ 
+                path: screenshotPath,
+                fullPage: true 
+              });
+              this.logger.info(`Screenshot captured: ${screenshotPath}`);
+              if (this.attach) {
+                this.attach(screenshot, 'image/png');
+              }
+            } catch (error: unknown) {
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+              this.logger.error(`Failed to take screenshot: ${errorMessage}`);
             }
-          } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            this.logger.error(`Failed to take screenshot: ${errorMessage}`);
           }
         }
+      } catch (error: unknown) {
+        console.error('Error processing step result:', error);
       }
-    } catch (error: unknown) {
-      console.error('Error processing step result:', error);
     }
-  }
+  };
 });
 
 // After each scenario
@@ -193,7 +200,7 @@ After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
     this.logger.info(`Scenario ${this.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
   }
   
-  // Clean up UI resources
+  // Generic cleanup for browser resources
   if (this.page && this.context) {
     try {
       // Close context (and associated page)
@@ -204,29 +211,6 @@ After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
       if (this.logger) {
         this.logger.error(`Error closing browser context: ${errorMessage}`);
       }
-    }
-  }
-  
-  // Clean up API resources if needed
-  if (this.testData?.userId && this.userApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
-      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
-    } catch (error: unknown) {
-      // Ignore errors during cleanup
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.warn(`Cleanup error: ${errorMessage}`);
-    }
-  }
-  
-  if (this.testData?.productId && this.productApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
-      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
-    } catch (error: unknown) {
-      // Ignore errors during cleanup
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.warn(`Cleanup error: ${errorMessage}`);
     }
   }
   
@@ -245,10 +229,4 @@ After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
   // Explicitly clean up references to help garbage collection
   delete this.page;
   delete this.context;
-  delete this.loginPage;
-  delete this.dashboardPage;
-  delete this.userProfilePage;
-  delete this.userApiClient;
-  delete this.productApiClient;
-  delete this.tradeApiClient;
 });
