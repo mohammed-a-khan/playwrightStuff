@@ -1,215 +1,1006 @@
-// File: src/support/hooks.ts
-import { Before, After, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter } from '@cucumber/cucumber';
-import { TestContext } from './test-context';
-import { Logger } from '../framework/utils/logger';
-import { BrowserManager } from '../framework/browser-manager';
-import { ConfigManager } from '../framework/utils/config-manager';
-import path from 'path';
+// File: src/framework/base-web-page.ts
+import { Page, Locator, BrowserContext, Response, Request } from '@playwright/test';
+import { expect } from '@playwright/test';
 import fs from 'fs';
+import path from 'path';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
 
-// Load configuration once at the start
-const config = ConfigManager.getInstance();
+/**
+ * Base web page class for all UI page objects
+ * Provides common methods for UI interactions
+ */
+export class BaseWebPage {
+  readonly page: Page;
+  readonly context: BrowserContext;
+  baseUrl: string;
+  defaultTimeout: number;
+  readonly logger: Logger;
+  readonly config: ConfigManager;
+  private configInitialized: boolean = false;
+  private configInitPromise: Promise<void>;
 
-// Set default timeout
-setDefaultTimeout(30000);
-
-// Get the default timeout asynchronously and update it later
-(async () => {
-  try {
-    const defaultTimeout = await config.getNumber('DEFAULT_TIMEOUT', 30000);
-    setDefaultTimeout(defaultTimeout);
-  } catch (error) {
-    console.error('Error setting default timeout:', error);
+  /**
+   * Constructor for the BaseWebPage
+   * @param page - Playwright Page object
+   * @param context - Playwright Browser Context
+   * @param baseUrl - Base URL for UI navigation (optional)
+   */
+  constructor(
+    page: Page, 
+    context: BrowserContext,
+    baseUrl?: string
+  ) {
+    this.page = page;
+    this.context = context;
+    this.config = ConfigManager.getInstance();
+    
+    // Initialize with default values
+    this.baseUrl = baseUrl || 'https://example.com';
+    this.defaultTimeout = 30000;
+    this.logger = new Logger(this.constructor.name);
+    
+    // Set up listeners for network events
+    this.setupNetworkListeners();
+    
+    // Initialize async config values - store the promise for later awaiting
+    this.configInitPromise = this.initializeConfig(baseUrl);
   }
-})();
 
-// Create a BrowserManager instance
-const browserManager = BrowserManager.getInstance();
-
-// Before all scenarios
-BeforeAll(async function() {
-  const globalLogger = new Logger('GlobalSetup');
-  globalLogger.info('Starting test execution');
-  
-  // Ensure report directories exist
-  const dirs = ['reports/screenshots', 'reports/videos', 'reports/logs', 'reports/html', 'reports/json'];
-  dirs.forEach(dir => {
-    const dirPath = path.join(process.cwd(), dir);
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-      globalLogger.info(`Created directory: ${dirPath}`);
+  /**
+   * Initialize configuration asynchronously
+   * @private
+   */
+  private async initializeConfig(baseUrl?: string): Promise<void> {
+    if (this.configInitialized) {
+      return;
     }
-  });
-  
-  // For web tests, initialize the browser once
-  try {
-    const preLaunchBrowser = process.env.PRELAUNCH_BROWSER === 'true';
-    if (preLaunchBrowser) {
-      globalLogger.info('Pre-launching browser');
-      await browserManager.initialize();
-      globalLogger.info('Browser pre-launched successfully');
-    }
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    globalLogger.error(`Failed to pre-launch browser: ${errorMessage}`);
-  }
-});
-
-// After all scenarios
-AfterAll(async function() {
-  const globalLogger = new Logger('GlobalTeardown');
-  globalLogger.info('Finishing test execution');
-  
-  // Close the browser if it's open
-  try {
-    await browserManager.closeBrowser();
-    globalLogger.info('All resources cleaned up');
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    globalLogger.error(`Error during cleanup: ${errorMessage}`);
-  }
-});
-
-// Before each scenario
-Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
-  this.startTime = Date.now();
-  this.scenarioName = scenario.pickle.name;
-  this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
-  
-  // Create a unique test ID based on scenario name and timestamp
-  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-  
-  // Initialize logger with test ID
-  this.logger = new Logger(testId);
-  this.logger.info(`Starting scenario: ${scenario.pickle.name}`);
-  
-  // Log tags
-  if (this.scenarioTags.length > 0) {
-    this.logger.info(`Tags: ${this.scenarioTags.join(', ')}`);
-  }
-  
-  // Create test data object for sharing data between steps
-  this.testData = {};
-  
-  // For UI tests, initialize browser context and page
-  if (this.scenarioTags.some(tag => tag === '@web' || tag === '@ui')) {
-    this.logger.info('Initializing web test');
     
     try {
-      // Create a new context with default options
-      // We'll adjust these based on configuration values
-      const contextOptions: Record<string, any> = {};
-      
-      // Get recording options - note that we need to handle promises carefully
-      try {
-        const recordVideo = await config.getBoolean('VIDEO_RECORD', false);
-        if (recordVideo) {
-          contextOptions.recordVideo = {
-            dir: 'videos/',
-            size: { 
-              width: 1280, 
-              height: 720 
-            }
-          };
-          
-          // Try to get video dimensions
-          try {
-            const videoWidth = await config.getNumber('VIDEO_WIDTH', 1280);
-            const videoHeight = await config.getNumber('VIDEO_HEIGHT', 720);
-            contextOptions.recordVideo.size.width = videoWidth;
-            contextOptions.recordVideo.size.height = videoHeight;
-          } catch (e) {
-            // Use defaults if config fails
-          }
+      // Only update if baseUrl wasn't explicitly provided
+      if (!baseUrl) {
+        try {
+          const configBaseUrl = await this.config.getString('BASE_URL', 'https://example.com');
+          this.baseUrl = configBaseUrl;
+        } catch (e) {
+          // Keep default if config fails
         }
+      }
+      
+      try {
+        const configTimeout = await this.config.getNumber('DEFAULT_TIMEOUT', 30000);
+        this.defaultTimeout = configTimeout;
       } catch (e) {
-        // Use defaults if config fails
+        // Keep default if config fails
       }
       
-      this.context = await browserManager.createContext(contextOptions);
-      
-      // Add ability to set breakpoints if needed
-      if (process.env.DEBUG === 'true') {
-        this.context.setDefaultTimeout(0); // No timeout during debugging
-      }
-      
-      // Create a new page
-      this.page = await this.context.newPage();
-      this.logger.info('Browser context and page initialized');
+      this.configInitialized = true;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.error(`Failed to initialize browser: ${errorMessage}`);
-      throw error;
+      this.logger.error(`Failed to initialize config: ${errorMessage}`);
     }
-  } 
-  // For API tests, we don't need browser initialization
-  else if (this.scenarioTags.some(tag => tag === '@api')) {
-    this.logger.info('Initializing API test');
-    // API clients will be initialized in step definitions when needed
   }
-});
 
-// After each scenario
-After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
-  this.endTime = Date.now();
-  const executionTime = this.endTime - (this.startTime || this.endTime);
-  
-  // Store result status for use in clean-up
-  this.result = { status: scenario.result?.status || 'UNKNOWN' };
-  
-  // Log scenario result
-  if (this.logger) {
-    this.logger.info(`Scenario ${this.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
+  /**
+   * Ensure configuration is initialized
+   * @private
+   */
+  private async ensureConfigInitialized(): Promise<void> {
+    if (!this.configInitialized) {
+      await this.configInitPromise;
+    }
+  }
+
+  // ====== Navigation Methods ======
+
+  /**
+   * Navigate to a specific URL
+   * @param url - URL to navigate to
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateTo(url: string): Promise<Response | null> {
+    await this.ensureConfigInitialized();
+    this.logger.info(`Navigating to: ${url}`);
+    return await this.page.goto(url, { waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate to a specific page using the base URL
+   * @param path - Path to append to the base URL
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateToPage(path: string): Promise<Response | null> {
+    await this.ensureConfigInitialized();
     
-    // Take screenshot on failure for UI tests
-    if (this.result.status === 'FAILED' && this.page) {
+    // Ensure path starts with a slash if it's not empty and doesn't already start with one
+    if (path && !path.startsWith('/')) {
+      path = '/' + path;
+    }
+    
+    const url = new URL(path, this.baseUrl).toString();
+    return this.navigateTo(url);
+  }
+
+  /**
+   * Navigate to a specific page using the base URL and base path
+   * @param basePath - Base path to append to the base URL
+   * @param redirectUrlPath - Path to append to the base path
+   * @returns Promise<Response | null> - The main response
+   */
+  async navigateWithBasePath(basePath: string, redirectUrlPath: string): Promise<Response | null> {
+    await this.ensureConfigInitialized();
+    
+    // Ensure basePath starts with a slash if it's not empty and doesn't already start with one
+    if (basePath && !basePath.startsWith('/')) {
+      basePath = '/' + basePath;
+    }
+    
+    // Ensure redirectUrlPath starts with a slash if it's not empty and doesn't already start with one
+    if (redirectUrlPath && !redirectUrlPath.startsWith('/')) {
+      redirectUrlPath = '/' + redirectUrlPath;
+    }
+    
+    const fullPath = `${basePath}${redirectUrlPath}`;
+    return this.navigateToPage(fullPath);
+  }
+
+  /**
+   * Refresh the current page
+   * @returns Promise<Response | null> - The main response
+   */
+  async refreshPage(): Promise<Response | null> {
+    await this.ensureConfigInitialized();
+    this.logger.info('Refreshing page');
+    return await this.page.reload({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate back in browser history
+   */
+  async goBack(): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.info('Navigating back');
+    await this.page.goBack({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Navigate forward in browser history
+   */
+  async goForward(): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.info('Navigating forward');
+    await this.page.goForward({ waitUntil: 'networkidle' });
+  }
+
+  /**
+   * Get the current URL
+   * @returns string - Current URL
+   */
+  async getCurrentUrl(): Promise<string> {
+    return this.page.url();
+  }
+
+  /**
+   * Get the page title
+   * @returns Promise<string> - Page title
+   */
+  async getPageTitle(): Promise<string> {
+    return await this.page.title();
+  }
+
+  // ====== Element Interaction Methods ======
+
+  /**
+   * Get a locator for an element
+   * @param selector - CSS or XPath selector
+   * @returns Locator - Playwright locator object
+   */
+  getLocator(selector: string): Locator {
+    return this.page.locator(selector);
+  }
+
+  /**
+   * Click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright click options
+   */
+  async click(selector: string, options?: { force?: boolean, timeout?: number, noWaitAfter?: boolean }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Clicking on element: ${selector}`);
+    await this.page.click(selector, { 
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false,
+      noWaitAfter: options?.noWaitAfter || false
+    });
+  }
+
+  /**
+   * Double click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright dblclick options
+   */
+  async doubleClick(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Double-clicking on element: ${selector}`);
+    await this.page.dblclick(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Right click on an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright click options
+   */
+  async rightClick(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Right-clicking on element: ${selector}`);
+    await this.page.click(selector, {
+      button: 'right',
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Hover over an element
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright hover options
+   */
+  async hover(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Hovering over element: ${selector}`);
+    await this.page.hover(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Type text into an input field
+   * @param selector - CSS or XPath selector
+   * @param text - Text to type
+   * @param options - Playwright fill options
+   */
+  async fill(selector: string, text: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Filling text in element: ${selector}`);
+    await this.page.fill(selector, text, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Type text character by character (simulates human typing)
+   * @param selector - CSS or XPath selector
+   * @param text - Text to type
+   * @param options - Playwright type options
+   */
+  async type(selector: string, text: string, options?: { delay?: number, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Typing text in element: ${selector}`);
+    await this.page.type(selector, text, {
+      delay: options?.delay || 100,
+      timeout: options?.timeout || this.defaultTimeout
+    });
+  }
+
+  /**
+   * Clear an input field
+   * @param selector - CSS or XPath selector
+   */
+  async clearInput(selector: string): Promise<void> {
+    this.logger.debug(`Clearing input field: ${selector}`);
+    await this.page.fill(selector, '');
+  }
+
+  /**
+   * Select an option from a dropdown
+   * @param selector - CSS or XPath selector for the select element
+   * @param value - Value to select
+   */
+  async selectOption(selector: string, value: string | string[] | { value?: string, label?: string, index?: number }): Promise<string[]> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Selecting option in dropdown: ${selector}`);
+    return await this.page.selectOption(selector, value);
+  }
+
+  /**
+   * Check a checkbox or radio button
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright check options
+   */
+  async check(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Checking checkbox/radio: ${selector}`);
+    await this.page.check(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Uncheck a checkbox
+   * @param selector - CSS or XPath selector
+   * @param options - Playwright uncheck options
+   */
+  async uncheck(selector: string, options?: { force?: boolean, timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Unchecking checkbox: ${selector}`);
+    await this.page.uncheck(selector, {
+      timeout: options?.timeout || this.defaultTimeout,
+      force: options?.force || false
+    });
+  }
+
+  /**
+   * Get text from an element
+   * @param selector - CSS or XPath selector
+   * @returns Promise<string> - Text content of the element
+   */
+  async getText(selector: string): Promise<string> {
+    this.logger.debug(`Getting text from element: ${selector}`);
+    return await this.page.locator(selector).innerText();
+  }
+
+  /**
+   * Get attribute value from an element
+   * @param selector - CSS or XPath selector
+   * @param attributeName - Name of the attribute
+   * @returns Promise<string | null> - Attribute value
+   */
+  async getAttribute(selector: string, attributeName: string): Promise<string | null> {
+    this.logger.debug(`Getting attribute "${attributeName}" from element: ${selector}`);
+    return await this.page.locator(selector).getAttribute(attributeName);
+  }
+
+  /**
+   * Get value of an input element
+   * @param selector - CSS or XPath selector
+   * @returns Promise<string> - Input value
+   */
+  async getValue(selector: string): Promise<string> {
+    this.logger.debug(`Getting value from input: ${selector}`);
+    return await this.page.inputValue(selector);
+  }
+
+  /**
+   * Upload a file
+   * @param selector - CSS or XPath selector for the file input
+   * @param filePaths - Path(s) to the file(s) to upload
+   */
+  async uploadFile(selector: string, filePaths: string | string[]): Promise<void> {
+    this.logger.debug(`Uploading file(s) to: ${selector}`);
+    await this.page.setInputFiles(selector, filePaths);
+  }
+
+  /**
+   * Press a key or key combination
+   * @param selector - CSS or XPath selector
+   * @param key - Key or key combination to press
+   */
+  async pressKey(selector: string, key: string): Promise<void> {
+    this.logger.debug(`Pressing key "${key}" on element: ${selector}`);
+    await this.page.locator(selector).press(key);
+  }
+
+  /**
+   * Drag and drop an element
+   * @param sourceSelector - CSS or XPath selector for the source element
+   * @param targetSelector - CSS or XPath selector for the target element
+   */
+  async dragAndDrop(sourceSelector: string, targetSelector: string): Promise<void> {
+    this.logger.debug(`Dragging from ${sourceSelector} to ${targetSelector}`);
+    await this.page.dragAndDrop(sourceSelector, targetSelector);
+  }
+
+  // ====== Wait Methods ======
+
+  /**
+   * Wait for an element to be visible
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   * @returns Promise<Locator> - Locator for the element
+   */
+  async waitForVisible(selector: string, timeout?: number): Promise<Locator> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for element to be visible: ${selector}`);
+    const locator = this.page.locator(selector);
+    await locator.waitFor({ state: 'visible', timeout: timeout || this.defaultTimeout });
+    return locator;
+  }
+
+  /**
+   * Wait for an element to be hidden
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   */
+  async waitForHidden(selector: string, timeout?: number): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for element to be hidden: ${selector}`);
+    await this.page.locator(selector).waitFor({ 
+      state: 'hidden', 
+      timeout: timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for an element to be enabled
+   * @param selector - CSS or XPath selector
+   * @param timeout - Timeout in ms
+   * @returns Promise<Locator> - Locator for the element
+   */
+  async waitForEnabled(selector: string, timeout?: number): Promise<Locator> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for element to be enabled: ${selector}`);
+    const locator = this.page.locator(selector);
+    await expect(locator).toBeEnabled({ timeout: timeout || this.defaultTimeout });
+    return locator;
+  }
+
+  /**
+   * Wait for element to contain specific text
+   * @param selector - CSS or XPath selector
+   * @param text - Text to wait for
+   * @param timeout - Timeout in ms
+   */
+  async waitForText(selector: string, text: string, timeout?: number): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for element ${selector} to contain text: "${text}"`);
+    await expect(this.page.locator(selector)).toContainText(text, { 
+      timeout: timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a network request to complete
+   * @param urlPattern - URL pattern to match
+   * @param options - Options for waiting
+   * @returns Promise<Request> - The matched request
+   */
+  async waitForRequest(urlPattern: string | RegExp, options?: { timeout?: number }): Promise<Request> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for request: ${urlPattern}`);
+    return await this.page.waitForRequest(urlPattern, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a network response to complete
+   * @param urlPattern - URL pattern to match
+   * @param options - Options for waiting
+   * @returns Promise<Response> - The matched response
+   */
+  async waitForResponse(urlPattern: string | RegExp, options?: { timeout?: number }): Promise<Response> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for response: ${urlPattern}`);
+    return await this.page.waitForResponse(urlPattern, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a specific load state
+   * @param state - Load state to wait for
+   * @param options - Options for waiting
+   */
+  async waitForLoadState(state: 'load' | 'domcontentloaded' | 'networkidle', options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Waiting for load state: ${state}`);
+    await this.page.waitForLoadState(state, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Wait for a specific amount of time (use sparingly)
+   * @param ms - Time to wait in milliseconds
+   */
+  async wait(ms: number): Promise<void> {
+    this.logger.debug(`Waiting for ${ms}ms`);
+    await this.page.waitForTimeout(ms);
+  }
+
+  // ====== Assertion Methods ======
+
+  /**
+   * Assert that an element is visible
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertVisible(selector: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element is visible: ${selector}`);
+    await expect(this.page.locator(selector)).toBeVisible({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is hidden
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertHidden(selector: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element is hidden: ${selector}`);
+    await expect(this.page.locator(selector)).toBeHidden({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element contains specific text
+   * @param selector - CSS or XPath selector
+   * @param text - Text to check for
+   * @param options - Assertion options
+   */
+  async assertText(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element ${selector} contains text: "${text}"`);
+    await expect(this.page.locator(selector)).toContainText(text, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element has an exact text
+   * @param selector - CSS or XPath selector
+   * @param text - Exact text to check for
+   * @param options - Assertion options
+   */
+  async assertExactText(selector: string, text: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element ${selector} has exact text: "${text}"`);
+    await expect(this.page.locator(selector)).toHaveText(text, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element has a specific attribute value
+   * @param selector - CSS or XPath selector
+   * @param attribute - Attribute name
+   * @param value - Expected attribute value
+   * @param options - Assertion options
+   */
+  async assertAttribute(selector: string, attribute: string, value: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element ${selector} has attribute ${attribute}="${value}"`);
+    await expect(this.page.locator(selector)).toHaveAttribute(attribute, value, { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is enabled
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertEnabled(selector: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element is enabled: ${selector}`);
+    await expect(this.page.locator(selector)).toBeEnabled({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that an element is disabled
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertDisabled(selector: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element is disabled: ${selector}`);
+    await expect(this.page.locator(selector)).toBeDisabled({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert that a checkbox or radio button is checked
+   * @param selector - CSS or XPath selector
+   * @param options - Assertion options
+   */
+  async assertChecked(selector: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting element is checked: ${selector}`);
+    await expect(this.page.locator(selector)).toBeChecked({ 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert URL contains a specific string
+   * @param urlSubstring - Substring to check for in the URL
+   * @param options - Assertion options
+   */
+  async assertUrlContains(urlSubstring: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting URL contains: ${urlSubstring}`);
+    await expect(this.page).toHaveURL(new RegExp(urlSubstring), { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  /**
+   * Assert page title contains a specific string
+   * @param titleSubstring - Substring to check for in the title
+   * @param options - Assertion options
+   */
+  async assertTitleContains(titleSubstring: string, options?: { timeout?: number }): Promise<void> {
+    await this.ensureConfigInitialized();
+    this.logger.debug(`Asserting title contains: ${titleSubstring}`);
+    await expect(this.page).toHaveTitle(new RegExp(titleSubstring), { 
+      timeout: options?.timeout || this.defaultTimeout 
+    });
+  }
+
+  // ====== Screenshot and Logging Methods ======
+
+  /**
+   * Take a screenshot
+   * @param name - Name for the screenshot file
+   * @returns Promise<string> - Path to the screenshot
+   */
+  async takeScreenshot(name?: string): Promise<string> {
+    const screenshotName = name || `${this.constructor.name}_screenshot`;
+    const screenshotsDir = path.join(process.cwd(), 'reports', 'screenshots');
+    
+    // Ensure the screenshots directory exists
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const filename = `${screenshotName}_${timestamp}.png`;
+    const screenshotPath = path.join(screenshotsDir, filename);
+    
+    this.logger.info(`Taking screenshot: ${screenshotPath}`);
+    await this.page.screenshot({ path: screenshotPath, fullPage: true });
+    
+    return screenshotPath;
+  }
+
+  /**
+   * Take a screenshot of a specific element
+   * @param selector - CSS or XPath selector
+   * @param name - Name for the screenshot file
+   * @returns Promise<string> - Path to the screenshot
+   */
+  async takeElementScreenshot(selector: string, name?: string): Promise<string> {
+    const screenshotName = name || `${this.constructor.name}_element`;
+    const screenshotsDir = path.join(process.cwd(), 'reports', 'screenshots');
+    
+    // Ensure the screenshots directory exists
+    if (!fs.existsSync(screenshotsDir)) {
+      fs.mkdirSync(screenshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const filename = `${screenshotName}_${timestamp}.png`;
+    const screenshotPath = path.join(screenshotsDir, filename);
+    
+    this.logger.info(`Taking element screenshot: ${screenshotPath}`);
+    await this.page.locator(selector).screenshot({ path: screenshotPath });
+    
+    return screenshotPath;
+  }
+
+  /**
+   * Get console logs
+   * @returns Promise<string[]> - Console logs
+   */
+  async getConsoleLogs(): Promise<string[]> {
+    return this.logger.getLogs();
+  }
+
+  // ====== Utility Methods ======
+
+  /**
+   * Execute JavaScript in the browser context
+   * @param script - JavaScript code to execute
+   * @param arg - Argument to pass to the script
+   * @returns Promise<any> - Result of the script execution
+   */
+  async executeScript<T>(script: string, arg?: any): Promise<T> {
+    this.logger.debug('Executing JavaScript in browser context');
+    return await this.page.evaluate(script, arg);
+  }
+
+  /**
+   * Get all cookies
+   * @returns Promise<object[]> - Array of cookies
+   */
+  async getCookies(): Promise<object[]> {
+    this.logger.debug('Getting all cookies');
+    return await this.context.cookies();
+  }
+
+  /**
+   * Set a cookie
+   * @param name - Cookie name
+   * @param value - Cookie value
+   * @param options - Cookie options
+   */
+  async setCookie(name: string, value: string, options?: { 
+    domain?: string, 
+    path?: string, 
+    expires?: number, 
+    httpOnly?: boolean, 
+    secure?: boolean,
+    sameSite?: 'Strict' | 'Lax' | 'None'
+  }): Promise<void> {
+    this.logger.debug(`Setting cookie: ${name}`);
+    await this.context.addCookies([{
+      name,
+      value,
+      domain: options?.domain || new URL(this.baseUrl).hostname,
+      path: options?.path || '/',
+      expires: options?.expires || Math.floor(Date.now() / 1000) + 3600,
+      httpOnly: options?.httpOnly || false,
+      secure: options?.secure || false,
+      sameSite: options?.sameSite || 'Lax'
+    }]);
+  }
+
+  /**
+   * Clear all cookies
+   */
+  async clearCookies(): Promise<void> {
+    this.logger.debug('Clearing all cookies');
+    await this.context.clearCookies();
+  }
+
+  /**
+   * Set localStorage item
+   * @param key - Storage key
+   * @param value - Storage value
+   */
+  async setLocalStorage(key: string, value: string): Promise<void> {
+    this.logger.debug(`Setting localStorage item: ${key}`);
+    await this.page.evaluate(([k, v]) => {
+      localStorage.setItem(k, v);
+    }, [key, value]);
+  }
+
+  /**
+   * Get localStorage item
+   * @param key - Storage key
+   * @returns Promise<string | null> - Storage value
+   */
+  async getLocalStorage(key: string): Promise<string | null> {
+    this.logger.debug(`Getting localStorage item: ${key}`);
+    return await this.page.evaluate((k) => {
+      return localStorage.getItem(k);
+    }, key);
+  }
+
+  /**
+   * Clear localStorage
+   */
+  async clearLocalStorage(): Promise<void> {
+    this.logger.debug('Clearing localStorage');
+    await this.page.evaluate(() => {
+      localStorage.clear();
+    });
+  }
+
+  /**
+   * Set sessionStorage item
+   * @param key - Storage key
+   * @param value - Storage value
+   */
+  async setSessionStorage(key: string, value: string): Promise<void> {
+    this.logger.debug(`Setting sessionStorage item: ${key}`);
+    await this.page.evaluate(([k, v]) => {
+      sessionStorage.setItem(k, v);
+    }, [key, value]);
+  }
+
+  /**
+   * Get sessionStorage item
+   * @param key - Storage key
+   * @returns Promise<string | null> - Storage value
+   */
+  async getSessionStorage(key: string): Promise<string | null> {
+    this.logger.debug(`Getting sessionStorage item: ${key}`);
+    return await this.page.evaluate((k) => {
+      return sessionStorage.getItem(k);
+    }, key);
+  }
+
+  /**
+   * Clear sessionStorage
+   */
+  async clearSessionStorage(): Promise<void> {
+    this.logger.debug('Clearing sessionStorage');
+    await this.page.evaluate(() => {
+      sessionStorage.clear();
+    });
+  }
+
+  /**
+   * Get all window handles
+   * @returns Promise<Page[]> - Array of pages
+   */
+  async getAllWindows(): Promise<Page[]> {
+    this.logger.debug('Getting all window handles');
+    return this.context.pages();
+  }
+
+  /**
+   * Switch to a specific window by index
+   * @param index - Index of the window to switch to
+   * @returns Promise<Page> - The switched to page
+   */
+  async switchToWindow(index: number): Promise<Page> {
+    this.logger.debug(`Switching to window index: ${index}`);
+    const pages = await this.context.pages();
+    if (index >= pages.length) {
+      throw new Error(`Window index ${index} is out of bounds. Only ${pages.length} windows exist.`);
+    }
+    const targetPage = pages[index];
+    await targetPage.bringToFront();
+    return targetPage;
+  }
+
+  /**
+   * Close the current window/tab
+   */
+  async closeCurrentWindow(): Promise<void> {
+    this.logger.debug('Closing current window');
+    await this.page.close();
+  }
+
+  /**
+   * Get element count
+   * @param selector - CSS or XPath selector
+   * @returns Promise<number> - Number of matching elements
+   */
+  async getElementCount(selector: string): Promise<number> {
+    this.logger.debug(`Getting element count for: ${selector}`);
+    return await this.page.locator(selector).count();
+  }
+
+  /**
+   * Check if element exists
+   * @param selector - CSS or XPath selector
+   * @returns Promise<boolean> - Whether the element exists
+   */
+  async elementExists(selector: string): Promise<boolean> {
+    this.logger.debug(`Checking if element exists: ${selector}`);
+    const count = await this.getElementCount(selector);
+    return count > 0;
+  }
+
+  /**
+   * Wait for a function to return true
+   * @param predicate - Function that returns a boolean
+   * @param options - Options for waiting
+   * @returns Promise<boolean> - Whether the condition was met
+   */
+  async waitForCondition(
+    predicate: () => Promise<boolean>, 
+    options?: { timeout?: number, pollingInterval?: number }
+  ): Promise<boolean> {
+    await this.ensureConfigInitialized();
+    const timeout = options?.timeout || this.defaultTimeout;
+    const pollingInterval = options?.pollingInterval || 100;
+    this.logger.debug(`Waiting for condition with timeout: ${timeout}ms`);
+    
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+      if (await predicate()) {
+        return true;
+      }
+      await this.page.waitForTimeout(pollingInterval);
+    }
+    return false;
+  }
+
+  /**
+   * Retry an action until it succeeds
+   * @param action - Function to retry
+   * @param options - Retry options
+   * @returns Promise<T> - Result of the action
+   */
+  async retry<T>(
+    action: () => Promise<T>, 
+    options?: { 
+      maxAttempts?: number, 
+      interval?: number, 
+      timeout?: number,
+      onError?: (error: Error, attempt: number) => void 
+    }
+  ): Promise<T> {
+    await this.ensureConfigInitialized();
+    const maxAttempts = options?.maxAttempts || 3;
+    const interval = options?.interval || 1000;
+    const timeout = options?.timeout || this.defaultTimeout;
+    
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-        const screenshotPath = `./reports/screenshots/${screenshotName}.png`;
-        const screenshot = await this.page.screenshot({ 
-          path: screenshotPath,
-          fullPage: true 
+        this.logger.debug(`Retry attempt ${attempt}/${maxAttempts}`);
+        
+        // Create a promise that times out
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`Timeout of ${timeout}ms exceeded`)), timeout);
         });
-        this.logger.info(`Screenshot captured: ${screenshotPath}`);
-        if (this.attach) {
-          this.attach(screenshot, 'image/png');
+        
+        // Race the action against the timeout
+        return await Promise.race([action(), timeoutPromise]) as T;
+      } catch (error: unknown) {
+        const typedError = error instanceof Error ? error : new Error(String(error));
+        lastError = typedError;
+        this.logger.debug(`Attempt ${attempt} failed: ${typedError.message}`);
+        
+        if (options?.onError) {
+          options.onError(typedError, attempt);
         }
-      } catch (error: unknown) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        this.logger.error(`Failed to take screenshot: ${errorMessage}`);
+        
+        if (attempt < maxAttempts) {
+          await this.page.waitForTimeout(interval);
+        }
       }
     }
+    
+    throw lastError || new Error('Retry failed for unknown reason');
   }
-  
-  // Generic cleanup for browser resources
-  if (this.context) {
-    try {
-      // Close context (and associated page)
-      if (this.logger) {
-        this.logger.info('Closing browser context');
+
+  // ====== Private Methods ======
+
+  /**
+   * Set up listeners for network events
+   * @private
+   */
+  private setupNetworkListeners(): void {
+    // Listen for all requests
+    this.page.on('request', request => {
+      this.logger.debug(`>> Request: ${request.method()} ${request.url()}`);
+    });
+
+    // Listen for all responses
+    this.page.on('response', response => {
+      this.logger.debug(`<< Response: ${response.status()} ${response.url()}`);
+    });
+
+    // Listen for console messages
+    this.page.on('console', msg => {
+      const type = msg.type();
+      const text = msg.text();
+      
+      switch (type) {
+        case 'error':
+          this.logger.error(`Console Error: ${text}`);
+          break;
+        case 'warning':
+          this.logger.warn(`Console Warning: ${text}`);
+          break;
+        default:
+          this.logger.debug(`Console ${type}: ${text}`);
       }
-      await browserManager.closeContext(this.context);
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      if (this.logger) {
-        this.logger.error(`Error closing browser context: ${errorMessage}`);
-      }
-    }
+    });
+
+    // Listen for page errors
+    this.page.on('pageerror', error => {
+      this.logger.error(`Page Error: ${error.message}`);
+    });
+
+    // Listen for dialog events (alerts, confirms, prompts)
+    this.page.on('dialog', dialog => {
+      this.logger.info(`Dialog (${dialog.type()}): ${dialog.message()}`);
+      // Auto-dismiss dialogs to prevent test hanging
+      dialog.dismiss().catch(e => {
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        this.logger.error(`Failed to dismiss dialog: ${errorMessage}`);
+      });
+    });
   }
-  
-  // Add logs to Cucumber report
-  if (this.logger && this.attach) {
-    const logs = this.logger.getLogs();
-    if (logs.length > 0) {
-      try {
-        this.attach(logs.join('\n'), 'text/plain');
-      } catch (error: unknown) {
-        console.error('Error attaching logs:', error);
-      }
-    }
-  }
-  
-  // Explicitly clean up references to help garbage collection
-  delete this.page;
-  delete this.context;
-});
+}
