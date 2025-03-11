@@ -1,38 +1,46 @@
-// File: src/scripts/generate-report.js
-const reporter = require('cucumber-html-reporter');
-const fs = require('fs');
-const path = require('path');
-
-// Check if the JSON report exists
-const jsonReportPath = path.join(__dirname, '../../reports/json/cucumber-report.json');
-if (!fs.existsSync(jsonReportPath)) {
-  console.error(`Error: JSON report not found at ${jsonReportPath}`);
-  console.error('Make sure to run tests first with the --format json:reports/json/cucumber-report.json option.');
-  process.exit(1);
-}
-
-// Options for the reporter
-const options = {
-  theme: 'bootstrap',
-  jsonFile: jsonReportPath,
-  output: path.join(__dirname, '../../reports/html/cucumber-report.html'),
-  reportSuiteAsScenarios: true,
-  scenarioTimestamp: true,
-  launchReport: false,
-  metadata: {
-    "App Version": "1.0.0",
-    "Test Environment": process.env.NODE_ENV || 'default',
-    "Browser": "Chrome",
-    "Platform": process.platform,
-    "Parallel": "Scenarios",
-    "Executed": "Remote"
+// File: cucumber.js
+module.exports = {
+  default: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/cucumber-report.html',
+      'json:reports/json/cucumber-report.json'
+    ],
+    publishQuiet: true
+  },
+  web: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/web-report.html',
+      'json:reports/json/web-report.json'
+    ],
+    tags: '@web',
+    publishQuiet: true
+  },
+  api: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'html:reports/html/api-report.html',
+      'json:reports/json/api-report.json'
+    ],
+    tags: '@api',
+    publishQuiet: true
+  },
+  // Use this profile for running tests in CI environments
+  ci: {
+    requireModule: ['ts-node/register'],
+    require: ['src/**/*.ts'],
+    format: [
+      'progress-bar',
+      'json:reports/json/cucumber-report.json'
+    ],
+    retry: 1, // Retry failed tests once
+    publishQuiet: true
   }
 };
-
-// Generate the report
-reporter.generate(options);
-
-console.log(`
-Report generated successfully at:
-${options.output}
-`);
