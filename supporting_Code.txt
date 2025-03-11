@@ -1,46 +1,187 @@
-// File: cucumber.js
-module.exports = {
-  default: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'html:reports/html/cucumber-report.html',
-      'json:reports/json/cucumber-report.json'
-    ],
-    publishQuiet: true
-  },
-  web: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'html:reports/html/web-report.html',
-      'json:reports/json/web-report.json'
-    ],
-    tags: '@web',
-    publishQuiet: true
-  },
-  api: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'html:reports/html/api-report.html',
-      'json:reports/json/api-report.json'
-    ],
-    tags: '@api',
-    publishQuiet: true
-  },
-  // Use this profile for running tests in CI environments
-  ci: {
-    requireModule: ['ts-node/register'],
-    require: ['src/**/*.ts'],
-    format: [
-      'progress-bar',
-      'json:reports/json/cucumber-report.json'
-    ],
-    retry: 1, // Retry failed tests once
-    publishQuiet: true
+// File: src/framework/browser-manager.ts
+
+import { Browser, BrowserContext, chromium } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
+
+/**
+ * Singleton Browser Manager to handle browser lifecycle
+ * This prevents multiple browser instances from being created
+ */
+export class BrowserManager {
+  private static instance: BrowserManager;
+  private browser: Browser | null = null;
+  private contexts: BrowserContext[] = [];
+  private logger: Logger;
+  private config: ConfigManager;
+  private isInitializing: boolean = false;
+  private initPromise: Promise<void> | undefined;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.logger = new Logger('BrowserManager');
+    this.config = ConfigManager.getInstance();
   }
-};
+
+  /**
+   * Get singleton instance
+   * @returns BrowserManager instance
+   */
+  public static getInstance(): BrowserManager {
+    if (!BrowserManager.instance) {
+      BrowserManager.instance = new BrowserManager();
+    }
+    return BrowserManager.instance;
+  }
+
+  /**
+   * Initialize browser if not already initialized
+   * Uses a promise to prevent multiple initializations
+   */
+  public async initialize(): Promise<void> {
+    if (this.browser) {
+      return;
+    }
+
+    if (this.isInitializing && this.initPromise) {
+      // If already initializing, wait for it to complete
+      await this.initPromise;
+      return;
+    }
+
+    this.isInitializing = true;
+    this.initPromise = this.initializeBrowser();
+    await this.initPromise;
+    this.isInitializing = false;
+  }
+
+  /**
+   * Internal method to initialize the browser
+   */
+  private async initializeBrowser(): Promise<void> {
+    try {
+      this.logger.info('Launching browser');
+      
+      const headless = this.config.getBoolean('HEADLESS', true);
+      const slowMo = this.config.getNumber('SLOW_MO', 0);
+      
+      // Parse browser args from env variable (comma-separated string)
+      const browserArgs = this.config.getString('BROWSER_ARGS', '--disable-gpu,--no-sandbox')
+        .split(',')
+        .map(arg => arg.trim())
+        .filter(arg => arg.length > 0);
+      
+      this.browser = await chromium.launch({
+        headless,
+        slowMo,
+        args: browserArgs
+      });
+      
+      this.logger.info('Browser launched successfully');
+    } catch (error) {
+      this.logger.error(`Failed to launch browser: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Create a new browser context
+   * @param options - Context options
+   * @returns Promise<BrowserContext> - New context
+   */
+  public async createContext(options: any = {}): Promise<BrowserContext> {
+    await this.initialize();
+    
+    if (!this.browser) {
+      throw new Error('Browser not initialized');
+    }
+    
+    const defaultOptions = {
+      viewport: { width: 1280, height: 720 },
+      recordVideo: this.config.getBoolean('VIDEO_RECORD', false) 
+        ? { 
+            dir: 'videos/',
+            size: { 
+              width: this.config.getNumber('VIDEO_WIDTH', 1280), 
+              height: this.config.getNumber('VIDEO_HEIGHT', 720) 
+            } 
+          } 
+        : undefined,
+      ignoreHTTPSErrors: this.config.getBoolean('IGNORE_HTTPS_ERRORS', true)
+    };
+    
+    const mergedOptions = { ...defaultOptions, ...options };
+    const context = await this.browser.newContext(mergedOptions);
+    
+    // Store context for cleanup
+    this.contexts.push(context);
+    
+    return context;
+  }
+
+  /**
+   * Close a specific browser context
+   * @param context - Context to close
+   */
+  public async closeContext(context: BrowserContext): Promise<void> {
+    try {
+      await context.close();
+      this.contexts = this.contexts.filter(ctx => ctx !== context);
+    } catch (error) {
+      this.logger.error(`Error closing context: ${error}`);
+    }
+  }
+
+  /**
+   * Close all contexts
+   */
+  public async closeAllContexts(): Promise<void> {
+    for (const context of [...this.contexts]) {
+      await this.closeContext(context);
+    }
+    this.contexts = [];
+  }
+
+  /**
+   * Get the browser instance
+   * @returns Browser | null - Current browser instance
+   */
+  public getBrowser(): Browser | null {
+    return this.browser;
+  }
+
+  /**
+   * Check if the browser is initialized
+   * @returns boolean - Whether browser is initialized
+   */
+  public isBrowserInitialized(): boolean {
+    return this.browser !== null;
+  }
+
+  /**
+   * Close the browser and all contexts
+   */
+  public async closeBrowser(): Promise<void> {
+    if (!this.browser) {
+      return;
+    }
+    
+    try {
+      // Close all contexts first
+      await this.closeAllContexts();
+      
+      // Close the browser
+      this.logger.info('Closing browser');
+      await this.browser.close();
+      this.browser = null;
+      this.logger.info('Browser closed successfully');
+    } catch (error) {
+      this.logger.error(`Error closing browser: ${error}`);
+      // Reset state even if there was an error
+      this.browser = null;
+      this.contexts = [];
+    }
+  }
+}
