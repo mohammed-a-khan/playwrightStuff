@@ -1,42 +1,557 @@
+// File: src/framework/browser-manager.ts
+
+import { Browser, BrowserContext, chromium } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
+
 /**
- * Get the fully constructed base URL with returnUrl query parameter
- * @param defaultBaseUrl - Default base URL if not found in config
- * @param defaultBasePath - Default base path if not found in config
- * @param defaultRedirectPath - Default redirect URL path if not found in config
- * @returns Full URL string with returnUrl query parameter
+ * Singleton Browser Manager to handle browser lifecycle
  */
-public getBaseUrl(
-  defaultBaseUrl: string = 'https://example.com',
-  defaultBasePath: string = '/somepath.aspx',
-  defaultRedirectPath: string = ''
-): string {
-  const baseUrl = this.getString('BASE_URL', defaultBaseUrl);
-  const basePath = this.getString('BASE_PATH', defaultBasePath);
-  const redirectUrlPath = this.getString('REDIRECT_URL_PATH', defaultRedirectPath);
-  
-  // Ensure base path has leading slash if needed
-  const formattedBasePath = basePath && !basePath.startsWith('/') ? `/${basePath}` : basePath;
-  
-  // Ensure redirect path has leading slash if needed for the returnUrl parameter
-  const formattedRedirectPath = redirectUrlPath && !redirectUrlPath.startsWith('/') ? 
-    `/${redirectUrlPath}` : redirectUrlPath;
-  
-  // Create base URL with the base path
-  const urlWithBasePath = new URL(formattedBasePath, baseUrl);
-  
-  // Add the returnUrl query parameter if redirect path exists
-  if (formattedRedirectPath) {
-    urlWithBasePath.searchParams.set('returnUrl', formattedRedirectPath);
+export class BrowserManager {
+  private static instance: BrowserManager;
+  private browser: Browser | null = null;
+  private contexts: BrowserContext[] = [];
+  private logger: Logger;
+  private config: ConfigManager;
+  private isInitializing: boolean = false;
+  private initPromise: Promise<void> | null = null;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.logger = new Logger('BrowserManager');
+    this.config = ConfigManager.getInstance();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns BrowserManager instance
+   */
+  public static getInstance(): BrowserManager {
+    if (!BrowserManager.instance) {
+      BrowserManager.instance = new BrowserManager();
+    }
+    return BrowserManager.instance;
+  }
+
+  /**
+   * Initialize browser if not already initialized
+   * Uses a promise to prevent multiple initializations
+   */
+  public async initialize(): Promise<void> {
+    // If browser already exists, return immediately
+    if (this.browser) {
+      return;
+    }
+
+    // If initialization is in progress, wait for it
+    if (this.isInitializing && this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    // Start initialization
+    this.isInitializing = true;
+    try {
+      this.initPromise = this.initializeBrowser();
+      await this.initPromise;
+    } finally {
+      this.isInitializing = false;
+    }
+  }
+
+  /**
+   * Internal method to initialize the browser
+   */
+  private async initializeBrowser(): Promise<void> {
+    this.logger.info('Launching browser');
+    
+    try {
+      const headless = this.config.getBoolean('HEADLESS', true);
+      const slowMo = this.config.getNumber('SLOW_MO', 0);
+      
+      // Parse browser args from env variable
+      const browserArgs = this.config.getString('BROWSER_ARGS', '--disable-gpu,--no-sandbox')
+        .split(',')
+        .map(arg => arg.trim())
+        .filter(arg => arg.length > 0);
+      
+      this.browser = await chromium.launch({
+        headless,
+        slowMo,
+        args: browserArgs
+      });
+      
+      this.logger.info('Browser launched successfully');
+    } catch (error) {
+      this.logger.error(`Failed to launch browser: ${error}`);
+      this.isInitializing = false;
+      throw error;
+    }
+  }
+
+  // Rest of the methods...
+}
+
+// File: src/framework/utils/config-manager.ts
+import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+
+/**
+ * Configuration Manager for handling environment-specific configurations
+ * Implements singleton pattern to ensure configuration is loaded only once
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private config: Record<string, any> = {};
+  private initialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    // Configuration will be loaded lazily when needed
+  }
+
+  /**
+   * Get singleton instance
+   * @returns ConfigManager instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
+    }
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Load configuration from .env files and process.env
+   * @private
+   */
+  private async loadConfiguration(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+
+    this.initializationPromise = this._loadConfig();
+    await this.initializationPromise;
+  }
+
+  private async _loadConfig(): Promise<void> {
+    try {
+      console.log('Loading configuration...');
+      // Load base .env file first (if exists)
+      const baseEnvPath = path.resolve(process.cwd(), '.env');
+      if (fs.existsSync(baseEnvPath)) {
+        console.log(`Loading base environment from: ${baseEnvPath}`);
+        dotenv.config({ path: baseEnvPath });
+      }
+
+      // Load environment-specific .env file if specified
+      const env = process.env.NODE_ENV || 'development';
+      const envSpecificPath = path.resolve(process.cwd(), `.env.${env}`);
+      
+      if (fs.existsSync(envSpecificPath)) {
+        console.log(`Loading environment-specific config from: ${envSpecificPath}`);
+        // Override with environment-specific values
+        dotenv.config({ path: envSpecificPath, override: true });
+      }
+
+      // Copy all environment variables to our config object
+      this.config = { ...process.env };
+      
+      this.initialized = true;
+      console.log('Configuration loaded successfully');
+    } catch (error) {
+      console.error(`Error loading environment configuration: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Get configuration value with type conversion
+   * @param key - Configuration key
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value with appropriate type
+   */
+  public async get<T>(key: string, defaultValue?: T): Promise<T> {
+    await this.loadConfiguration();
+    
+    // Check if the key exists in our config
+    const value = this.config[key];
+    
+    if (value === undefined) {
+      return defaultValue as T;
+    }
+    
+    // Try to convert the string value to the appropriate type
+    if (defaultValue !== undefined) {
+      const defaultType = typeof defaultValue;
+      
+      if (defaultType === 'number') {
+        const numberValue = Number(value);
+        return (isNaN(numberValue) ? defaultValue : numberValue) as T;
+      } else if (defaultType === 'boolean') {
+        if (value.toLowerCase() === 'true') return true as unknown as T;
+        if (value.toLowerCase() === 'false') return false as unknown as T;
+        return defaultValue;
+      } else if (defaultType === 'object' && Array.isArray(defaultValue)) {
+        try {
+          // Try to parse as JSON if it looks like an array
+          if (value.startsWith('[') && value.endsWith(']')) {
+            return JSON.parse(value) as T;
+          }
+          // Otherwise split by comma (common for env vars)
+          return value.split(',').map(item => item.trim()) as unknown as T;
+        } catch (e) {
+          return defaultValue;
+        }
+      } else if (defaultType === 'object') {
+        try {
+          return JSON.parse(value) as T;
+        } catch (e) {
+          return defaultValue;
+        }
+      }
+    }
+    
+    // If no defaultValue or no special conversion needed, return as is
+    return value as unknown as T;
+  }
+
+  /**
+   * Get string value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getString(key: string, defaultValue: string = ''): Promise<string> {
+    return this.get<string>(key, defaultValue);
+  }
+
+  /**
+   * Get number value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getNumber(key: string, defaultValue: number = 0): Promise<number> {
+    return this.get<number>(key, defaultValue);
+  }
+
+  /**
+   * Get boolean value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getBoolean(key: string, defaultValue: boolean = false): Promise<boolean> {
+    return this.get<boolean>(key, defaultValue);
+  }
+
+  /**
+   * Get the fully constructed base URL with returnUrl query parameter
+   * @param defaultBaseUrl - Default base URL if not found in config
+   * @param defaultBasePath - Default base path if not found in config
+   * @param defaultRedirectPath - Default redirect URL path if not found in config
+   * @returns Full URL string with returnUrl query parameter
+   */
+  public async getBaseUrl(
+    defaultBaseUrl: string = 'https://example.com',
+    defaultBasePath: string = '/somepath.aspx',
+    defaultRedirectPath: string = ''
+  ): Promise<string> {
+    const baseUrl = await this.getString('BASE_URL', defaultBaseUrl);
+    const basePath = await this.getString('BASE_PATH', defaultBasePath);
+    const redirectUrlPath = await this.getString('REDIRECT_URL_PATH', defaultRedirectPath);
+    
+    // Ensure base path has leading slash if needed
+    const formattedBasePath = basePath && !basePath.startsWith('/') ? `/${basePath}` : basePath;
+    
+    // Ensure redirect path has leading slash if needed for the returnUrl parameter
+    const formattedRedirectPath = redirectUrlPath && !redirectUrlPath.startsWith('/') ? 
+      `/${redirectUrlPath}` : redirectUrlPath;
+    
+    // Create base URL with the base path
+    const urlWithBasePath = new URL(formattedBasePath, baseUrl);
+    
+    // Add the returnUrl query parameter if redirect path exists
+    if (formattedRedirectPath) {
+      urlWithBasePath.searchParams.set('returnUrl', formattedRedirectPath);
+    }
+    
+    return urlWithBasePath.toString();
   }
   
-  return urlWithBasePath.toString();
+  /**
+   * Get default timeout from configuration
+   * @param defaultValue - Default value to use if not found in config
+   * @returns Timeout in milliseconds
+   */
+  public async getDefaultTimeout(defaultValue: number = 30000): Promise<number> {
+    return this.getNumber('DEFAULT_TIMEOUT', defaultValue);
+  }
+}
+
+//
+API Example with Proxy, Auth Token and Certificate
+// File: src/api/secure-api-client.ts
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import { AxiosResponse, AxiosRequestConfig } from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as https from 'https';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+
+interface Product {
+  id: number;
+  name: string;
+  price: number;
+  category: string;
+  description: string;
+}
+
+interface ProductListResponse {
+  items: Product[];
+  totalCount: number;
+  pageSize: number;
+  pageNumber: number;
 }
 
 /**
- * Get default timeout from configuration
- * @param defaultValue - Default value to use if not found in config
- * @returns Timeout in milliseconds
+ * Secure API Client with proxy settings, auth token and client certificate
  */
-public getDefaultTimeout(defaultValue: number = 30000): number {
-  return this.getNumber('DEFAULT_TIMEOUT', defaultValue);
+export class SecureApiClient extends BaseApiClient {
+  private authToken: string | null = null;
+  private readonly proxyUrl: string;
+  private readonly certPath: string;
+  private readonly keyPath: string;
+  private readonly caPath: string;
+
+  /**
+   * Constructor for the SecureApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   */
+  constructor(apiBaseUrl?: string) {
+    super(apiBaseUrl);
+    
+    // Load proxy and certificate settings from config
+    this.proxyUrl = this.config.getString('PROXY_URL', '');
+    this.certPath = this.config.getString('CLIENT_CERT_PATH', '');
+    this.keyPath = this.config.getString('CLIENT_KEY_PATH', '');
+    this.caPath = this.config.getString('CA_CERT_PATH', '');
+  }
+
+  /**
+   * Create HTTPS agent with certificate configuration
+   * @returns HTTPS agent with proper certificates
+   */
+  private createHttpsAgent(): https.Agent {
+    // Create HTTPS agent with certificates
+    const httpsOptions: https.AgentOptions = {
+      rejectUnauthorized: true, // Verify server certificate
+    };
+
+    // Add client certificate and key if available
+    if (this.certPath && fs.existsSync(this.certPath) && 
+        this.keyPath && fs.existsSync(this.keyPath)) {
+      httpsOptions.cert = fs.readFileSync(this.certPath);
+      httpsOptions.key = fs.readFileSync(this.keyPath);
+      this.logger.info('Using client certificate for API requests');
+    }
+
+    // Add CA certificate if available
+    if (this.caPath && fs.existsSync(this.caPath)) {
+      httpsOptions.ca = fs.readFileSync(this.caPath);
+      this.logger.info('Using custom CA certificate for API requests');
+    }
+
+    // Add proxy agent if configured
+    if (this.proxyUrl) {
+      this.logger.info(`Using proxy for API requests: ${this.proxyUrl}`);
+      return new HttpsProxyAgent(this.proxyUrl) as unknown as https.Agent;
+    }
+
+    return new https.Agent(httpsOptions);
+  }
+
+  /**
+   * Create common request configuration with auth and certificates
+   * @param options - Additional API request options
+   * @returns Axios request configuration
+   */
+  private async createRequestConfig(options?: ApiRequestOptions): Promise<AxiosRequestConfig> {
+    // Get auth token if not already available
+    if (!this.authToken) {
+      this.authToken = await this.getAuthToken();
+    }
+
+    // Prepare headers with auth token
+    const headers = { 
+      ...this.defaultHeaders,
+      ...options?.headers
+    };
+
+    if (this.authToken) {
+      headers.Authorization = `Bearer ${this.authToken}`;
+    }
+
+    // Create HTTPS agent with certificates
+    const httpsAgent = this.createHttpsAgent();
+
+    // Return request configuration
+    return {
+      headers,
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      httpsAgent
+    };
+  }
+
+  /**
+   * Get products with filtering
+   * @param category - Filter by category
+   * @param pageSize - Number of items per page
+   * @param pageNumber - Page number (0-based)
+   * @returns Promise with product list response
+   */
+  async getProducts(category?: string, pageSize: number = 20, pageNumber: number = 0): Promise<ProductListResponse> {
+    // Prepare request parameters
+    const params: Record<string, any> = {
+      pageSize,
+      pageNumber
+    };
+
+    if (category) {
+      params.category = category;
+    }
+
+    // Get common request config
+    const config = await this.createRequestConfig({ params });
+    
+    // Make the request
+    const response = await this.get<ProductListResponse>('/api/products', { 
+      ...config,
+      params
+    });
+
+    return response.data;
+  }
+
+  /**
+   * Get a single product by ID
+   * @param id - Product ID
+   * @returns Promise with product data
+   */
+  async getProduct(id: number): Promise<Product> {
+    // Get common request config
+    const config = await this.createRequestConfig();
+    
+    // Make the request
+    const response = await this.get<Product>(`/api/products/${id}`, config);
+    
+    return response.data;
+  }
+
+  /**
+   * Update a product
+   * @param id - Product ID
+   * @param data - Product data to update
+   * @returns Promise with updated product
+   */
+  async updateProduct(id: number, data: Partial<Product>): Promise<Product> {
+    // Get common request config
+    const config = await this.createRequestConfig();
+    
+    // Make the request
+    const response = await this.put<Product>(`/api/products/${id}`, data, config);
+    
+    return response.data;
+  }
+
+  /**
+   * Get authentication token
+   * @returns Promise with auth token
+   */
+  async getAuthToken(): Promise<string> {
+    const username = this.config.getString('API_USERNAME', '');
+    const password = this.config.getString('API_PASSWORD', '');
+    
+    if (!username || !password) {
+      throw new Error('API credentials not configured');
+    }
+    
+    this.logger.info('Getting auth token from API');
+    
+    // Create HTTPS agent with certificates
+    const httpsAgent = this.createHttpsAgent();
+    
+    // Make auth request
+    const response = await this.post<{token: string}>('/api/auth/token', {
+      username,
+      password
+    }, {
+      headers: this.defaultHeaders,
+      httpsAgent
+    });
+    
+    if (response.data && response.data.token) {
+      this.logger.info('Successfully retrieved auth token');
+      return response.data.token;
+    }
+    
+    throw new Error('Failed to get authentication token');
+  }
 }
+
+//Usage example
+// File: src/example-usage.ts
+import { SecureApiClient } from './api/secure-api-client';
+
+async function exampleApiUsage() {
+  const apiClient = new SecureApiClient('https://api.example.com');
+  
+  try {
+    // Get all products in "electronics" category
+    const productList = await apiClient.getProducts('electronics');
+    console.log(`Found ${productList.totalCount} products in electronics category`);
+    
+    // Get a single product
+    const product = await apiClient.getProduct(123);
+    console.log(`Retrieved product: ${product.name}`);
+    
+    // Update product price
+    const updatedProduct = await apiClient.updateProduct(123, {
+      price: 199.99,
+      description: 'Updated product description'
+    });
+    
+    console.log(`Updated product: ${updatedProduct.name} - New price: ${updatedProduct.price}`);
+    
+  } catch (error) {
+    console.error('Error in API operations:', error);
+  }
+}
+
+exampleApiUsage();
+
+The key improvements made are:
+
+Fixed the BrowserManager singleton pattern to properly avoid launching multiple browsers
+Made ConfigManager async with proper promise handling
+Added the requested getBaseUrl method with returnUrl parameter
+Created a complete API example with:
+
+Proxy support
+Client certificate authentication
+Auth token management
+GET and PUT operations
+
+
+
+These changes should resolve the issue with multiple browsers launching and provide the API example you requested.
