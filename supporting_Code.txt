@@ -16,24 +16,6 @@ export interface ApiRequestOptions {
 }
 
 /**
- * Extended AxiosRequestConfig to include metadata
- */
-interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
-  metadata?: {
-    startTime?: number;
-    endTime?: number;
-    [key: string]: any;
-  };
-}
-
-/**
- * Extended AxiosResponse to include our extended config
- */
-interface ExtendedAxiosResponse<T = any, D = any> extends AxiosResponse<T, D> {
-  config: ExtendedAxiosRequestConfig;
-}
-
-/**
  * Base API client for all API interactions
  */
 export class BaseApiClient {
@@ -69,11 +51,11 @@ export class BaseApiClient {
    * @param options - Request options
    * @returns Promise<AxiosResponse> - API response
    */
-  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making GET request to: ${url}`);
     
-    const config: ExtendedAxiosRequestConfig = {
+    const config: AxiosRequestConfig = {
       headers: { ...this.defaultHeaders, ...options?.headers },
       params: options?.params || {},
       timeout: options?.timeout || this.defaultTimeout,
@@ -81,15 +63,17 @@ export class BaseApiClient {
     };
 
     try {
-      // Add request timing metadata
-      config.metadata = { startTime: Date.now() };
+      // Create a timestamp for request timing
+      const startTime = Date.now();
       
-      const response = await axios.get(url, config) as ExtendedAxiosResponse;
+      const response = await axios.get<T>(url, config);
       
-      // Add response timing metadata
-      if (response.config.metadata) {
-        response.config.metadata.endTime = Date.now();
-      }
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
       
       this.logResponse(response);
       return response;
@@ -104,13 +88,13 @@ export class BaseApiClient {
    * @param endpoint - API endpoint
    * @param data - Request body
    * @param options - Request options
-   * @returns Promise<ExtendedAxiosResponse> - API response
+   * @returns Promise<AxiosResponse> - API response
    */
-  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making POST request to: ${url}`);
     
-    const config: ExtendedAxiosRequestConfig = {
+    const config: AxiosRequestConfig = {
       headers: { ...this.defaultHeaders, ...options?.headers },
       params: options?.params || {},
       timeout: options?.timeout || this.defaultTimeout,
@@ -118,15 +102,17 @@ export class BaseApiClient {
     };
 
     try {
-      // Add request timing metadata
-      config.metadata = { startTime: Date.now() };
+      // Create a timestamp for request timing
+      const startTime = Date.now();
       
-      const response = await axios.post(url, data || {}, config) as ExtendedAxiosResponse;
+      const response = await axios.post<T>(url, data || {}, config);
       
-      // Add response timing metadata
-      if (response.config.metadata) {
-        response.config.metadata.endTime = Date.now();
-      }
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
       
       this.logResponse(response);
       return response;
@@ -141,13 +127,13 @@ export class BaseApiClient {
    * @param endpoint - API endpoint
    * @param data - Request body
    * @param options - Request options
-   * @returns Promise<ExtendedAxiosResponse> - API response
+   * @returns Promise<AxiosResponse> - API response
    */
-  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making PUT request to: ${url}`);
     
-    const config: ExtendedAxiosRequestConfig = {
+    const config: AxiosRequestConfig = {
       headers: { ...this.defaultHeaders, ...options?.headers },
       params: options?.params || {},
       timeout: options?.timeout || this.defaultTimeout,
@@ -155,15 +141,17 @@ export class BaseApiClient {
     };
 
     try {
-      // Add request timing metadata
-      config.metadata = { startTime: Date.now() };
+      // Create a timestamp for request timing
+      const startTime = Date.now();
       
-      const response = await axios.put(url, data || {}, config) as ExtendedAxiosResponse;
+      const response = await axios.put<T>(url, data || {}, config);
       
-      // Add response timing metadata
-      if (response.config.metadata) {
-        response.config.metadata.endTime = Date.now();
-      }
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
       
       this.logResponse(response);
       return response;
@@ -178,13 +166,13 @@ export class BaseApiClient {
    * @param endpoint - API endpoint
    * @param data - Request body
    * @param options - Request options
-   * @returns Promise<ExtendedAxiosResponse> - API response
+   * @returns Promise<AxiosResponse> - API response
    */
-  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making PATCH request to: ${url}`);
     
-    const config: ExtendedAxiosRequestConfig = {
+    const config: AxiosRequestConfig = {
       headers: { ...this.defaultHeaders, ...options?.headers },
       params: options?.params || {},
       timeout: options?.timeout || this.defaultTimeout,
@@ -192,15 +180,17 @@ export class BaseApiClient {
     };
 
     try {
-      // Add request timing metadata
-      config.metadata = { startTime: Date.now() };
+      // Create a timestamp for request timing
+      const startTime = Date.now();
       
-      const response = await axios.patch(url, data || {}, config) as ExtendedAxiosResponse;
+      const response = await axios.patch<T>(url, data || {}, config);
       
-      // Add response timing metadata
-      if (response.config.metadata) {
-        response.config.metadata.endTime = Date.now();
-      }
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
       
       this.logResponse(response);
       return response;
@@ -214,13 +204,13 @@ export class BaseApiClient {
    * Make a DELETE request
    * @param endpoint - API endpoint
    * @param options - Request options
-   * @returns Promise<ExtendedAxiosResponse> - API response
+   * @returns Promise<AxiosResponse> - API response
    */
-  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making DELETE request to: ${url}`);
     
-    const config: ExtendedAxiosRequestConfig = {
+    const config: AxiosRequestConfig = {
       headers: { ...this.defaultHeaders, ...options?.headers },
       params: options?.params || {},
       data: options?.data || {},
@@ -229,15 +219,17 @@ export class BaseApiClient {
     };
 
     try {
-      // Add request timing metadata
-      config.metadata = { startTime: Date.now() };
+      // Create a timestamp for request timing
+      const startTime = Date.now();
       
-      const response = await axios.delete(url, config) as ExtendedAxiosResponse;
+      const response = await axios.delete<T>(url, config);
       
-      // Add response timing metadata
-      if (response.config.metadata) {
-        response.config.metadata.endTime = Date.now();
-      }
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
       
       this.logResponse(response);
       return response;
@@ -284,9 +276,9 @@ export class BaseApiClient {
    * @param response - Axios response
    * @param maxTime - Maximum acceptable response time in ms
    */
-  assertResponseTime<T = any>(response: ExtendedAxiosResponse<T>, maxTime: number): void {
-    if (response.config.metadata && response.config.metadata.endTime && response.config.metadata.startTime) {
-      const duration = response.config.metadata.endTime - response.config.metadata.startTime;
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    const duration = (response as any)._duration;
+    if (duration !== undefined) {
       this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
       expect(duration).toBeLessThanOrEqual(maxTime);
     } else {
@@ -315,16 +307,16 @@ export class BaseApiClient {
    * Retry a request until it succeeds or max attempts reached
    * @param requestFn - Function to retry
    * @param options - Retry options
-   * @returns Promise<ExtendedAxiosResponse> - API response
+   * @returns Promise<AxiosResponse> - API response
    */
   async retryRequest<T = any>(
-    requestFn: () => Promise<ExtendedAxiosResponse<T>>,
+    requestFn: () => Promise<AxiosResponse<T>>,
     options?: {
       maxAttempts?: number;
       retryDelay?: number;
       retryCondition?: (error: any) => boolean;
     }
-  ): Promise<ExtendedAxiosResponse<T>> {
+  ): Promise<AxiosResponse<T>> {
     const maxAttempts = options?.maxAttempts || 3;
     const retryDelay = options?.retryDelay || 1000;
     const retryCondition = options?.retryCondition || (() => true);
@@ -355,15 +347,9 @@ export class BaseApiClient {
    * @private
    * @param response - Axios response
    */
-  private logResponse<T = any>(response: ExtendedAxiosResponse<T>): void {
+  private logResponse(response: AxiosResponse): void {
     this.logger.debug(`Response status: ${response.status}`);
     this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
-    
-    // Calculate response time if metadata is available
-    if (response.config.metadata && response.config.metadata.endTime && response.config.metadata.startTime) {
-      const duration = response.config.metadata.endTime - response.config.metadata.startTime;
-      this.logger.debug(`Response time: ${duration}ms`);
-    }
     
     // Log response body in a safe way (truncate if too large)
     try {
