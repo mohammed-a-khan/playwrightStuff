@@ -1,11 +1,10 @@
 // File: src/support/hooks.ts
-import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout } from '@cucumber/cucumber';
+import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter, ITestStepHookParameter } from '@cucumber/cucumber';
 import { Page } from '@playwright/test';
 import { TestContext } from './test-context';
 import { Logger } from '../framework/utils/logger';
 import { BrowserManager } from '../framework/browser-manager';
 import { ConfigManager } from '../framework/utils/config-manager';
-import { ReportHelper } from '../framework/utils/report-helper';
 import path from 'path';
 import fs from 'fs';
 
@@ -53,7 +52,7 @@ AfterAll(async function() {
 });
 
 // Before each scenario
-Before(async function(this: TestContext, scenario) {
+Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
   this.startTime = Date.now();
   this.scenarioName = scenario.pickle.name;
   this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
@@ -79,7 +78,7 @@ Before(async function(this: TestContext, scenario) {
     
     // Create a new context
     this.context = await browserManager.createContext({
-      recordVideo: config.get<boolean>('video.record', false) 
+      recordVideo: config.getBoolean('VIDEO_RECORD', false) 
         ? { dir: 'videos/', size: { width: 1280, height: 720 } } 
         : undefined
     });
@@ -101,14 +100,14 @@ Before(async function(this: TestContext, scenario) {
 });
 
 // Before each step
-BeforeStep(async function(this: TestContext, step) {
+BeforeStep(async function(this: TestContext, step: ITestStepHookParameter) {
   if (this.logger) {
     this.logger.info(`Executing step: ${step.pickleStep.text}`);
   }
 });
 
 // After each step
-AfterStep(async function(this: TestContext, step, result) {
+AfterStep(async function(this: TestContext, step: ITestStepHookParameter, result: any) {
   if (this.logger) {
     if (result.status === 'PASSED') {
       this.logger.info(`Step passed: ${step.pickleStep.text}`);
@@ -137,16 +136,16 @@ AfterStep(async function(this: TestContext, step, result) {
 });
 
 // After each scenario
-After(async function(this: TestContext, scenario) {
+After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
   this.endTime = Date.now();
   const executionTime = this.endTime - (this.startTime || this.endTime);
   
   // Store result status for use in clean-up
-  this.result = { status: scenario.result.status };
+  this.result = { status: scenario.result?.status || 'UNKNOWN' };
   
   // Log scenario result
   if (this.logger) {
-    this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
+    this.logger.info(`Scenario ${this.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
   }
   
   // Clean up UI resources
