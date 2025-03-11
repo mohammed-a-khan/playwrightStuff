@@ -5,8 +5,6 @@ When('I search for trades with following filters', async function(this: TestCont
   }
   
   try {
-    let requestData;
-    
     // Use JSON file as the primary source
     const filePath = path.resolve(process.cwd(), 'requests', 'trade-search.json');
     
@@ -21,33 +19,33 @@ When('I search for trades with following filters', async function(this: TestCont
     
     // Read the JSON file and parse it
     const fileContent = fs.readFileSync(filePath, 'utf8');
-    requestData = JSON.parse(fileContent);
+    const requestData: Record<string, any> = JSON.parse(fileContent);
     
     // If dataTable is provided, override or extend the JSON file data
     if (dataTable) {
       const filters = dataTable.rowsHash();
       
       // Apply overrides from the data table
-      Object.keys(filters).forEach(key => {
-        let value = filters[key];
-        
-        // Convert comma-separated values to arrays
-        if (['accountNumFilter', 'tradeStatusFilter', 'tradeTypeFilter'].includes(key) && 
-            typeof value === 'string' && value.includes(',')) {
-          value = value.split(',');
+      for (const key of Object.keys(filters)) {
+        // Handle specific field conversions
+        if (key === 'accountNumFilter' || key === 'tradeStatusFilter' || key === 'tradeTypeFilter') {
+          const filterValue = filters[key];
+          if (typeof filterValue === 'string' && filterValue.includes(',')) {
+            requestData[key] = filterValue.split(',');
+          } else {
+            requestData[key] = filterValue;
+          }
+        } 
+        else if (key === 'priorityOrder') {
+          requestData[key] = filters[key] === 'true';
         }
-        
-        // Convert string to boolean for priorityOrder
-        if (key === 'priorityOrder' && typeof value === 'string') {
-          value = value === 'true';
+        else {
+          requestData[key] = filters[key];
         }
-        
-        // Override the value from JSON file
-        requestData[key] = value;
-      });
+      }
       
       if (this.logger) {
-        this.logger.info(`Applied overrides from data table: ${JSON.stringify(filters)}`);
+        this.logger.info(`Applied overrides from data table`);
       }
     }
     
@@ -59,7 +57,7 @@ When('I search for trades with following filters', async function(this: TestCont
     
     // Execute the search
     if (this.logger) {
-      this.logger.info(`Searching trades with filters: ${JSON.stringify(requestData)}`);
+      this.logger.info(`Searching trades with filters`);
     }
     
     const searchResult = await this.tradeApiClient.searchTrades(requestData);
@@ -72,10 +70,14 @@ When('I search for trades with following filters', async function(this: TestCont
       headers: {},
       config: {} as any,
     };
-  } catch (error) {
+  } catch (err) {
+    // Type the error properly
+    const error = err as Error;
+    
     if (this.logger) {
       this.logger.error(`Error searching trades: ${error.message}`);
     }
+    
     if (axios.isAxiosError(error) && error.response) {
       this.response = error.response;
     } else {
