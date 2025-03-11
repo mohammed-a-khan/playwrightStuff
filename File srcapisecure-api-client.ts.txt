@@ -1,6 +1,5 @@
 // File: src/support/hooks.ts
-import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter } from '@cucumber/cucumber';
-import { Page } from '@playwright/test';
+import { Before, After, BeforeAll, AfterAll, setDefaultTimeout, ITestCaseHookParameter } from '@cucumber/cucumber';
 import { TestContext } from './test-context';
 import { Logger } from '../framework/utils/logger';
 import { BrowserManager } from '../framework/browser-manager';
@@ -11,14 +10,16 @@ import fs from 'fs';
 // Load configuration once at the start
 const config = ConfigManager.getInstance();
 
-// Set default timeout asynchronously
+// Set default timeout
+setDefaultTimeout(30000);
+
+// Get the default timeout asynchronously and update it later
 (async () => {
   try {
     const defaultTimeout = await config.getNumber('DEFAULT_TIMEOUT', 30000);
     setDefaultTimeout(defaultTimeout);
   } catch (error) {
     console.error('Error setting default timeout:', error);
-    setDefaultTimeout(30000); // Fallback to 30 seconds
   }
 })();
 
@@ -95,18 +96,34 @@ Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
     this.logger.info('Initializing web test');
     
     try {
-      // Create a new context
-      const recordVideo = await config.getBoolean('VIDEO_RECORD', false);
-      
+      // Create a new context with default options
+      // We'll adjust these based on configuration values
       const contextOptions: Record<string, any> = {};
-      if (recordVideo) {
-        contextOptions.recordVideo = {
-          dir: 'videos/',
-          size: { 
-            width: await config.getNumber('VIDEO_WIDTH', 1280), 
-            height: await config.getNumber('VIDEO_HEIGHT', 720) 
+      
+      // Get recording options - note that we need to handle promises carefully
+      try {
+        const recordVideo = await config.getBoolean('VIDEO_RECORD', false);
+        if (recordVideo) {
+          contextOptions.recordVideo = {
+            dir: 'videos/',
+            size: { 
+              width: 1280, 
+              height: 720 
+            }
+          };
+          
+          // Try to get video dimensions
+          try {
+            const videoWidth = await config.getNumber('VIDEO_WIDTH', 1280);
+            const videoHeight = await config.getNumber('VIDEO_HEIGHT', 720);
+            contextOptions.recordVideo.size.width = videoWidth;
+            contextOptions.recordVideo.size.height = videoHeight;
+          } catch (e) {
+            // Use defaults if config fails
           }
-        };
+        }
+      } catch (e) {
+        // Use defaults if config fails
       }
       
       this.context = await browserManager.createContext(contextOptions);
@@ -132,61 +149,6 @@ Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
   }
 });
 
-// Before each step
-BeforeStep(async function(this: TestContext) {
-  if (this.logger) {
-    try {
-      // Get current step from Cucumber context if available
-      const stepText = this.currentStep?.text || 'unknown step';
-      this.logger.info(`Executing step: ${stepText}`);
-    } catch (error: unknown) {
-      console.error('Error logging step execution:', error);
-    }
-  }
-});
-
-// After each step - fix for the signature issue
-AfterStep(function(this: TestContext) {
-  // The hook will receive the world instance (this) as the first parameter
-  return async (result: any) => {
-    if (this.logger) {
-      try {
-        const stepText = result?.pickleStep?.text || 'unknown step';
-        
-        if (result?.status === 'PASSED') {
-          this.logger.info(`Step passed: ${stepText}`);
-        } else if (result?.status === 'FAILED') {
-          this.logger.error(`Step failed: ${stepText}`);
-          if (result.error) {
-            this.logger.error(`Error: ${result.error.message}`);
-          }
-          
-          // For UI tests, take a screenshot on failure
-          if (this.page) {
-            try {
-              const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-              const screenshotPath = `./reports/screenshots/${screenshotName}.png`;
-              const screenshot = await this.page.screenshot({ 
-                path: screenshotPath,
-                fullPage: true 
-              });
-              this.logger.info(`Screenshot captured: ${screenshotPath}`);
-              if (this.attach) {
-                this.attach(screenshot, 'image/png');
-              }
-            } catch (error: unknown) {
-              const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-              this.logger.error(`Failed to take screenshot: ${errorMessage}`);
-            }
-          }
-        }
-      } catch (error: unknown) {
-        console.error('Error processing step result:', error);
-      }
-    }
-  };
-});
-
 // After each scenario
 After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
   this.endTime = Date.now();
@@ -198,13 +160,34 @@ After(async function(this: TestContext, scenario: ITestCaseHookParameter) {
   // Log scenario result
   if (this.logger) {
     this.logger.info(`Scenario ${this.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
+    
+    // Take screenshot on failure for UI tests
+    if (this.result.status === 'FAILED' && this.page) {
+      try {
+        const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+        const screenshotPath = `./reports/screenshots/${screenshotName}.png`;
+        const screenshot = await this.page.screenshot({ 
+          path: screenshotPath,
+          fullPage: true 
+        });
+        this.logger.info(`Screenshot captured: ${screenshotPath}`);
+        if (this.attach) {
+          this.attach(screenshot, 'image/png');
+        }
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.logger.error(`Failed to take screenshot: ${errorMessage}`);
+      }
+    }
   }
   
   // Generic cleanup for browser resources
-  if (this.page && this.context) {
+  if (this.context) {
     try {
       // Close context (and associated page)
-      this.logger.info('Closing browser context');
+      if (this.logger) {
+        this.logger.info('Closing browser context');
+      }
       await browserManager.closeContext(this.context);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
