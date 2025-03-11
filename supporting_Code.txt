@@ -29,7 +29,7 @@ interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
 /**
  * Extended AxiosResponse to include our extended config
  */
-interface ExtendedAxiosResponse extends AxiosResponse {
+interface ExtendedAxiosResponse<T = any, D = any> extends AxiosResponse<T, D> {
   config: ExtendedAxiosRequestConfig;
 }
 
@@ -69,7 +69,7 @@ export class BaseApiClient {
    * @param options - Request options
    * @returns Promise<AxiosResponse> - API response
    */
-  async get(endpoint: string, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse> {
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making GET request to: ${url}`);
     
@@ -106,7 +106,7 @@ export class BaseApiClient {
    * @param options - Request options
    * @returns Promise<ExtendedAxiosResponse> - API response
    */
-  async post(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse> {
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making POST request to: ${url}`);
     
@@ -143,7 +143,7 @@ export class BaseApiClient {
    * @param options - Request options
    * @returns Promise<ExtendedAxiosResponse> - API response
    */
-  async put(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse> {
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making PUT request to: ${url}`);
     
@@ -180,7 +180,7 @@ export class BaseApiClient {
    * @param options - Request options
    * @returns Promise<ExtendedAxiosResponse> - API response
    */
-  async patch(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse> {
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making PATCH request to: ${url}`);
     
@@ -216,7 +216,7 @@ export class BaseApiClient {
    * @param options - Request options
    * @returns Promise<ExtendedAxiosResponse> - API response
    */
-  async delete(endpoint: string, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse> {
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<ExtendedAxiosResponse<T>> {
     const url = new URL(endpoint, this.apiBaseUrl).toString();
     this.logger.info(`Making DELETE request to: ${url}`);
     
@@ -284,7 +284,7 @@ export class BaseApiClient {
    * @param response - Axios response
    * @param maxTime - Maximum acceptable response time in ms
    */
-  assertResponseTime(response: ExtendedAxiosResponse, maxTime: number): void {
+  assertResponseTime<T = any>(response: ExtendedAxiosResponse<T>, maxTime: number): void {
     if (response.config.metadata && response.config.metadata.endTime && response.config.metadata.startTime) {
       const duration = response.config.metadata.endTime - response.config.metadata.startTime;
       this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
@@ -317,14 +317,14 @@ export class BaseApiClient {
    * @param options - Retry options
    * @returns Promise<ExtendedAxiosResponse> - API response
    */
-  async retryRequest(
-    requestFn: () => Promise<ExtendedAxiosResponse>,
+  async retryRequest<T = any>(
+    requestFn: () => Promise<ExtendedAxiosResponse<T>>,
     options?: {
       maxAttempts?: number;
       retryDelay?: number;
       retryCondition?: (error: any) => boolean;
     }
-  ): Promise<ExtendedAxiosResponse> {
+  ): Promise<ExtendedAxiosResponse<T>> {
     const maxAttempts = options?.maxAttempts || 3;
     const retryDelay = options?.retryDelay || 1000;
     const retryCondition = options?.retryCondition || (() => true);
@@ -355,7 +355,7 @@ export class BaseApiClient {
    * @private
    * @param response - Axios response
    */
-  private logResponse(response: ExtendedAxiosResponse): void {
+  private logResponse<T = any>(response: ExtendedAxiosResponse<T>): void {
     this.logger.debug(`Response status: ${response.status}`);
     this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
     
