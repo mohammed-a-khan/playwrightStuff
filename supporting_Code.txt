@@ -1,196 +1,138 @@
-// File: src/support/hooks.ts
-import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout } from '@cucumber/cucumber';
-import { Page } from '@playwright/test';
-import { TestContext } from './test-context';
-import { Logger } from '../framework/utils/logger';
-import { BrowserManager } from '../framework/browser-manager';
-import { ConfigManager } from '../framework/utils/config-manager';
-import { ReportHelper } from '../framework/utils/report-helper';
-import path from 'path';
+// File: src/framework/utils/config-manager.ts
 import fs from 'fs';
+import path from 'path';
 
-// Load configuration once at the start
-const config = ConfigManager.getInstance();
+/**
+ * Configuration Manager for handling environment-specific configurations
+ * Implements singleton pattern to ensure configuration is loaded only once
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private config: Record<string, any>;
+  private initialized: boolean = false;
 
-// Set default timeout from configuration
-const defaultTimeout = config.get<number>('defaultTimeout', 30000);
-setDefaultTimeout(defaultTimeout);
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.config = {};
+    this.loadConfiguration();
+  }
 
-// Create a BrowserManager instance
-const browserManager = BrowserManager.getInstance();
-
-// Before all scenarios
-BeforeAll(async function() {
-  const globalLogger = new Logger('GlobalSetup');
-  globalLogger.info('Starting test execution');
-  
-  // Ensure report directories exist
-  const dirs = ['reports/screenshots', 'reports/videos', 'reports/logs', 'reports/data'];
-  dirs.forEach(dir => {
-    const dirPath = path.join(process.cwd(), dir);
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-      globalLogger.info(`Created directory: ${dirPath}`);
+  /**
+   * Get singleton instance
+   * @returns ConfigManager instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
     }
-  });
-  
-  // For web tests, initialize the browser once
-  if (process.env.PRELAUNCH_BROWSER === 'true') {
-    globalLogger.info('Pre-launching browser');
-    await browserManager.initialize();
-    globalLogger.info('Browser pre-launched successfully');
+    return ConfigManager.instance;
   }
-});
 
-// After all scenarios
-AfterAll(async function() {
-  const globalLogger = new Logger('GlobalTeardown');
-  globalLogger.info('Finishing test execution');
-  
-  // Close the browser if it's open
-  await browserManager.closeBrowser();
-  globalLogger.info('All resources cleaned up');
-});
-
-// Before each scenario
-Before(async function(this: TestContext, scenario) {
-  this.startTime = Date.now();
-  this.scenarioName = scenario.pickle.name;
-  this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
-  
-  // Create a unique test ID based on scenario name and timestamp
-  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-  
-  // Initialize logger with test ID
-  this.logger = new Logger(testId);
-  this.logger.info(`Starting scenario: ${scenario.pickle.name}`);
-  
-  // Log tags
-  if (this.scenarioTags.length > 0) {
-    this.logger.info(`Tags: ${this.scenarioTags.join(', ')}`);
-  }
-  
-  // Create test data object for sharing data between steps
-  this.testData = {};
-  
-  // For UI tests, initialize browser context and page
-  if (this.scenarioTags.some(tag => tag === '@web' || tag === '@ui')) {
-    this.logger.info('Initializing web test');
-    
-    // Create a new context
-    this.context = await browserManager.createContext({
-      recordVideo: config.get<boolean>('video.record', false) 
-        ? { dir: 'videos/', size: { width: 1280, height: 720 } } 
-        : undefined
-    });
-    
-    // Add ability to set breakpoints if needed
-    if (process.env.DEBUG === 'true') {
-      this.context.setDefaultTimeout(0); // No timeout during debugging
+  /**
+   * Load configuration from files and environment variables
+   * @private
+   */
+  private loadConfiguration(): void {
+    if (this.initialized) {
+      return;
     }
-    
-    // Create a new page
-    this.page = await this.context.newPage();
-    this.logger.info('Browser context and page initialized');
-  } 
-  // For API tests, we don't need browser initialization
-  else if (this.scenarioTags.some(tag => tag === '@api')) {
-    this.logger.info('Initializing API test');
-    // API clients will be initialized in step definitions when needed
-  }
-});
 
-// Before each step
-BeforeStep(async function(this: TestContext, step) {
-  if (this.logger) {
-    this.logger.info(`Executing step: ${step.pickleStep.text}`);
-  }
-});
-
-// After each step
-AfterStep(async function(this: TestContext, step, result) {
-  if (this.logger) {
-    if (result.status === 'PASSED') {
-      this.logger.info(`Step passed: ${step.pickleStep.text}`);
-    } else if (result.status === 'FAILED') {
-      this.logger.error(`Step failed: ${step.pickleStep.text}`);
-      if (result.error) {
-        this.logger.error(`Error: ${result.error.message}`);
-      }
+    try {
+      // Load environment-specific config
+      const env = process.env.NODE_ENV || 'default';
+      const configPath = path.join(process.cwd(), 'config', `${env}.json`);
       
-      // For UI tests, take a screenshot on failure
-      if (this.page) {
-        try {
-          const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-          const screenshotPath = await this.page.screenshot({ 
-            path: `./reports/screenshots/${screenshotName}.png`,
-            fullPage: true 
-          });
-          this.logger.info(`Screenshot captured: ${screenshotPath}`);
-          this.attach(screenshotPath, 'image/png');
-        } catch (error) {
-          this.logger.error(`Failed to take screenshot: ${error.message}`);
+      if (fs.existsSync(configPath)) {
+        console.log(`Loading configuration from: ${configPath}`);
+        this.config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      } else {
+        // Load default config if environment-specific config doesn't exist
+        const defaultConfigPath = path.join(process.cwd(), 'config', 'default.json');
+        if (fs.existsSync(defaultConfigPath)) {
+          console.log(`Loading default configuration from: ${defaultConfigPath}`);
+          this.config = JSON.parse(fs.readFileSync(defaultConfigPath, 'utf8'));
+        } else {
+          console.warn('No configuration file found, using empty configuration');
         }
       }
+      
+      // Override with environment variables
+      this.mergeEnvironmentVariables();
+      
+      this.initialized = true;
+    } catch (error) {
+      console.error(`Error loading configuration: ${error}`);
     }
   }
-});
 
-// After each scenario
-After(async function(this: TestContext, scenario) {
-  this.endTime = Date.now();
-  const executionTime = this.endTime - (this.startTime || this.endTime);
-  
-  // Store result status for use in clean-up
-  this.result = { status: scenario.result.status };
-  
-  // Log scenario result
-  if (this.logger) {
-    this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
+  /**
+   * Get configuration value
+   * @param key - Configuration key (supports dot notation)
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value
+   */
+  public get<T>(key: string, defaultValue?: T): T {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    const keys = key.split('.');
+    let value: any = this.config;
+    
+    for (const k of keys) {
+      value = value && value[k] !== undefined ? value[k] : undefined;
+    }
+    
+    return (value !== undefined ? value : defaultValue) as T;
   }
-  
-  // Clean up UI resources
-  if (this.page && this.context) {
-    // Close context (and associated page)
-    this.logger.info('Closing browser context');
-    await browserManager.closeContext(this.context);
+
+  /**
+   * Set configuration value
+   * @param key - Configuration key (supports dot notation)
+   * @param value - Configuration value
+   */
+  public set<T>(key: string, value: T): void {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    const keys = key.split('.');
+    let current = this.config;
+    
+    for (let i = 0; i < keys.length - 1; i++) {
+      const k = keys[i];
+      current[k] = current[k] || {};
+      current = current[k];
+    }
+    
+    current[keys[keys.length - 1]] = value;
   }
-  
-  // Clean up API resources if needed
-  if (this.testData.userId && this.userApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
-      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
-    } catch (error) {
-      // Ignore errors during cleanup
-      this.logger.warn(`Cleanup error: ${error.message}`);
+
+  /**
+   * Get entire configuration object
+   * @returns Configuration object
+   */
+  public getAll(): Record<string, any> {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    return { ...this.config };
+  }
+
+  /**
+   * Override configuration with environment variables
+   * Only processes variables with TEST_ prefix
+   * @private
+   */
+  private mergeEnvironmentVariables(): void {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.startsWith('TEST_') && value !== undefined) {
+        const configKey = key.replace('TEST_', '').toLowerCase().replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+        this.set(configKey, value);
+      }
     }
   }
-  
-  if (this.testData.productId && this.productApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
-      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
-    } catch (error) {
-      // Ignore errors during cleanup
-      this.logger.warn(`Cleanup error: ${error.message}`);
-    }
-  }
-  
-  // Add logs to Cucumber report
-  if (this.logger) {
-    const logs = this.logger.getLogs();
-    if (logs.length > 0) {
-      this.attach(logs.join('\n'), 'text/plain');
-    }
-  }
-  
-  // Explicitly clean up references to help garbage collection
-  delete this.page;
-  delete this.context;
-  delete this.loginPage;
-  delete this.dashboardPage;
-  delete this.userProfilePage;
-  delete this.userApiClient;
-  delete this.productApiClient;
-});
+}
