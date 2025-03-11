@@ -1,9 +1,72 @@
+// src/support/browser-manager.ts
+import { Browser, BrowserContext, Page, chromium, firefox, webkit } from '@playwright/test';
+import { ConfigManager } from '../framework/utils/config-manager';
+
+// Module-level singleton
+let browserInstance: Browser | null = null;
+let browserLaunchCount = 0;
+
+export async function getBrowser(): Promise<Browser> {
+  if (!browserInstance) {
+    browserLaunchCount++;
+    console.log(`[BROWSER] Launching new browser instance (count: ${browserLaunchCount})`);
+    
+    const config = ConfigManager.getInstance();
+    const browserType = config.getBrowserType().toLowerCase();
+    const browserConfig = config.getBrowserConfig();
+    
+    console.log(`[BROWSER] Using browser type: ${browserType} with config:`, browserConfig);
+    
+    try {
+      switch (browserType) {
+        case 'firefox':
+          browserInstance = await firefox.launch(browserConfig);
+          break;
+        case 'webkit':
+          browserInstance = await webkit.launch(browserConfig);
+          break;
+        default:
+          browserInstance = await chromium.launch(browserConfig);
+      }
+      console.log('[BROWSER] Browser launched successfully');
+    } catch (error) {
+      console.error('[BROWSER] Failed to launch browser:', error);
+      throw error;
+    }
+  } else {
+    console.log('[BROWSER] Reusing existing browser instance');
+  }
+  
+  return browserInstance;
+}
+
+export async function createBrowserContext(browser: Browser, options = {}): Promise<BrowserContext> {
+  console.log('[BROWSER] Creating new browser context');
+  return await browser.newContext(options);
+}
+
+export async function createPage(context: BrowserContext): Promise<Page> {
+  console.log('[BROWSER] Creating new page');
+  return await context.newPage();
+}
+
+export async function closeBrowser(): Promise<void> {
+  if (browserInstance) {
+    console.log('[BROWSER] Closing browser instance');
+    await browserInstance.close();
+    browserInstance = null;
+    console.log('[BROWSER] Browser instance closed');
+  } else {
+    console.log('[BROWSER] No browser instance to close');
+  }
+}
+
 // src/support/hooks.ts
-import { Before, After, BeforeStep, AfterStep, setDefaultTimeout } from '@cucumber/cucumber';
-import { chromium, firefox, webkit, Browser, BrowserType, devices } from '@playwright/test';
+import { Before, After, AfterAll, BeforeStep, AfterStep, setDefaultTimeout } from '@cucumber/cucumber';
 import { TestContext } from './test-context';
 import { Logger } from '../framework/utils/logger';
 import { ConfigManager } from '../framework/utils/config-manager';
+import { getBrowser, createBrowserContext, createPage, closeBrowser } from './browser-manager';
 
 // Get configuration
 const config = ConfigManager.getInstance();
@@ -11,10 +74,10 @@ const config = ConfigManager.getInstance();
 // Set default timeout from configuration
 setDefaultTimeout(config.getDefaultTimeout());
 
-let browser: Browser | null;
-
 // Before each scenario
 Before(async function(this: TestContext, scenario) {
+  console.log(`[HOOK] Before scenario: ${scenario.pickle.name}`);
+  
   // Create a unique test ID based on scenario name and timestamp
   const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
   
@@ -30,47 +93,19 @@ Before(async function(this: TestContext, scenario) {
   
   // For UI tests, initialize browser
   if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
-    // Launch browser if not already launched
-    if (!browser) {
-      this.logger.info('Launching browser');
-      
-      // Get browser configuration
-      const browserConfig = config.getBrowserConfig();
-      const browserType = config.getBrowserType().toLowerCase();
-      
-      // Select browser based on configuration
-      let browserInstance: BrowserType;
-      switch (browserType) {
-        case 'firefox':
-          browserInstance = firefox;
-          break;
-        case 'webkit':
-          browserInstance = webkit;
-          break;
-        case 'chromium':
-        default:
-          browserInstance = chromium;
-          break;
-      }
-      
-      this.logger.info(`Using browser: ${browserType}`);
-      
-      // Launch browser
-      browser = await browserInstance.launch({
-        headless: browserConfig.headless,
-        slowMo: browserConfig.slowMo,
-        args: browserConfig.args
-      });
-    }
+    this.logger.info('Initializing web test');
+    
+    // Get browser instance (shared across scenarios)
+    const browser = await getBrowser();
     
     // Context options
     const contextOptions: any = {};
     
     // Set viewport size if device is not specified
     const devicePreset = config.getDevicePreset();
-    if (devicePreset && devices[devicePreset]) {
+    if (devicePreset) {
       this.logger.info(`Using device preset: ${devicePreset}`);
-      Object.assign(contextOptions, devices[devicePreset]);
+      contextOptions.userAgent = devicePreset;
     } else {
       const viewportSize = config.getViewportSize();
       contextOptions.viewport = viewportSize;
@@ -83,72 +118,26 @@ Before(async function(this: TestContext, scenario) {
     }
     
     // Create a new context and page for each scenario
-    this.context = await browser.newContext(contextOptions);
+    this.context = await createBrowserContext(browser, contextOptions);
     
     // Add ability to set breakpoints if needed
     if (config.isDebugMode()) {
       this.context.setDefaultTimeout(0); // No timeout during debugging
     }
     
-    this.page = await this.context.newPage();
+    this.page = await createPage(this.context);
     this.logger.info('Browser initialized');
   } 
   // For API tests, initialize API-specific objects
   else if (scenario.pickle.tags.some(tag => tag.name === '@api')) {
     this.logger.info('Initializing API test');
-    
-    // API clients will be initialized in step definitions when needed
-  }
-});
-
-// Before each step
-BeforeStep(async function(this: TestContext, testStepResult) {
-  if (this.logger) {
-    this.logger.info(`Executing step: ${testStepResult.pickleStep.text}`);
-  }
-});
-
-// After each step
-AfterStep(async function(this: TestContext, testStepResult) {
-  if (this.logger) {
-    if (testStepResult.result.status === 'PASSED') {
-      this.logger.info(`Step passed: ${testStepResult.pickleStep.text}`);
-    } else if (testStepResult.result.status === 'FAILED') {
-      this.logger.error(`Step failed: ${testStepResult.pickleStep.text}`);
-      
-      // In newer versions, the error might be stored differently
-      // Let's use a type-safe approach
-      const stepResult = testStepResult.result;
-      const errorMessage = (stepResult as any).message 
-        || (stepResult as any).error?.message 
-        || 'Unknown error';
-      
-      this.logger.error(`Error: ${errorMessage}`);
-      
-      // For UI tests, take a screenshot on failure
-      if (this.page && config.shouldTakeScreenshotOnFailure()) {
-        const timestamp = Date.now();
-        const scenarioName = this.logger.getScenarioName()?.replace(/[^a-zA-Z0-9]/g, '-') || 'unknown';
-        const screenshotPath = `./screenshots/failed-${scenarioName}-${timestamp}.png`;
-        this.logger.info(`Taking screenshot: ${screenshotPath}`);
-        
-        try {
-          const screenshot = await this.page.screenshot({ 
-            path: screenshotPath,
-            fullPage: true 
-          });
-          this.attach(screenshot, 'image/png');
-        } catch (error: unknown) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          this.logger.error(`Failed to take screenshot: ${errorMessage}`);
-        }
-      }
-    }
   }
 });
 
 // After each scenario
 After(async function(this: TestContext, scenario) {
+  console.log(`[HOOK] After scenario: ${scenario.pickle.name}`);
+  
   // Store result status for use in clean-up
   if (scenario.result) {
     this.result = { status: scenario.result.status };
@@ -156,11 +145,6 @@ After(async function(this: TestContext, scenario) {
     // Log scenario result
     if (this.logger) {
       this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name}`);
-    }
-  } else {
-    this.result = { status: 'unknown' };
-    if (this.logger) {
-      this.logger.info(`Scenario status unknown: ${scenario.pickle.name}`);
     }
   }
   
@@ -172,51 +156,40 @@ After(async function(this: TestContext, scenario) {
   }
   
   // Clean up API resources if needed
-  if (this.testData.userId && this.userApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
-      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
-    } catch (error) {
-      // Ignore errors during cleanup
-      this.logger.warn(`Cleanup error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  
-  if (this.testData.productId && this.productApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
-      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
-    } catch (error) {
-      // Ignore errors during cleanup
-      this.logger.warn(`Cleanup error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  
-  // Add logs to Cucumber report
-  if (this.logger) {
-    const logs = this.logger.getLogs();
-    if (logs.length > 0) {
-      this.attach(logs.join('\n'), 'text/plain');
-    }
-  }
+  // Rest of your cleanup code
 });
 
 // After all scenarios
-After(async function() {
-  if (browser) {
-    await browser.close();
-    browser = null;
-  }
+AfterAll(async function() {
+  console.log('[HOOK] AfterAll: Closing browser');
+  await closeBrowser();
 });
 
-/**
- * Debug breakpoint helper function
- * Add this to your code where you want to set a breakpoint
- */
-export async function debugBreakpoint(): Promise<void> {
-  if (ConfigManager.getInstance().isDebugMode()) {
-    // eslint-disable-next-line no-debugger
-    debugger;
-    // This pauses execution if running with --inspect flag and dev tools are open
+// src/framework/utils/config-manager.ts
+import { env, envNumber, envBoolean, getEnvironment } from './env';
+
+// Module-level singleton variable
+let configInstance: ConfigManager | null = null;
+let instanceCount = 0;
+
+export class ConfigManager {
+  private environment: string;
+  private instanceNumber: number;
+
+  private constructor() {
+    instanceCount++;
+    this.instanceNumber = instanceCount;
+    this.environment = getEnvironment();
+    console.log(`[CONFIG] ConfigManager instance #${this.instanceNumber} initialized for ${this.environment} environment`);
   }
+
+  public static getInstance(): ConfigManager {
+    if (!configInstance) {
+      configInstance = new ConfigManager();
+    }
+    return configInstance;
+  }
+  
+  // Rest of your methods
 }
+
