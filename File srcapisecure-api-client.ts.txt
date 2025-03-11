@@ -1,124 +1,395 @@
-import { Given, When, Then } from '@cucumber/cucumber';
+// File: src/framework/base-api-client.ts
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { expect } from '@playwright/test';
-import { TradeApiClient } from '../../api/trade-api-client';
-import { TestContext } from '../../support/test-context';
-import axios, { AxiosResponse } from 'axios';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
 
-Given('I have a Trade API client', async function(this: TestContext) {
-  // Initialize the trade API client
-  this.tradeApiClient = new TradeApiClient();
-  expect(this.tradeApiClient).toBeDefined();
-});
+/**
+ * Interface for API request options
+ */
+export interface ApiRequestOptions {
+  headers?: Record<string, string>;
+  params?: Record<string, any>;
+  data?: any;
+  timeout?: number;
+  validateStatus?: boolean;
+}
 
-When('I search for trades with the following filters', async function(this: TestContext, dataTable) {
-  // Ensure trade API client exists
-  if (!this.tradeApiClient) {
-    throw new Error('Trade API client is not initialized');
-  }
+/**
+ * Base API client for all API interactions
+ */
+export class BaseApiClient {
+  readonly apiBaseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly defaultHeaders: Record<string, string>;
+  readonly config: ConfigManager;
 
-  // Initialize testData if it doesn't exist
-  if (!this.testData) {
-    this.testData = {};
-  }
-
-  const filters: Record<string, any> = dataTable.rowsHash();
-  
-  // Convert comma-separated values to arrays
-  if (filters.accountNumFilter) {
-    filters.accountNumFilter = filters.accountNumFilter.split(',');
-  }
-  if (filters.tradeStatusFilter) {
-    filters.tradeStatusFilter = filters.tradeStatusFilter.split(',');
-  }
-  if (filters.tradeTypeFilter) {
-    filters.tradeTypeFilter = filters.tradeTypeFilter.split(',');
-  }
-  
-  // Convert string to boolean for priorityOrder
-  if (filters.priorityOrder) {
-    filters.priorityOrder = filters.priorityOrder === 'true';
-  }
-  
-  // Store filters for later assertions
-  this.testData.tradeFilters = filters;
-  
-  // Execute the search
-  if (this.logger) {
-    this.logger.info(`Searching trades with filters: ${JSON.stringify(filters)}`);
-  }
-
-  try {
-    const searchResult = await this.tradeApiClient.searchTrades(filters);
-    
-    // Store the response for later access
-    this.response = {
-      data: searchResult,
-      status: 200,
-      statusText: 'OK',
-      headers: {},
-      config: {} as any,
+  /**
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
+   */
+  constructor(
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
+  ) {
+    this.config = ConfigManager.getInstance();
+    // Fix the typo in API_BASE_URL and use the synchronous getString method
+    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
+    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
+    this.logger = new Logger(this.constructor.name);
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
     };
-  } catch (error: unknown) {
-    if (axios.isAxiosError(error) && error.response) {
-      this.response = error.response;
-    } else {
+  }
+
+  /**
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making GET request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Create a timestamp for request timing
+      const startTime = Date.now();
+      
+      const response = await axios.get<T>(url, config);
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      this.logResponse(response);
+      return response;
+    } catch (error: unknown) {
+      this.logError(error);
       throw error;
     }
   }
-});
 
-Then('the API should return a successful response', async function(this: TestContext) {
-  expect(this.response).toBeDefined();
-  expect(this.response?.status).toBe(200);
-  
-  if (this.logger && this.response?.data) {
-    this.logger.info(`Response received with ${this.response.data.trades?.length || 0} trades`);
-  }
-});
+  /**
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making POST request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
 
-Then('the response should contain trades matching the filters', async function(this: TestContext) {
-  // Ensure response data exists
-  expect(this.response).toBeDefined();
-  expect(this.response?.data).toBeDefined();
-  
-  const filters = this.testData?.tradeFilters;
-  const trades = this.response?.data?.trades;
-  
-  expect(filters).toBeDefined();
-  expect(trades).toBeDefined();
-  expect(Array.isArray(trades)).toBeTruthy();
-  
-  // Check that trades match the filters (if we have trades)
-  if (trades && trades.length > 0) {
-    if (this.logger) {
-      this.logger.info(`Verifying ${trades.length} trades match the filters`);
-    }
-    
-    // Verify account numbers if filter was provided
-    if (filters.accountNumFilter && filters.accountNumFilter.length > 0) {
-      for (const trade of trades) {
-        if (trade.accountNum) {
-          expect(filters.accountNumFilter).toContain(trade.accountNum);
-        }
-      }
-    }
-    
-    // Verify trade status if filter was provided
-    if (filters.tradeStatusFilter && filters.tradeStatusFilter.length > 0) {
-      for (const trade of trades) {
-        if (trade.tradeStatus) {
-          expect(filters.tradeStatusFilter).toContain(trade.tradeStatus);
-        }
-      }
-    }
-    
-    // Verify trade type if filter was provided
-    if (filters.tradeTypeFilter && filters.tradeTypeFilter.length > 0) {
-      for (const trade of trades) {
-        if (trade.tradeType) {
-          expect(filters.tradeTypeFilter).toContain(trade.tradeType);
-        }
-      }
+    try {
+      // Create a timestamp for request timing
+      const startTime = Date.now();
+      
+      const response = await axios.post<T>(url, data || {}, config);
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      this.logResponse(response);
+      return response;
+    } catch (error: unknown) {
+      this.logError(error);
+      throw error;
     }
   }
-});
+
+  /**
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Create a timestamp for request timing
+      const startTime = Date.now();
+      
+      const response = await axios.put<T>(url, data || {}, config);
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      this.logResponse(response);
+      return response;
+    } catch (error: unknown) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Create a timestamp for request timing
+      const startTime = Date.now();
+      
+      const response = await axios.patch<T>(url, data || {}, config);
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      this.logResponse(response);
+      return response;
+    } catch (error: unknown) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Make a DELETE request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      data: options?.data || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    try {
+      // Create a timestamp for request timing
+      const startTime = Date.now();
+      
+      const response = await axios.delete<T>(url, config);
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      this.logResponse(response);
+      return response;
+    } catch (error: unknown) {
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    this.logger.debug(`Asserting status code: ${expectedStatus}`);
+    expect(response.status).toBe(expectedStatus);
+  }
+
+  /**
+   * Assert API response contains specific data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting response data`);
+    expect(response.data).toMatchObject(expectedData);
+  }
+
+  /**
+   * Assert response header has a specific value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValue - Expected header value
+   */
+  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
+    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toBe(expectedValue);
+  }
+
+  /**
+   * Assert response time is within acceptable limits
+   * @param response - Axios response
+   * @param maxTime - Maximum acceptable response time in ms
+   */
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    const duration = (response as any)._duration;
+    if (duration !== undefined) {
+      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
+      expect(duration).toBeLessThanOrEqual(maxTime);
+    } else {
+      this.logger.warn('Response time metrics not available');
+    }
+  }
+
+  /**
+   * Get authentication token (to be implemented by derived classes)
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(): Promise<string> {
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
+
+  /**
+   * Create auth header with token
+   * @param token - Authentication token
+   * @returns Record<string, string> - Headers with authentication
+   */
+  createAuthHeader(token: string): Record<string, string> {
+    return { 'Authorization': `Bearer ${token}` };
+  }
+
+  /**
+   * Retry a request until it succeeds or max attempts reached
+   * @param requestFn - Function to retry
+   * @param options - Retry options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async retryRequest<T = any>(
+    requestFn: () => Promise<AxiosResponse<T>>,
+    options?: {
+      maxAttempts?: number;
+      retryDelay?: number;
+      retryCondition?: (error: any) => boolean;
+    }
+  ): Promise<AxiosResponse<T>> {
+    const maxAttempts = options?.maxAttempts || 3;
+    const retryDelay = options?.retryDelay || 1000;
+    const retryCondition = options?.retryCondition || (() => true);
+    
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.logger.debug(`Request attempt ${attempt}/${maxAttempts}`);
+        return await requestFn();
+      } catch (error: unknown) {
+        lastError = error;
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.logger.debug(`Attempt ${attempt} failed: ${errorMessage}`);
+        
+        if (attempt < maxAttempts && retryCondition(error)) {
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        } else {
+          break;
+        }
+      }
+    }
+    
+    throw lastError;
+  }
+
+  /**
+   * Log response details
+   * @private
+   * @param response - Axios response
+   */
+  private logResponse(response: AxiosResponse): void {
+    this.logger.debug(`Response status: ${response.status}`);
+    this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
+    
+    // Log response body in a safe way (truncate if too large)
+    try {
+      const responseBody = JSON.stringify(response.data);
+      if (responseBody.length > 1000) {
+        this.logger.debug(`Response body (truncated): ${responseBody.substring(0, 1000)}...`);
+      } else {
+        this.logger.debug(`Response body: ${responseBody}`);
+      }
+    } catch (error: unknown) {
+      this.logger.debug('Response body: [Could not stringify response data]');
+    }
+  }
+
+  /**
+   * Log error details
+   * @private
+   * @param error - Axios error
+   */
+  private logError(error: unknown): void {
+    if (axios.isAxiosError(error)) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      if (error.response) {
+        this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+        this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+        this.logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
+      } else if (error.request) {
+        // The request was made but no response was received
+        this.logger.error(`Request error: ${error.message}`);
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        this.logger.error(`Error: ${error.message}`);
+      }
+    } else if (error instanceof Error) {
+      this.logger.error(`Error: ${error.message}`);
+    } else {
+      this.logger.error('Unknown error occurred');
+    }
+  }
+}
