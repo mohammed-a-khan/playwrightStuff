@@ -1,191 +1,74 @@
-// File: src/api/trade-api-client.ts
-import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
-import * as fs from 'fs';
-import * as https from 'https';
-import * as path from 'path';
-import axios from 'axios';
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { TradeApiClient } from '../../api/trade-api-client';
+import { TestContext } from '../../support/test-context';
 
-// Define interfaces for request and response
-interface TradeSearchRequest {
-  accountNumFilter?: string[];
-  tradeStatusFilter?: string[];
-  tradeTypeFilter?: string[];
-  priorityOrder?: boolean;
-}
+Given('I have a Trade API client', async function(this: TestContext) {
+  this.tradeApiClient = new TradeApiClient();
+});
 
-interface Trade {
-  id: string;
-  accountNum: string;
-  tradeStatus: string;
-  tradeType: string;
-  // Add other trade properties as needed
-}
-
-interface TradeSearchResponse {
-  trades: Trade[];
-  totalCount: number;
-}
-
-/**
- * Trade API Client for interactions with the trade service
- */
-export class TradeApiClient extends BaseApiClient {
-  /**
-   * Constructor for the TradeApiClient
-   */
-  constructor() {
-    // Get base URL from environment variables
-    const apiBaseUrl = process.env.TRADE_API_BASE_URL || 'https://jonat-sit.k8joha.americas.kshare.net';
-    super(apiBaseUrl);
+When('I search for trades with the following filters', async function(this: TestContext, dataTable) {
+  const filters = dataTable.rowsHash();
+  
+  // Convert comma-separated values to arrays
+  if (filters.accountNumFilter) {
+    filters.accountNumFilter = filters.accountNumFilter.split(',');
   }
-
-  /**
-   * Create HTTPS agent with certificate and passphrase
-   * @returns HTTPS agent with proper certificates
-   */
-  protected createHttpsAgent(): https.Agent {
-    // Get certificate info from environment variables
-    const certPath = process.env.CERT_PATH || path.resolve(process.cwd(), 'certs', 'johana.pfx');
-    const certPassphrase = process.env.CERT_PASSPHRASE || 'Test12345';
-    
-    // Check if certificate file exists
-    if (!fs.existsSync(certPath)) {
-      this.logger.error(`Certificate file not found: ${certPath}`);
-      throw new Error(`Certificate file not found: ${certPath}`);
-    }
-    
-    // Create HTTPS agent with certificate
-    const httpsOptions: https.AgentOptions = {
-      pfx: fs.readFileSync(certPath),
-      passphrase: certPassphrase,
-      rejectUnauthorized: process.env.VERIFY_SSL !== 'false'
-    };
-    
-    this.logger.info(`Using certificate from ${certPath} for API requests`);
-    
-    return new https.Agent(httpsOptions);
+  if (filters.tradeStatusFilter) {
+    filters.tradeStatusFilter = filters.tradeStatusFilter.split(',');
   }
+  if (filters.tradeTypeFilter) {
+    filters.tradeTypeFilter = filters.tradeTypeFilter.split(',');
+  }
+  
+  // Convert string to boolean for priorityOrder
+  if (filters.priorityOrder) {
+    filters.priorityOrder = filters.priorityOrder === 'true';
+  }
+  
+  // Store filters for later assertions
+  this.testData.tradeFilters = filters;
+  
+  // Execute the search
+  this.logger.info(`Searching trades with filters: ${JSON.stringify(filters)}`);
+  this.response = await this.tradeApiClient.searchTrades(filters);
+});
 
-  /**
-   * Create request configuration with proxy and certificates
-   * @param options - Additional API request options
-   * @returns API request options with security configuration
-   */
-  protected async createRequestConfig(options?: ApiRequestOptions): Promise<ApiRequestOptions> {
-    // Start with the options provided or empty object
-    const config: ApiRequestOptions = { 
-      ...(options || {}),
-      headers: {
-        ...this.defaultHeaders,
-        ...(options?.headers || {})
-      }
-    };
+Then('the API should return a successful response', async function(this: TestContext) {
+  expect(this.response).toBeDefined();
+  this.logger.info(`Response received with ${this.response.trades.length} trades`);
+});
+
+Then('the response should contain trades matching the filters', async function(this: TestContext) {
+  const filters = this.testData.tradeFilters;
+  const trades = this.response.trades;
+  
+  expect(trades).toBeDefined();
+  expect(Array.isArray(trades)).toBeTruthy();
+  
+  // Check that trades match the filters
+  if (trades.length > 0) {
+    this.logger.info(`Verifying ${trades.length} trades match the filters`);
     
-    // Get proxy settings from environment variables
-    const httpsProxy = process.env.HTTPS_PROXY_URL;
-    const httpProxy = process.env.HTTP_PROXY_URL;
-    
-    if (httpsProxy || httpProxy) {
-      (config as any).proxy = {};
-      
-      if (httpsProxy) {
-        (config as any).proxy.https = httpsProxy;
-        this.logger.info(`Using HTTPS proxy: ${httpsProxy}`);
-      }
-      
-      if (httpProxy) {
-        (config as any).proxy.http = httpProxy;
-        this.logger.info(`Using HTTP proxy: ${httpProxy}`);
+    // Verify account numbers if filter was provided
+    if (filters.accountNumFilter && filters.accountNumFilter.length > 0) {
+      for (const trade of trades) {
+        expect(filters.accountNumFilter).toContain(trade.accountNum);
       }
     }
     
-    // Add HTTPS agent with certificate
-    (config as any).httpsAgent = this.createHttpsAgent();
-    
-    return config;
-  }
-
-  /**
-   * Search for trades based on filters loaded from a JSON file or provided directly
-   * @param requestBodyOrFilePath - Either a request body object or path to a JSON file
-   * @returns Promise with trade search results
-   */
-  async searchTrades(requestBodyOrFilePath: TradeSearchRequest | string): Promise<TradeSearchResponse> {
-    let requestBody: TradeSearchRequest;
-    
-    // If requestBodyOrFilePath is a string, assume it's a file path
-    if (typeof requestBodyOrFilePath === 'string') {
-      try {
-        const jsonContent = fs.readFileSync(requestBodyOrFilePath, 'utf8');
-        requestBody = JSON.parse(jsonContent);
-        this.logger.info(`Loaded request body from ${requestBodyOrFilePath}`);
-      } catch (error: unknown) {
-        // Properly handle unknown error type
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        this.logger.error(`Failed to load request body from file: ${errorMessage}`);
-        throw new Error(`Failed to load request body from file: ${errorMessage}`);
+    // Verify trade status if filter was provided
+    if (filters.tradeStatusFilter && filters.tradeStatusFilter.length > 0) {
+      for (const trade of trades) {
+        expect(filters.tradeStatusFilter).toContain(trade.tradeStatus);
       }
-    } else {
-      requestBody = requestBodyOrFilePath;
     }
     
-    // Get headers from environment variables
-    const headers: Record<string, string> = {
-      'X-CLIENT-SUBJECT': process.env.X_CLIENT_SUBJECT || 'AU=JOHA',
-      'AUTHORIZED_UPN': process.env.AUTHORIZED_UPN || 'joa@americas.kshare.net',
-      'Content-Type': 'application/json'
-    };
-    
-    // Create request config with headers
-    const config = await this.createRequestConfig({ headers });
-    
-    // Make the POST request
-    this.logger.info(`Searching trades with filters: ${JSON.stringify(requestBody)}`);
-    
-    try {
-      const endpoint = process.env.TRADE_SEARCH_ENDPOINT || '/api/trades/search';
-      const response = await this.post<TradeSearchResponse>(endpoint, requestBody, config);
-      
-      // Verify response status
-      if (response.status !== 200) {
-        this.logger.error(`Unexpected response status: ${response.status}`);
-        throw new Error(`API returned unexpected status: ${response.status}`);
+    // Verify trade type if filter was provided
+    if (filters.tradeTypeFilter && filters.tradeTypeFilter.length > 0) {
+      for (const trade of trades) {
+        expect(filters.tradeTypeFilter).toContain(trade.tradeType);
       }
-      
-      this.logger.info(`Response status: ${response.status} OK`);
-      
-      // Safely access response data
-      const totalCount = response.data?.totalCount || 0;
-      this.logger.info(`Found ${totalCount} trades matching filters`);
-      
-      return response.data;
-    } catch (error: unknown) {
-      // Handle different error types properly
-      if (axios.isAxiosError(error)) {
-        // This is an Axios error (network or HTTP status error)
-        const statusCode = error.response?.status || 'unknown';
-        const errorMessage = error.message || 'Unknown API error';
-        
-        this.logger.error(`Trade search failed: ${errorMessage}`);
-        this.logger.error(`Response status: ${statusCode}`);
-        
-        if (error.response?.data) {
-          try {
-            this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
-          } catch {
-            this.logger.error('Response data could not be stringified');
-          }
-        }
-      } else if (error instanceof Error) {
-        // This is a standard Error object
-        this.logger.error(`Trade search failed: ${error.message}`);
-      } else {
-        // This is some other type of error
-        this.logger.error('Trade search failed with an unknown error');
-      }
-      
-      // Re-throw the error to be handled by the caller
-      throw error;
     }
   }
-}
+});
