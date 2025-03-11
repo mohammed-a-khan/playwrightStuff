@@ -1,9 +1,9 @@
 // File: src/api/trade-api-client.ts
-import { SecureApiClient } from './secure-api-client';
-import { ApiRequestOptions } from '../framework/base-api-client';
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
 import * as fs from 'fs';
 import * as https from 'https';
 import * as path from 'path';
+import axios from 'axios';
 
 // Define interfaces for request and response
 interface TradeSearchRequest {
@@ -29,7 +29,7 @@ interface TradeSearchResponse {
 /**
  * Trade API Client for interactions with the trade service
  */
-export class TradeApiClient extends SecureApiClient {
+export class TradeApiClient extends BaseApiClient {
   /**
    * Constructor for the TradeApiClient
    */
@@ -40,8 +40,8 @@ export class TradeApiClient extends SecureApiClient {
   }
 
   /**
-   * Override createHttpsAgent to support PFX certificate with passphrase
-   * and include proxy settings
+   * Create HTTPS agent with certificate and passphrase
+   * @returns HTTPS agent with proper certificates
    */
   protected createHttpsAgent(): https.Agent {
     // Get certificate info from environment variables
@@ -67,11 +67,19 @@ export class TradeApiClient extends SecureApiClient {
   }
 
   /**
-   * Override to add proxy configuration
+   * Create request configuration with proxy and certificates
+   * @param options - Additional API request options
+   * @returns API request options with security configuration
    */
   protected async createRequestConfig(options?: ApiRequestOptions): Promise<ApiRequestOptions> {
-    // Get base config from parent
-    const config = await super.createRequestConfig(options);
+    // Start with the options provided or empty object
+    const config: ApiRequestOptions = { 
+      ...(options || {}),
+      headers: {
+        ...this.defaultHeaders,
+        ...(options?.headers || {})
+      }
+    };
     
     // Get proxy settings from environment variables
     const httpsProxy = process.env.HTTPS_PROXY_URL;
@@ -91,6 +99,9 @@ export class TradeApiClient extends SecureApiClient {
       }
     }
     
+    // Add HTTPS agent with certificate
+    (config as any).httpsAgent = this.createHttpsAgent();
+    
     return config;
   }
 
@@ -108,9 +119,11 @@ export class TradeApiClient extends SecureApiClient {
         const jsonContent = fs.readFileSync(requestBodyOrFilePath, 'utf8');
         requestBody = JSON.parse(jsonContent);
         this.logger.info(`Loaded request body from ${requestBodyOrFilePath}`);
-      } catch (error) {
-        this.logger.error(`Failed to load request body from file: ${error.message}`);
-        throw new Error(`Failed to load request body from file: ${error.message}`);
+      } catch (error: unknown) {
+        // Properly handle unknown error type
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.logger.error(`Failed to load request body from file: ${errorMessage}`);
+        throw new Error(`Failed to load request body from file: ${errorMessage}`);
       }
     } else {
       requestBody = requestBodyOrFilePath;
@@ -140,14 +153,38 @@ export class TradeApiClient extends SecureApiClient {
       }
       
       this.logger.info(`Response status: ${response.status} OK`);
-      this.logger.info(`Found ${response.data?.totalCount || 0} trades matching filters`);
+      
+      // Safely access response data
+      const totalCount = response.data?.totalCount || 0;
+      this.logger.info(`Found ${totalCount} trades matching filters`);
+      
       return response.data;
-    } catch (error) {
-      this.logger.error(`Trade search failed: ${error.message}`);
-      if (error.response) {
-        this.logger.error(`Response status: ${error.response.status}`);
-        this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+    } catch (error: unknown) {
+      // Handle different error types properly
+      if (axios.isAxiosError(error)) {
+        // This is an Axios error (network or HTTP status error)
+        const statusCode = error.response?.status || 'unknown';
+        const errorMessage = error.message || 'Unknown API error';
+        
+        this.logger.error(`Trade search failed: ${errorMessage}`);
+        this.logger.error(`Response status: ${statusCode}`);
+        
+        if (error.response?.data) {
+          try {
+            this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+          } catch {
+            this.logger.error('Response data could not be stringified');
+          }
+        }
+      } else if (error instanceof Error) {
+        // This is a standard Error object
+        this.logger.error(`Trade search failed: ${error.message}`);
+      } else {
+        // This is some other type of error
+        this.logger.error('Trade search failed with an unknown error');
       }
+      
+      // Re-throw the error to be handled by the caller
       throw error;
     }
   }
