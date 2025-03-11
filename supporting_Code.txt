@@ -1,195 +1,175 @@
-// src/support/browser-manager.ts
-import { Browser, BrowserContext, Page, chromium, firefox, webkit } from '@playwright/test';
-import { ConfigManager } from '../framework/utils/config-manager';
+// File: src/framework/browser-manager.ts
 
-// Module-level singleton
-let browserInstance: Browser | null = null;
-let browserLaunchCount = 0;
+import { Browser, BrowserContext, chromium } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
 
-export async function getBrowser(): Promise<Browser> {
-  if (!browserInstance) {
-    browserLaunchCount++;
-    console.log(`[BROWSER] Launching new browser instance (count: ${browserLaunchCount})`);
-    
-    const config = ConfigManager.getInstance();
-    const browserType = config.getBrowserType().toLowerCase();
-    const browserConfig = config.getBrowserConfig();
-    
-    console.log(`[BROWSER] Using browser type: ${browserType} with config:`, browserConfig);
-    
+/**
+ * Singleton Browser Manager to handle browser lifecycle
+ * This prevents multiple browser instances from being created
+ */
+export class BrowserManager {
+  private static instance: BrowserManager;
+  private browser: Browser | null = null;
+  private contexts: BrowserContext[] = [];
+  private logger: Logger;
+  private config: ConfigManager;
+  private isInitializing: boolean = false;
+  private initPromise: Promise<void> | null = null;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.logger = new Logger('BrowserManager');
+    this.config = ConfigManager.getInstance();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns BrowserManager instance
+   */
+  public static getInstance(): BrowserManager {
+    if (!BrowserManager.instance) {
+      BrowserManager.instance = new BrowserManager();
+    }
+    return BrowserManager.instance;
+  }
+
+  /**
+   * Initialize browser if not already initialized
+   * Uses a promise to prevent multiple initializations
+   */
+  public async initialize(): Promise<void> {
+    if (this.browser) {
+      return;
+    }
+
+    if (this.isInitializing) {
+      // If already initializing, wait for it to complete
+      return this.initPromise;
+    }
+
+    this.isInitializing = true;
+    this.initPromise = this.initializeBrowser();
+    await this.initPromise;
+    this.isInitializing = false;
+  }
+
+  /**
+   * Internal method to initialize the browser
+   */
+  private async initializeBrowser(): Promise<void> {
     try {
-      switch (browserType) {
-        case 'firefox':
-          browserInstance = await firefox.launch(browserConfig);
-          break;
-        case 'webkit':
-          browserInstance = await webkit.launch(browserConfig);
-          break;
-        default:
-          browserInstance = await chromium.launch(browserConfig);
-      }
-      console.log('[BROWSER] Browser launched successfully');
+      this.logger.info('Launching browser');
+      
+      const headless = process.env.HEADLESS !== 'false';
+      const slowMo = process.env.SLOW_MO ? parseInt(process.env.SLOW_MO) : 0;
+      
+      this.browser = await chromium.launch({
+        headless,
+        slowMo,
+        // Add additional launch options from config if needed
+        args: this.config.get<string[]>('browser.args', []),
+      });
+      
+      this.logger.info('Browser launched successfully');
     } catch (error) {
-      console.error('[BROWSER] Failed to launch browser:', error);
+      this.logger.error(`Failed to launch browser: ${error}`);
       throw error;
     }
-  } else {
-    console.log('[BROWSER] Reusing existing browser instance');
   }
-  
-  return browserInstance;
-}
 
-export async function createBrowserContext(browser: Browser, options = {}): Promise<BrowserContext> {
-  console.log('[BROWSER] Creating new browser context');
-  return await browser.newContext(options);
-}
-
-export async function createPage(context: BrowserContext): Promise<Page> {
-  console.log('[BROWSER] Creating new page');
-  return await context.newPage();
-}
-
-export async function closeBrowser(): Promise<void> {
-  if (browserInstance) {
-    console.log('[BROWSER] Closing browser instance');
-    await browserInstance.close();
-    browserInstance = null;
-    console.log('[BROWSER] Browser instance closed');
-  } else {
-    console.log('[BROWSER] No browser instance to close');
-  }
-}
-
-// src/support/hooks.ts
-import { Before, After, AfterAll, BeforeStep, AfterStep, setDefaultTimeout } from '@cucumber/cucumber';
-import { TestContext } from './test-context';
-import { Logger } from '../framework/utils/logger';
-import { ConfigManager } from '../framework/utils/config-manager';
-import { getBrowser, createBrowserContext, createPage, closeBrowser } from './browser-manager';
-
-// Get configuration
-const config = ConfigManager.getInstance();
-
-// Set default timeout from configuration
-setDefaultTimeout(config.getDefaultTimeout());
-
-// Before each scenario
-Before(async function(this: TestContext, scenario) {
-  console.log(`[HOOK] Before scenario: ${scenario.pickle.name}`);
-  
-  // Create a unique test ID based on scenario name and timestamp
-  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-  
-  // Initialize logger with test ID
-  this.logger = new Logger(testId);
-  this.logger.setScenario(scenario.pickle.name);
-  
-  // Log environment information
-  this.logger.info(`Running tests in ${config.getEnvironment().toUpperCase()} environment`);
-  
-  // Create test data object for sharing data between steps
-  this.testData = {};
-  
-  // For UI tests, initialize browser
-  if (scenario.pickle.tags.some(tag => tag.name === '@web' || tag.name === '@ui')) {
-    this.logger.info('Initializing web test');
+  /**
+   * Create a new browser context
+   * @param options - Context options
+   * @returns Promise<BrowserContext> - New context
+   */
+  public async createContext(options: any = {}): Promise<BrowserContext> {
+    await this.initialize();
     
-    // Get browser instance (shared across scenarios)
-    const browser = await getBrowser();
-    
-    // Context options
-    const contextOptions: any = {};
-    
-    // Set viewport size if device is not specified
-    const devicePreset = config.getDevicePreset();
-    if (devicePreset) {
-      this.logger.info(`Using device preset: ${devicePreset}`);
-      contextOptions.userAgent = devicePreset;
-    } else {
-      const viewportSize = config.getViewportSize();
-      contextOptions.viewport = viewportSize;
-      this.logger.info(`Using viewport: ${viewportSize.width}x${viewportSize.height}`);
+    if (!this.browser) {
+      throw new Error('Browser not initialized');
     }
     
-    // Record video if enabled
-    if (config.shouldRecordVideo()) {
-      contextOptions.recordVideo = { dir: 'videos/' };
-    }
+    const defaultOptions = {
+      viewport: { width: 1280, height: 720 },
+      recordVideo: this.config.get<boolean>('video.record', false) 
+        ? { dir: 'videos/' } 
+        : undefined,
+      ignoreHTTPSErrors: true
+    };
     
-    // Create a new context and page for each scenario
-    this.context = await createBrowserContext(browser, contextOptions);
+    const mergedOptions = { ...defaultOptions, ...options };
+    const context = await this.browser.newContext(mergedOptions);
     
-    // Add ability to set breakpoints if needed
-    if (config.isDebugMode()) {
-      this.context.setDefaultTimeout(0); // No timeout during debugging
-    }
+    // Store context for cleanup
+    this.contexts.push(context);
     
-    this.page = await createPage(this.context);
-    this.logger.info('Browser initialized');
-  } 
-  // For API tests, initialize API-specific objects
-  else if (scenario.pickle.tags.some(tag => tag.name === '@api')) {
-    this.logger.info('Initializing API test');
+    return context;
   }
-});
 
-// After each scenario
-After(async function(this: TestContext, scenario) {
-  console.log(`[HOOK] After scenario: ${scenario.pickle.name}`);
-  
-  // Store result status for use in clean-up
-  if (scenario.result) {
-    this.result = { status: scenario.result.status };
-    
-    // Log scenario result
-    if (this.logger) {
-      this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name}`);
+  /**
+   * Close a specific browser context
+   * @param context - Context to close
+   */
+  public async closeContext(context: BrowserContext): Promise<void> {
+    try {
+      await context.close();
+      this.contexts = this.contexts.filter(ctx => ctx !== context);
+    } catch (error) {
+      this.logger.error(`Error closing context: ${error}`);
     }
   }
-  
-  // Clean up UI resources
-  if (this.page && this.context) {
-    // Close context and page
-    this.logger.info('Closing browser context');
-    await this.context.close();
-  }
-  
-  // Clean up API resources if needed
-  // Rest of your cleanup code
-});
 
-// After all scenarios
-AfterAll(async function() {
-  console.log('[HOOK] AfterAll: Closing browser');
-  await closeBrowser();
-});
-
-// src/framework/utils/config-manager.ts
-import { env, envNumber, envBoolean, getEnvironment } from './env';
-
-// Module-level singleton variable
-let configInstance: ConfigManager | null = null;
-let instanceCount = 0;
-
-export class ConfigManager {
-  private environment: string;
-  private instanceNumber: number;
-
-  private constructor() {
-    instanceCount++;
-    this.instanceNumber = instanceCount;
-    this.environment = getEnvironment();
-    console.log(`[CONFIG] ConfigManager instance #${this.instanceNumber} initialized for ${this.environment} environment`);
-  }
-
-  public static getInstance(): ConfigManager {
-    if (!configInstance) {
-      configInstance = new ConfigManager();
+  /**
+   * Close all contexts
+   */
+  public async closeAllContexts(): Promise<void> {
+    for (const context of [...this.contexts]) {
+      await this.closeContext(context);
     }
-    return configInstance;
+    this.contexts = [];
   }
-  
-  // Rest of your methods
+
+  /**
+   * Get the browser instance
+   * @returns Browser | null - Current browser instance
+   */
+  public getBrowser(): Browser | null {
+    return this.browser;
+  }
+
+  /**
+   * Check if the browser is initialized
+   * @returns boolean - Whether browser is initialized
+   */
+  public isBrowserInitialized(): boolean {
+    return this.browser !== null;
+  }
+
+  /**
+   * Close the browser and all contexts
+   */
+  public async closeBrowser(): Promise<void> {
+    if (!this.browser) {
+      return;
+    }
+    
+    try {
+      // Close all contexts first
+      await this.closeAllContexts();
+      
+      // Close the browser
+      this.logger.info('Closing browser');
+      await this.browser.close();
+      this.browser = null;
+      this.logger.info('Browser closed successfully');
+    } catch (error) {
+      this.logger.error(`Error closing browser: ${error}`);
+      // Reset state even if there was an error
+      this.browser = null;
+      this.contexts = [];
+    }
+  }
 }
-
