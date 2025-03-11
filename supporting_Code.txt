@@ -100,19 +100,20 @@ Before(async function(this: TestContext, scenario: ITestCaseHookParameter) {
 });
 
 // Before each step
-BeforeStep(async function(this: TestContext, step: ITestStepHookParameter) {
+BeforeStep(async function(this: TestContext, step) {
   if (this.logger) {
     this.logger.info(`Executing step: ${step.pickleStep.text}`);
   }
 });
 
 // After each step
-AfterStep(async function(this: TestContext, step: ITestStepHookParameter, result: any) {
+AfterStep(async function(this: TestContext, result: any) {
   if (this.logger) {
+    const step = result.pickleStep;
     if (result.status === 'PASSED') {
-      this.logger.info(`Step passed: ${step.pickleStep.text}`);
+      this.logger.info(`Step passed: ${step.text}`);
     } else if (result.status === 'FAILED') {
-      this.logger.error(`Step failed: ${step.pickleStep.text}`);
+      this.logger.error(`Step failed: ${step.text}`);
       if (result.error) {
         this.logger.error(`Error: ${result.error.message}`);
       }
