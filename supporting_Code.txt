@@ -99,10 +99,16 @@ export class BrowserManager {
     
     const defaultOptions = {
       viewport: { width: 1280, height: 720 },
-      recordVideo: this.config.get<boolean>('video.record', false) 
-        ? { dir: 'videos/' } 
+      recordVideo: this.config.getBoolean('VIDEO_RECORD', false) 
+        ? { 
+            dir: 'videos/',
+            size: { 
+              width: this.config.getNumber('VIDEO_WIDTH', 1280), 
+              height: this.config.getNumber('VIDEO_HEIGHT', 720) 
+            } 
+          } 
         : undefined,
-      ignoreHTTPSErrors: true
+      ignoreHTTPSErrors: this.config.getBoolean('IGNORE_HTTPS_ERRORS', true)
     };
     
     const mergedOptions = { ...defaultOptions, ...options };
