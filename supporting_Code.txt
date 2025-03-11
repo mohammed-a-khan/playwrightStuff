@@ -1,180 +1,180 @@
-// File: src/framework/utils/config-manager.ts
-import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs';
+// File: src/framework/browser-manager.ts
+
+import { Browser, BrowserContext, chromium } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
 
 /**
- * Configuration Manager for handling environment-specific configurations
- * Implements singleton pattern to ensure configuration is loaded only once
- * Uses .env files instead of JSON files
+ * Singleton Browser Manager to handle browser lifecycle
+ * This prevents multiple browser instances from being created
  */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private config: Record<string, any> = {};
-  private initialized: boolean = false;
+export class BrowserManager {
+  private static instance: BrowserManager;
+  private browser: Browser | null = null;
+  private contexts: BrowserContext[] = [];
+  private logger: Logger;
+  private config: ConfigManager;
+  private isInitializing: boolean = false;
+  private initPromise: Promise<void> | null = null;
 
   /**
    * Private constructor for singleton pattern
    */
   private constructor() {
-    this.loadConfiguration();
+    this.logger = new Logger('BrowserManager');
+    this.config = ConfigManager.getInstance();
   }
 
   /**
    * Get singleton instance
-   * @returns ConfigManager instance
+   * @returns BrowserManager instance
    */
-  public static getInstance(): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
+  public static getInstance(): BrowserManager {
+    if (!BrowserManager.instance) {
+      BrowserManager.instance = new BrowserManager();
     }
-    return ConfigManager.instance;
+    return BrowserManager.instance;
   }
 
   /**
-   * Load configuration from .env files and process.env
-   * @private
+   * Initialize browser if not already initialized
+   * Uses a promise to prevent multiple initializations
    */
-  private loadConfiguration(): void {
-    if (this.initialized) {
+  public async initialize(): Promise<void> {
+    if (this.browser) {
       return;
     }
 
+    if (this.isInitializing) {
+      // If already initializing, wait for it to complete
+      return this.initPromise;
+    }
+
+    this.isInitializing = true;
+    this.initPromise = this.initializeBrowser();
+    await this.initPromise;
+    this.isInitializing = false;
+  }
+
+  /**
+   * Internal method to initialize the browser
+   */
+  private async initializeBrowser(): Promise<void> {
     try {
-      // Load base .env file first (if exists)
-      const baseEnvPath = path.resolve(process.cwd(), '.env');
-      if (fs.existsSync(baseEnvPath)) {
-        console.log(`Loading base environment from: ${baseEnvPath}`);
-        dotenv.config({ path: baseEnvPath });
-      }
-
-      // Load environment-specific .env file if specified
-      const env = process.env.NODE_ENV || 'development';
-      const envSpecificPath = path.resolve(process.cwd(), `.env.${env}`);
+      this.logger.info('Launching browser');
       
-      if (fs.existsSync(envSpecificPath)) {
-        console.log(`Loading environment-specific config from: ${envSpecificPath}`);
-        // Override with environment-specific values
-        dotenv.config({ path: envSpecificPath, override: true });
-      }
-
-      // Copy all environment variables to our config object
-      // We'll convert them to appropriate types later in the get method
-      this.config = { ...process.env };
+      const headless = this.config.getBoolean('HEADLESS', true);
+      const slowMo = this.config.getNumber('SLOW_MO', 0);
       
-      this.initialized = true;
+      // Parse browser args from env variable (comma-separated string)
+      const browserArgs = this.config.getString('BROWSER_ARGS', '--disable-gpu,--no-sandbox')
+        .split(',')
+        .map(arg => arg.trim())
+        .filter(arg => arg.length > 0);
+      
+      this.browser = await chromium.launch({
+        headless,
+        slowMo,
+        args: browserArgs
+      });
+      
+      this.logger.info('Browser launched successfully');
     } catch (error) {
-      console.error(`Error loading environment configuration: ${error}`);
+      this.logger.error(`Failed to launch browser: ${error}`);
+      throw error;
     }
   }
 
   /**
-   * Get configuration value with type conversion
-   * @param key - Configuration key
-   * @param defaultValue - Default value if configuration not found
-   * @returns Configuration value with appropriate type
+   * Create a new browser context
+   * @param options - Context options
+   * @returns Promise<BrowserContext> - New context
    */
-  public get<T>(key: string, defaultValue?: T): T {
-    if (!this.initialized) {
-      this.loadConfiguration();
+  public async createContext(options: any = {}): Promise<BrowserContext> {
+    await this.initialize();
+    
+    if (!this.browser) {
+      throw new Error('Browser not initialized');
     }
     
-    // Check if the key exists in our config
-    const value = this.config[key];
+    const defaultOptions = {
+      viewport: { width: 1280, height: 720 },
+      recordVideo: this.config.get<boolean>('video.record', false) 
+        ? { dir: 'videos/' } 
+        : undefined,
+      ignoreHTTPSErrors: true
+    };
     
-    if (value === undefined) {
-      return defaultValue as T;
+    const mergedOptions = { ...defaultOptions, ...options };
+    const context = await this.browser.newContext(mergedOptions);
+    
+    // Store context for cleanup
+    this.contexts.push(context);
+    
+    return context;
+  }
+
+  /**
+   * Close a specific browser context
+   * @param context - Context to close
+   */
+  public async closeContext(context: BrowserContext): Promise<void> {
+    try {
+      await context.close();
+      this.contexts = this.contexts.filter(ctx => ctx !== context);
+    } catch (error) {
+      this.logger.error(`Error closing context: ${error}`);
+    }
+  }
+
+  /**
+   * Close all contexts
+   */
+  public async closeAllContexts(): Promise<void> {
+    for (const context of [...this.contexts]) {
+      await this.closeContext(context);
+    }
+    this.contexts = [];
+  }
+
+  /**
+   * Get the browser instance
+   * @returns Browser | null - Current browser instance
+   */
+  public getBrowser(): Browser | null {
+    return this.browser;
+  }
+
+  /**
+   * Check if the browser is initialized
+   * @returns boolean - Whether browser is initialized
+   */
+  public isBrowserInitialized(): boolean {
+    return this.browser !== null;
+  }
+
+  /**
+   * Close the browser and all contexts
+   */
+  public async closeBrowser(): Promise<void> {
+    if (!this.browser) {
+      return;
     }
     
-    // Try to convert the string value to the appropriate type
-    // based on the defaultValue or just return as is
-    if (defaultValue !== undefined) {
-      const defaultType = typeof defaultValue;
+    try {
+      // Close all contexts first
+      await this.closeAllContexts();
       
-      if (defaultType === 'number') {
-        const numberValue = Number(value);
-        return (isNaN(numberValue) ? defaultValue : numberValue) as T;
-      } else if (defaultType === 'boolean') {
-        if (value.toLowerCase() === 'true') return true as unknown as T;
-        if (value.toLowerCase() === 'false') return false as unknown as T;
-        return defaultValue;
-      } else if (defaultType === 'object' && Array.isArray(defaultValue)) {
-        try {
-          // Try to parse as JSON if it looks like an array
-          if (value.startsWith('[') && value.endsWith(']')) {
-            return JSON.parse(value) as T;
-          }
-          // Otherwise split by comma (common for env vars)
-          return value.split(',').map(item => item.trim()) as unknown as T;
-        } catch (e) {
-          return defaultValue;
-        }
-      } else if (defaultType === 'object') {
-        try {
-          return JSON.parse(value) as T;
-        } catch (e) {
-          return defaultValue;
-        }
-      }
+      // Close the browser
+      this.logger.info('Closing browser');
+      await this.browser.close();
+      this.browser = null;
+      this.logger.info('Browser closed successfully');
+    } catch (error) {
+      this.logger.error(`Error closing browser: ${error}`);
+      // Reset state even if there was an error
+      this.browser = null;
+      this.contexts = [];
     }
-    
-    // If no defaultValue or no special conversion needed, return as is
-    return value as unknown as T;
-  }
-
-  /**
-   * Set configuration value (mainly for testing)
-   * @param key - Configuration key
-   * @param value - Configuration value
-   */
-  public set<T>(key: string, value: T): void {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    // Store in our config object
-    this.config[key] = value;
-    
-    // Also set in process.env for consistency
-    process.env[key] = String(value);
-  }
-
-  /**
-   * Get entire configuration object
-   * @returns Configuration object
-   */
-  public getAll(): Record<string, any> {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    return { ...this.config };
-  }
-
-  /**
-   * Get boolean value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getBoolean(key: string, defaultValue: boolean = false): boolean {
-    return this.get<boolean>(key, defaultValue);
-  }
-
-  /**
-   * Get number value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getNumber(key: string, defaultValue: number = 0): number {
-    return this.get<number>(key, defaultValue);
-  }
-
-  /**
-   * Get string value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getString(key: string, defaultValue: string = ''): string {
-    return this.get<string>(key, defaultValue);
   }
 }
