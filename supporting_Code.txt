@@ -1,196 +1,38 @@
-// File: src/support/hooks.ts
-import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout } from '@cucumber/cucumber';
-import { Page } from '@playwright/test';
-import { TestContext } from './test-context';
-import { Logger } from '../framework/utils/logger';
-import { BrowserManager } from '../framework/browser-manager';
-import { ConfigManager } from '../framework/utils/config-manager';
-import { ReportHelper } from '../framework/utils/report-helper';
-import path from 'path';
-import fs from 'fs';
+// File: src/scripts/generate-report.js
+const reporter = require('cucumber-html-reporter');
+const fs = require('fs');
+const path = require('path');
 
-// Load configuration once at the start
-const config = ConfigManager.getInstance();
+// Check if the JSON report exists
+const jsonReportPath = path.join(__dirname, '../../reports/json/cucumber-report.json');
+if (!fs.existsSync(jsonReportPath)) {
+  console.error(`Error: JSON report not found at ${jsonReportPath}`);
+  console.error('Make sure to run tests first with the --format json:reports/json/cucumber-report.json option.');
+  process.exit(1);
+}
 
-// Set default timeout from environment
-const defaultTimeout = config.getNumber('DEFAULT_TIMEOUT', 30000);
-setDefaultTimeout(defaultTimeout);
+// Options for the reporter
+const options = {
+  theme: 'bootstrap',
+  jsonFile: jsonReportPath,
+  output: path.join(__dirname, '../../reports/html/cucumber-report.html'),
+  reportSuiteAsScenarios: true,
+  scenarioTimestamp: true,
+  launchReport: false,
+  metadata: {
+    "App Version": "1.0.0",
+    "Test Environment": process.env.NODE_ENV || 'default',
+    "Browser": "Chrome",
+    "Platform": process.platform,
+    "Parallel": "Scenarios",
+    "Executed": "Remote"
+  }
+};
 
-// Create a BrowserManager instance
-const browserManager = BrowserManager.getInstance();
+// Generate the report
+reporter.generate(options);
 
-// Before all scenarios
-BeforeAll(async function() {
-  const globalLogger = new Logger('GlobalSetup');
-  globalLogger.info('Starting test execution');
-  
-  // Ensure report directories exist
-  const dirs = ['reports/screenshots', 'reports/videos', 'reports/logs', 'reports/data'];
-  dirs.forEach(dir => {
-    const dirPath = path.join(process.cwd(), dir);
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-      globalLogger.info(`Created directory: ${dirPath}`);
-    }
-  });
-  
-  // For web tests, initialize the browser once
-  if (process.env.PRELAUNCH_BROWSER === 'true') {
-    globalLogger.info('Pre-launching browser');
-    await browserManager.initialize();
-    globalLogger.info('Browser pre-launched successfully');
-  }
-});
-
-// After all scenarios
-AfterAll(async function() {
-  const globalLogger = new Logger('GlobalTeardown');
-  globalLogger.info('Finishing test execution');
-  
-  // Close the browser if it's open
-  await browserManager.closeBrowser();
-  globalLogger.info('All resources cleaned up');
-});
-
-// Before each scenario
-Before(async function(this: TestContext, scenario) {
-  this.startTime = Date.now();
-  this.scenarioName = scenario.pickle.name;
-  this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
-  
-  // Create a unique test ID based on scenario name and timestamp
-  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-  
-  // Initialize logger with test ID
-  this.logger = new Logger(testId);
-  this.logger.info(`Starting scenario: ${scenario.pickle.name}`);
-  
-  // Log tags
-  if (this.scenarioTags.length > 0) {
-    this.logger.info(`Tags: ${this.scenarioTags.join(', ')}`);
-  }
-  
-  // Create test data object for sharing data between steps
-  this.testData = {};
-  
-  // For UI tests, initialize browser context and page
-  if (this.scenarioTags.some(tag => tag === '@web' || tag === '@ui')) {
-    this.logger.info('Initializing web test');
-    
-    // Create a new context
-    this.context = await browserManager.createContext({
-      recordVideo: config.get<boolean>('video.record', false) 
-        ? { dir: 'videos/', size: { width: 1280, height: 720 } } 
-        : undefined
-    });
-    
-    // Add ability to set breakpoints if needed
-    if (process.env.DEBUG === 'true') {
-      this.context.setDefaultTimeout(0); // No timeout during debugging
-    }
-    
-    // Create a new page
-    this.page = await this.context.newPage();
-    this.logger.info('Browser context and page initialized');
-  } 
-  // For API tests, we don't need browser initialization
-  else if (this.scenarioTags.some(tag => tag === '@api')) {
-    this.logger.info('Initializing API test');
-    // API clients will be initialized in step definitions when needed
-  }
-});
-
-// Before each step
-BeforeStep(async function(this: TestContext, step) {
-  if (this.logger) {
-    this.logger.info(`Executing step: ${step.pickleStep.text}`);
-  }
-});
-
-// After each step
-AfterStep(async function(this: TestContext, step, result) {
-  if (this.logger) {
-    if (result.status === 'PASSED') {
-      this.logger.info(`Step passed: ${step.pickleStep.text}`);
-    } else if (result.status === 'FAILED') {
-      this.logger.error(`Step failed: ${step.pickleStep.text}`);
-      if (result.error) {
-        this.logger.error(`Error: ${result.error.message}`);
-      }
-      
-      // For UI tests, take a screenshot on failure
-      if (this.page) {
-        try {
-          const screenshotName = `failed-${this.scenarioName?.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
-          const screenshotPath = await this.page.screenshot({ 
-            path: `./reports/screenshots/${screenshotName}.png`,
-            fullPage: true 
-          });
-          this.logger.info(`Screenshot captured: ${screenshotPath}`);
-          this.attach(screenshotPath, 'image/png');
-        } catch (error) {
-          this.logger.error(`Failed to take screenshot: ${error.message}`);
-        }
-      }
-    }
-  }
-});
-
-// After each scenario
-After(async function(this: TestContext, scenario) {
-  this.endTime = Date.now();
-  const executionTime = this.endTime - (this.startTime || this.endTime);
-  
-  // Store result status for use in clean-up
-  this.result = { status: scenario.result.status };
-  
-  // Log scenario result
-  if (this.logger) {
-    this.logger.info(`Scenario ${scenario.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
-  }
-  
-  // Clean up UI resources
-  if (this.page && this.context) {
-    // Close context (and associated page)
-    this.logger.info('Closing browser context');
-    await browserManager.closeContext(this.context);
-  }
-  
-  // Clean up API resources if needed
-  if (this.testData.userId && this.userApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test user: ${this.testData.userId}`);
-      await this.userApiClient.deleteUser(this.testData.userId, this.authToken);
-    } catch (error) {
-      // Ignore errors during cleanup
-      this.logger.warn(`Cleanup error: ${error.message}`);
-    }
-  }
-  
-  if (this.testData.productId && this.productApiClient && this.authToken) {
-    try {
-      this.logger.info(`Cleaning up test product: ${this.testData.productId}`);
-      await this.productApiClient.deleteProduct(this.testData.productId, this.authToken);
-    } catch (error) {
-      // Ignore errors during cleanup
-      this.logger.warn(`Cleanup error: ${error.message}`);
-    }
-  }
-  
-  // Add logs to Cucumber report
-  if (this.logger) {
-    const logs = this.logger.getLogs();
-    if (logs.length > 0) {
-      this.attach(logs.join('\n'), 'text/plain');
-    }
-  }
-  
-  // Explicitly clean up references to help garbage collection
-  delete this.page;
-  delete this.context;
-  delete this.loginPage;
-  delete this.dashboardPage;
-  delete this.userProfilePage;
-  delete this.userApiClient;
-  delete this.productApiClient;
-});
+console.log(`
+Report generated successfully at:
+${options.output}
+`);
