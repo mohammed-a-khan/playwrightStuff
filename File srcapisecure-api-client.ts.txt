@@ -1,246 +1,154 @@
-// File: src/api/secure-api-client.ts
-import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
-import { AxiosResponse, AxiosRequestConfig } from 'axios';
+// File: src/api/trade-api-client.ts
+import { SecureApiClient } from './secure-api-client';
+import { ApiRequestOptions } from '../framework/base-api-client';
 import * as fs from 'fs';
-import * as path from 'path';
 import * as https from 'https';
+import * as path from 'path';
 
-interface Product {
-  id: number;
-  name: string;
-  price: number;
-  category: string;
-  description: string;
+// Define interfaces for request and response
+interface TradeSearchRequest {
+  accountNumFilter?: string[];
+  tradeStatusFilter?: string[];
+  tradeTypeFilter?: string[];
+  priorityOrder?: boolean;
 }
 
-interface ProductListResponse {
-  items: Product[];
+interface Trade {
+  id: string;
+  accountNum: string;
+  tradeStatus: string;
+  tradeType: string;
+  // Add other trade properties as needed
+}
+
+interface TradeSearchResponse {
+  trades: Trade[];
   totalCount: number;
-  pageSize: number;
-  pageNumber: number;
 }
 
 /**
- * Secure API Client with proxy settings, auth token and client certificate
+ * Trade API Client for interactions with the trade service
  */
-export class SecureApiClient extends BaseApiClient {
-  private authToken: string | null = null;
-  private readonly proxyUrl: string;
-  private readonly certPath: string;
-  private readonly keyPath: string;
-  private readonly caPath: string;
-
+export class TradeApiClient extends SecureApiClient {
   /**
-   * Constructor for the SecureApiClient
-   * @param apiBaseUrl - Base URL for API requests
+   * Constructor for the TradeApiClient
    */
-  constructor(apiBaseUrl?: string) {
+  constructor() {
+    // Get base URL from environment variables
+    const apiBaseUrl = process.env.TRADE_API_BASE_URL || 'https://jonat-sit.k8joha.americas.kshare.net';
     super(apiBaseUrl);
-    
-    // Load proxy and certificate settings from config
-    this.proxyUrl = this.config.getString('PROXY_URL', '');
-    this.certPath = this.config.getString('CLIENT_CERT_PATH', '');
-    this.keyPath = this.config.getString('CLIENT_KEY_PATH', '');
-    this.caPath = this.config.getString('CA_CERT_PATH', '');
   }
 
   /**
-   * Create HTTPS agent with certificate configuration
-   * @returns HTTPS agent with proper certificates
+   * Override createHttpsAgent to support PFX certificate with passphrase
+   * and include proxy settings
    */
-  private createHttpsAgent(): https.Agent {
-    // Create HTTPS agent with certificates
+  protected createHttpsAgent(): https.Agent {
+    // Get certificate info from environment variables
+    const certPath = process.env.CERT_PATH || path.resolve(process.cwd(), 'certs', 'johana.pfx');
+    const certPassphrase = process.env.CERT_PASSPHRASE || 'Test12345';
+    
+    // Check if certificate file exists
+    if (!fs.existsSync(certPath)) {
+      this.logger.error(`Certificate file not found: ${certPath}`);
+      throw new Error(`Certificate file not found: ${certPath}`);
+    }
+    
+    // Create HTTPS agent with certificate
     const httpsOptions: https.AgentOptions = {
-      rejectUnauthorized: true, // Verify server certificate
+      pfx: fs.readFileSync(certPath),
+      passphrase: certPassphrase,
+      rejectUnauthorized: process.env.VERIFY_SSL !== 'false'
     };
-
-    // Add client certificate and key if available
-    if (this.certPath && fs.existsSync(this.certPath) && 
-        this.keyPath && fs.existsSync(this.keyPath)) {
-      httpsOptions.cert = fs.readFileSync(this.certPath);
-      httpsOptions.key = fs.readFileSync(this.keyPath);
-      this.logger.info('Using client certificate for API requests');
-    }
-
-    // Add CA certificate if available
-    if (this.caPath && fs.existsSync(this.caPath)) {
-      httpsOptions.ca = fs.readFileSync(this.caPath);
-      this.logger.info('Using custom CA certificate for API requests');
-    }
-
+    
+    this.logger.info(`Using certificate from ${certPath} for API requests`);
+    
     return new https.Agent(httpsOptions);
   }
 
   /**
-   * Create common request configuration with auth and certificates
-   * @param options - Additional API request options
-   * @returns Axios request configuration
+   * Override to add proxy configuration
    */
-  private async createRequestConfig(options?: ApiRequestOptions): Promise<AxiosRequestConfig> {
-    // Get auth token if not already available
-    if (!this.authToken) {
-      this.authToken = await this.getAuthToken();
-    }
-
-    // Prepare headers with auth token
-    const headers = { 
-      ...this.defaultHeaders,
-      ...options?.headers
-    };
-
-    if (this.authToken) {
-      headers.Authorization = `Bearer ${this.authToken}`;
-    }
-
-    // Create HTTPS agent with certificates
-    const httpsAgent = this.createHttpsAgent();
+  protected async createRequestConfig(options?: ApiRequestOptions): Promise<ApiRequestOptions> {
+    // Get base config from parent
+    const config = await super.createRequestConfig(options);
     
-    // Create config including proxy if available
-    const config: AxiosRequestConfig = {
-      headers,
-      params: options?.params || {},
-      timeout: options?.timeout || this.defaultTimeout,
-      httpsAgent
-    };
+    // Get proxy settings from environment variables
+    const httpsProxy = process.env.HTTPS_PROXY_URL;
+    const httpProxy = process.env.HTTP_PROXY_URL;
     
-    // Add proxy configuration if available
-    if (this.proxyUrl) {
-      this.logger.info(`Using proxy for API requests: ${this.proxyUrl}`);
+    if (httpsProxy || httpProxy) {
+      (config as any).proxy = {};
       
-      // Parse proxy URL to extract components
-      const proxyUrlObj = new URL(this.proxyUrl);
+      if (httpsProxy) {
+        (config as any).proxy.https = httpsProxy;
+        this.logger.info(`Using HTTPS proxy: ${httpsProxy}`);
+      }
       
-      config.proxy = {
-        host: proxyUrlObj.hostname,
-        port: parseInt(proxyUrlObj.port),
-        protocol: proxyUrlObj.protocol
-      };
-      
-      // Add proxy authentication if provided
-      if (proxyUrlObj.username && proxyUrlObj.password) {
-        config.proxy.auth = {
-          username: proxyUrlObj.username,
-          password: proxyUrlObj.password
-        };
+      if (httpProxy) {
+        (config as any).proxy.http = httpProxy;
+        this.logger.info(`Using HTTP proxy: ${httpProxy}`);
       }
     }
-
+    
     return config;
   }
 
   /**
-   * Get products with filtering
-   * @param category - Filter by category
-   * @param pageSize - Number of items per page
-   * @param pageNumber - Page number (0-based)
-   * @returns Promise with product list response
+   * Search for trades based on filters loaded from a JSON file or provided directly
+   * @param requestBodyOrFilePath - Either a request body object or path to a JSON file
+   * @returns Promise with trade search results
    */
-  async getProducts(category?: string, pageSize: number = 20, pageNumber: number = 0): Promise<ProductListResponse> {
-    // Prepare request parameters
-    const params: Record<string, any> = {
-      pageSize,
-      pageNumber
-    };
-
-    if (category) {
-      params.category = category;
-    }
-
-    // Get common request config
-    const config = await this.createRequestConfig({ params });
+  async searchTrades(requestBodyOrFilePath: TradeSearchRequest | string): Promise<TradeSearchResponse> {
+    let requestBody: TradeSearchRequest;
     
-    // Make the request
-    const response = await this.get<ProductListResponse>('/api/products', { 
-      ...config,
-      params
-    });
-
-    return response.data;
-  }
-
-  /**
-   * Get a single product by ID
-   * @param id - Product ID
-   * @returns Promise with product data
-   */
-  async getProduct(id: number): Promise<Product> {
-    // Get common request config
-    const config = await this.createRequestConfig();
-    
-    // Make the request
-    const response = await this.get<Product>(`/api/products/${id}`, config);
-    
-    return response.data;
-  }
-
-  /**
-   * Update a product
-   * @param id - Product ID
-   * @param data - Product data to update
-   * @returns Promise with updated product
-   */
-  async updateProduct(id: number, data: Partial<Product>): Promise<Product> {
-    // Get common request config
-    const config = await this.createRequestConfig();
-    
-    // Make the request
-    const response = await this.put<Product>(`/api/products/${id}`, data, config);
-    
-    return response.data;
-  }
-
-  /**
-   * Get authentication token
-   * @returns Promise with auth token
-   */
-  async getAuthToken(): Promise<string> {
-    const username = this.config.getString('API_USERNAME', '');
-    const password = this.config.getString('API_PASSWORD', '');
-    
-    if (!username || !password) {
-      throw new Error('API credentials not configured');
-    }
-    
-    this.logger.info('Getting auth token from API');
-    
-    // Create HTTPS agent with certificates
-    const httpsAgent = this.createHttpsAgent();
-    
-    // Create config including proxy if available
-    const config: AxiosRequestConfig = {
-      headers: this.defaultHeaders,
-      httpsAgent
-    };
-    
-    // Add proxy configuration if available
-    if (this.proxyUrl) {
-      const proxyUrlObj = new URL(this.proxyUrl);
-      
-      config.proxy = {
-        host: proxyUrlObj.hostname,
-        port: parseInt(proxyUrlObj.port),
-        protocol: proxyUrlObj.protocol
-      };
-      
-      if (proxyUrlObj.username && proxyUrlObj.password) {
-        config.proxy.auth = {
-          username: proxyUrlObj.username,
-          password: proxyUrlObj.password
-        };
+    // If requestBodyOrFilePath is a string, assume it's a file path
+    if (typeof requestBodyOrFilePath === 'string') {
+      try {
+        const jsonContent = fs.readFileSync(requestBodyOrFilePath, 'utf8');
+        requestBody = JSON.parse(jsonContent);
+        this.logger.info(`Loaded request body from ${requestBodyOrFilePath}`);
+      } catch (error) {
+        this.logger.error(`Failed to load request body from file: ${error.message}`);
+        throw new Error(`Failed to load request body from file: ${error.message}`);
       }
+    } else {
+      requestBody = requestBodyOrFilePath;
     }
     
-    // Make auth request
-    const response = await this.post<{token: string}>('/api/auth/token', {
-      username,
-      password
-    }, config);
+    // Get headers from environment variables
+    const headers: Record<string, string> = {
+      'X-CLIENT-SUBJECT': process.env.X_CLIENT_SUBJECT || 'AU=JOHA',
+      'AUTHORIZED_UPN': process.env.AUTHORIZED_UPN || 'joa@americas.kshare.net',
+      'Content-Type': 'application/json'
+    };
     
-    if (response.data && response.data.token) {
-      this.logger.info('Successfully retrieved auth token');
-      return response.data.token;
+    // Create request config with headers
+    const config = await this.createRequestConfig({ headers });
+    
+    // Make the POST request
+    this.logger.info(`Searching trades with filters: ${JSON.stringify(requestBody)}`);
+    
+    try {
+      const endpoint = process.env.TRADE_SEARCH_ENDPOINT || '/api/trades/search';
+      const response = await this.post<TradeSearchResponse>(endpoint, requestBody, config);
+      
+      // Verify response status
+      if (response.status !== 200) {
+        this.logger.error(`Unexpected response status: ${response.status}`);
+        throw new Error(`API returned unexpected status: ${response.status}`);
+      }
+      
+      this.logger.info(`Response status: ${response.status} OK`);
+      this.logger.info(`Found ${response.data?.totalCount || 0} trades matching filters`);
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Trade search failed: ${error.message}`);
+      if (error.response) {
+        this.logger.error(`Response status: ${error.response.status}`);
+        this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
     }
-    
-    throw new Error('Failed to get authentication token');
   }
 }
