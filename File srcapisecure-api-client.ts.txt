@@ -1,379 +1,537 @@
-// src/framework/utils/config-manager.ts
-import dotenv from 'dotenv';
-import path from 'path';
+// src/framework/base-api-client.ts
+import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import { expect } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
 import fs from 'fs';
+import https from 'https';
+import path from 'path';
+import { URL } from 'url';
 
 /**
- * Enhanced Configuration Manager for handling environment-specific configurations
- * Implements singleton pattern to ensure configuration is loaded only once
- * 
- * Features:
- * - Multiple configuration sources (JSON files, .env files, environment variables)
- * - Type conversion for configuration values
- * - Nested configuration keys with dot notation
- * - Default values
- * - Caching for better performance
- * - Environment-specific configuration overrides
+ * Interface for API request options
  */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private config: Record<string, any> = {};
-  private initialized: boolean = false;
-  private configSources: string[] = [];
+export interface ApiRequestOptions {
+  headers?: Record<string, string>;
+  params?: Record<string, any>;
+  data?: any;
+  timeout?: number;
+  validateStatus?: boolean;
+  withCredentials?: boolean;
+  pfxPath?: string;         // Path to PFX file
+  pfxPassphrase?: string;   // Passphrase for PFX file
+  useProxy?: boolean;       // Whether to use proxy settings
+  retryOptions?: {
+    maxAttempts?: number;
+    retryDelay?: number;
+    retryCondition?: (error: any) => boolean;
+  };
+}
+
+/**
+ * Base API client for all API interactions
+ * Enhanced with certificate handling, proxy support, and robust error handling
+ */
+export class BaseApiClient {
+  readonly apiBaseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly defaultHeaders: Record<string, string>;
+  readonly config: ConfigManager;
+  
+  // Certificate and proxy settings
+  readonly pfxCertPath?: string;
+  readonly pfxCertPassphrase?: string;
+  readonly proxyUrl?: string;
+  readonly defaultRetryOptions: { maxAttempts: number; retryDelay: number };
 
   /**
-   * Private constructor for singleton pattern
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
    */
-  private constructor() {
-    this.loadConfiguration();
+  constructor(
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
+  ) {
+    this.config = ConfigManager.getInstance();
+    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
+    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
+    this.logger = new Logger(this.constructor.name);
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
+    };
+    
+    // Initialize certificate settings from config
+    this.pfxCertPath = this.config.getString('PFX_CERT_PATH', '');
+    this.pfxCertPassphrase = this.config.getString('PFX_CERT_PASSPHRASE', '');
+    this.proxyUrl = this.config.getString('PROXY_URL', '');
+    this.defaultRetryOptions = {
+      maxAttempts: this.config.getNumber('API_RETRY_ATTEMPTS', 3),
+      retryDelay: this.config.getNumber('API_RETRY_DELAY', 1000)
+    };
+    
+    // Set up request/response interceptors for debugging
+    this.setupInterceptors();
   }
 
   /**
-   * Get singleton instance
-   * @returns ConfigManager instance
-   */
-  public static getInstance(): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
-    }
-    return ConfigManager.instance;
-  }
-
-  /**
-   * Load configuration from all sources
-   * - .env files
-   * - JSON configuration files
-   * - Environment variables
+   * Set up axios interceptors for debugging request/response
    * @private
    */
-  private loadConfiguration(): void {
-    if (this.initialized) {
-      return;
-    }
-
-    try {
-      // Start with an empty configuration
-      this.config = {};
-      
-      // 1. Load base .env file first (if exists)
-      this.loadEnvFile('.env');
-
-      // 2. Load environment-specific .env file if specified
-      const env = process.env.NODE_ENV || 'development';
-      this.loadEnvFile(`.env.${env}`);
-
-      // 3. Load JSON configuration files if they exist
-      this.loadJsonConfig('default.json');
-      this.loadJsonConfig(`${env}.json`);
-      
-      // 4. Override with any CI-specific configuration
-      if (process.env.CI === 'true') {
-        this.loadJsonConfig('ci.json');
-        this.loadEnvFile('.env.ci');
+  private setupInterceptors(): void {
+    // Request interceptor
+    axios.interceptors.request.use(
+      (config) => {
+        if (this.config.getBoolean('API_DEBUG', false)) {
+          this.logger.debug(`Full request config: ${JSON.stringify({
+            url: config.url,
+            method: config.method,
+            headers: config.headers,
+            params: config.params,
+            data: config.data
+          }, null, 2)}`);
+        }
+        return config;
+      },
+      (error) => {
+        this.logger.error(`Request interceptor error: ${error.message}`);
+        return Promise.reject(error);
       }
-
-      // 5. Override with environment variables (highest priority)
-      this.mergeEnvironmentVariables();
-
-      this.initialized = true;
-      console.log(`Configuration loaded from: ${this.configSources.join(', ')}`);
-    } catch (error) {
-      console.error(`Error loading configuration: ${error}`);
-    }
+    );
+    
+    // Response interceptor
+    axios.interceptors.response.use(
+      (response) => {
+        return response;
+      },
+      (error) => {
+        if (error.response) {
+          this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+        } else if (error.request) {
+          this.logger.error(`No response received: ${error.message}`);
+        } else {
+          this.logger.error(`Request configuration error: ${error.message}`);
+        }
+        return Promise.reject(error);
+      }
+    );
   }
 
   /**
-   * Load configuration from a .env file
-   * @param filename - Name of the .env file
-   * @private
+   * Create request configuration with certificate and proxy settings
+   * @param options - API request options
+   * @returns Axios request configuration
    */
-  private loadEnvFile(filename: string): void {
-    const envPath = path.resolve(process.cwd(), filename);
+  protected createRequestConfig(options?: ApiRequestOptions): AxiosRequestConfig {
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true,
+      withCredentials: options?.withCredentials
+    };
     
-    if (fs.existsSync(envPath)) {
-      dotenv.config({ path: envPath, override: true });
-      this.configSources.push(filename);
-    }
-  }
-
-  /**
-   * Load configuration from a JSON file
-   * @param filename - Name of the JSON file
-   * @private
-   */
-  private loadJsonConfig(filename: string): void {
-    const configPath = path.join(process.cwd(), 'config', filename);
+    // Add certificate if needed
+    const pfxPath = options?.pfxPath || this.pfxCertPath;
+    const passphrase = options?.pfxPassphrase || this.pfxCertPassphrase;
     
-    if (fs.existsSync(configPath)) {
+    if (pfxPath && fs.existsSync(pfxPath)) {
       try {
-        const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        this.mergeConfig(fileConfig);
-        this.configSources.push(`config/${filename}`);
+        const pfx = fs.readFileSync(pfxPath);
+        config.httpsAgent = new https.Agent({
+          pfx,
+          passphrase,
+          rejectUnauthorized: this.config.getBoolean('REJECT_UNAUTHORIZED', true)
+        });
+        this.logger.debug(`Using PFX certificate from: ${pfxPath}`);
       } catch (error) {
-        console.error(`Error loading JSON config ${filename}: ${error}`);
-      }
-    }
-  }
-
-  /**
-   * Merge configuration objects
-   * @param config - Configuration object to merge
-   * @private
-   */
-  private mergeConfig(config: Record<string, any>): void {
-    this.config = this.deepMerge(this.config, config);
-  }
-
-  /**
-   * Deep merge two objects
-   * @param target - Target object
-   * @param source - Source object
-   * @returns Merged object
-   * @private
-   */
-  private deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
-    const result = { ...target };
-    
-    for (const key in source) {
-      if (source[key] instanceof Object && key in target && target[key] instanceof Object) {
-        result[key] = this.deepMerge(target[key], source[key]);
-      } else {
-        result[key] = source[key];
+        this.logger.error(`Error loading PFX certificate: ${error.message}`);
       }
     }
     
-    return result;
-  }
-
-  /**
-   * Override configuration with environment variables
-   * @private
-   */
-  private mergeEnvironmentVariables(): void {
-    // First add all environment variables to config
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined) {
-        this.config[key] = value;
-      }
-    }
-
-    // Then handle special prefixed environment variables for nested configuration
-    for (const [key, value] of Object.entries(process.env)) {
-      if (key.startsWith('CONFIG_') && value !== undefined) {
-        // Convert CONFIG_DB_HOST to db.host
-        const configKey = key
-          .replace('CONFIG_', '')
-          .toLowerCase()
-          .replace(/_([a-z])/g, (_, c) => `.${c.toLowerCase()}`);
+    // Add proxy if needed
+    const useProxy = options?.useProxy !== false; // Use proxy by default if available
+    const proxyUrl = this.proxyUrl;
+    
+    if (useProxy && proxyUrl) {
+      try {
+        // Ensure proxy URL has a protocol
+        const formattedProxyUrl = proxyUrl.startsWith('http') 
+          ? proxyUrl 
+          : `http://${proxyUrl}`;
         
-        this.set(configKey, value);
+        const parsedUrl = new URL(formattedProxyUrl);
+        
+        config.proxy = {
+          host: parsedUrl.hostname,
+          port: parseInt(parsedUrl.port || '80'),
+          protocol: parsedUrl.protocol.replace(':', '')
+        };
+        
+        this.logger.debug(`Using proxy: ${formattedProxyUrl}`);
+      } catch (error) {
+        this.logger.error(`Invalid proxy URL: ${proxyUrl}`);
       }
     }
+    
+    return config;
   }
 
   /**
-   * Get configuration value with type conversion
-   * @param key - Configuration key (supports dot notation)
-   * @param defaultValue - Default value if configuration not found
-   * @returns Configuration value with appropriate type
+   * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
+   * @param endpoint - API endpoint
+   * @returns Full URL string
    */
-  public get<T>(key: string, defaultValue?: T): T {
-    if (!this.initialized) {
-      this.loadConfiguration();
+  protected normalizeUrl(endpoint: string): string {
+    // Ensure baseUrl has a protocol
+    const baseUrl = this.apiBaseUrl.startsWith('http') 
+      ? this.apiBaseUrl 
+      : `https://${this.apiBaseUrl}`;
+      
+    // Ensure endpoint starts with a slash if not empty and doesn't already have one
+    if (endpoint && !endpoint.startsWith('/')) {
+      endpoint = '/' + endpoint;
     }
     
-    // Parse dot notation
-    const keys = key.split('.');
-    let value: any = this.config;
-    
-    // Check environment variables first (highest priority)
-    const envKey = keys.join('_').toUpperCase();
-    if (process.env[envKey] !== undefined) {
-      return this.convertValue(process.env[envKey], defaultValue);
+    try {
+      return new URL(endpoint, baseUrl).toString();
+    } catch (error) {
+      this.logger.error(`Error creating URL from ${baseUrl} and ${endpoint}: ${error.message}`);
+      throw new Error(`Invalid URL: Cannot combine ${baseUrl} and ${endpoint}`);
     }
-    
-    // Then check nested config
-    for (const k of keys) {
-      value = value && value[k] !== undefined ? value[k] : undefined;
-    }
-    
-    if (value === undefined) {
-      return defaultValue as T;
-    }
-    
-    return this.convertValue(value, defaultValue);
   }
 
   /**
-   * Convert value to appropriate type based on defaultValue
-   * @param value - Value to convert
-   * @param defaultValue - Default value with type
-   * @returns Converted value
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making GET request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('get', url, undefined, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making POST request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('post', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('put', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('patch', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a DELETE request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('delete', url, options?.data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Execute a request with timing metrics
+   * @param method - HTTP method
+   * @param url - Request URL
+   * @param data - Request data
+   * @param config - Axios request config
+   * @returns Promise<AxiosResponse> - API response
    * @private
    */
-  private convertValue<T>(value: any, defaultValue?: T): T {
-    // If value is already the right type, return it
-    if (typeof value === typeof defaultValue) {
-      return value as T;
-    }
+  private async executeRequest<T = any>(
+    method: 'get' | 'post' | 'put' | 'patch' | 'delete',
+    url: string,
+    data?: any,
+    config?: AxiosRequestConfig
+  ): Promise<AxiosResponse<T>> {
+    const startTime = Date.now();
     
-    // If no default value is provided, return as is
-    if (defaultValue === undefined) {
-      return value as unknown as T;
-    }
-    
-    // Convert based on the type of defaultValue
-    const defaultType = typeof defaultValue;
-    
-    if (defaultType === 'number') {
-      const numberValue = Number(value);
-      return (isNaN(numberValue) ? defaultValue : numberValue) as unknown as T;
-    } 
-    else if (defaultType === 'boolean') {
-      if (typeof value === 'string') {
-        const lowerValue = value.toLowerCase();
-        if (lowerValue === 'true' || lowerValue === '1' || lowerValue === 'yes') return true as unknown as T;
-        if (lowerValue === 'false' || lowerValue === '0' || lowerValue === 'no') return false as unknown as T;
+    try {
+      let response;
+      
+      switch (method) {
+        case 'get':
+          response = await axios.get<T>(url, config);
+          break;
+        case 'post':
+          response = await axios.post<T>(url, data, config);
+          break;
+        case 'put':
+          response = await axios.put<T>(url, data, config);
+          break;
+        case 'patch':
+          response = await axios.patch<T>(url, data, config);
+          break;
+        case 'delete':
+          response = await axios.delete<T>(url, config);
+          break;
       }
-      return defaultValue;
-    } 
-    else if (defaultType === 'object') {
-      if (Array.isArray(defaultValue)) {
-        if (typeof value === 'string') {
-          if (value.startsWith('[') && value.endsWith(']')) {
-            try {
-              return JSON.parse(value) as T;
-            } catch {
-              // Fall back to comma-separated interpretation
-              return value.split(',').map(item => item.trim()) as unknown as T;
-            }
-          }
-          // If it doesn't look like JSON, split by comma
-          return value.split(',').map(item => item.trim()) as unknown as T;
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      this.logResponse(response);
+      return response;
+    } catch (error) {
+      // Add request duration to error for potential retry logic
+      const duration = Date.now() - startTime;
+      (error as any)._duration = duration;
+      
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Retry a request with backoff strategy
+   * @param requestFn - Function to retry
+   * @param options - Retry options
+   * @returns Promise<AxiosResponse> - API response
+   * @private
+   */
+  private async retryRequest<T = any>(
+    requestFn: () => Promise<AxiosResponse<T>>,
+    options?: {
+      maxAttempts?: number;
+      retryDelay?: number;
+      retryCondition?: (error: any) => boolean;
+    }
+  ): Promise<AxiosResponse<T>> {
+    const maxAttempts = options?.maxAttempts || this.defaultRetryOptions.maxAttempts;
+    const retryDelay = options?.retryDelay || this.defaultRetryOptions.retryDelay;
+    
+    // Default retry condition: retry on network errors or 5xx errors
+    const retryCondition = options?.retryCondition || ((error: any) => {
+      return (
+        error.code === 'ECONNRESET' ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ETIMEDOUT' ||
+        (error.response && error.response.status >= 500 && error.response.status < 600)
+      );
+    });
+    
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.logger.debug(`Request attempt ${attempt}/${maxAttempts}`);
+        return await requestFn();
+      } catch (error) {
+        lastError = error;
+        
+        // Log the error with attempt number
+        this.logger.debug(`Attempt ${attempt} failed: ${error.message}`);
+        
+        // Check if we should retry
+        if (attempt < maxAttempts && retryCondition(error)) {
+          // Calculate backoff delay with jitter to avoid thundering herd
+          const jitter = Math.random() * 0.3 + 0.85; // Random factor between 0.85 and 1.15
+          const delay = Math.floor(retryDelay * Math.pow(1.5, attempt - 1) * jitter);
+          
+          this.logger.info(`Retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          break;
         }
+      }
+    }
+    
+    throw lastError;
+  }
+
+  /**
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    this.logger.debug(`Asserting status code: ${expectedStatus}`);
+    expect(response.status).toBe(expectedStatus);
+  }
+
+  /**
+   * Assert API response contains specific data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting response data`);
+    expect(response.data).toMatchObject(expectedData);
+  }
+
+  /**
+   * Assert response header has a specific value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValue - Expected header value
+   */
+  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
+    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toBe(expectedValue);
+  }
+
+  /**
+   * Assert response time is within acceptable limits
+   * @param response - Axios response
+   * @param maxTime - Maximum acceptable response time in ms
+   */
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    const duration = (response as any)._duration;
+    if (duration !== undefined) {
+      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
+      expect(duration).toBeLessThanOrEqual(maxTime);
+    } else {
+      this.logger.warn('Response time metrics not available');
+    }
+  }
+
+  /**
+   * Get authentication token (to be implemented by derived classes)
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(): Promise<string> {
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
+
+  /**
+   * Create auth header with token
+   * @param token - Authentication token
+   * @returns Record<string, string> - Headers with authentication
+   */
+  createAuthHeader(token: string): Record<string, string> {
+    return { 'Authorization': `Bearer ${token}` };
+  }
+
+  /**
+   * Log response details
+   * @private
+   * @param response - Axios response
+   */
+  private logResponse(response: AxiosResponse): void {
+    this.logger.debug(`Response status: ${response.status}`);
+    
+    if (this.config.getBoolean('API_DEBUG_HEADERS', false)) {
+      this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
+    }
+    
+    // Log response body in a safe way (truncate if too large)
+    try {
+      const responseBody = JSON.stringify(response.data);
+      const maxBodyLength = this.config.getNumber('API_DEBUG_BODY_LENGTH', 1000);
+      
+      if (responseBody.length > maxBodyLength) {
+        this.logger.debug(`Response body (truncated): ${responseBody.substring(0, maxBodyLength)}...`);
       } else {
-        // Object - try to parse JSON
-        if (typeof value === 'string') {
-          try {
-            return JSON.parse(value) as T;
-          } catch {
-            return defaultValue;
-          }
-        }
+        this.logger.debug(`Response body: ${responseBody}`);
       }
+    } catch (error) {
+      this.logger.debug('Response body: [Could not stringify response data]');
+    }
+  }
+
+  /**
+   * Log error details
+   * @private
+   * @param error - Axios error
+   */
+  private logError(error: any): void {
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+      this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+      
+      if (this.config.getBoolean('API_DEBUG_HEADERS', false)) {
+        this.logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      this.logger.error(`Request error (no response): ${error.message}`);
+      
+      if (error.code) {
+        this.logger.debug(`Error code: ${error.code}`);
+      }
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      this.logger.error(`Request configuration error: ${error.message}`);
     }
     
-    // If no conversion applied, return as is
-    return value as unknown as T;
-  }
-
-  /**
-   * Set configuration value
-   * @param key - Configuration key (supports dot notation)
-   * @param value - Configuration value
-   */
-  public set<T>(key: string, value: T): void {
-    if (!this.initialized) {
-      this.loadConfiguration();
+    if (error.config) {
+      this.logger.debug(`Failed request URL: ${error.config.url}`);
+      this.logger.debug(`Failed request method: ${error.config.method}`);
     }
-    
-    const keys = key.split('.');
-    let current = this.config;
-    
-    // Navigate to the right level in the config object
-    for (let i = 0; i < keys.length - 1; i++) {
-      const k = keys[i];
-      current[k] = current[k] || {};
-      current = current[k];
-    }
-    
-    // Set the value
-    current[keys[keys.length - 1]] = value;
-  }
-
-  /**
-   * Check if a configuration exists
-   * @param key - Configuration key
-   * @returns Whether the configuration exists
-   */
-  public has(key: string): boolean {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    const keys = key.split('.');
-    let value: any = this.config;
-    
-    for (const k of keys) {
-      value = value && value[k] !== undefined ? value[k] : undefined;
-    }
-    
-    return value !== undefined;
-  }
-
-  /**
-   * Get entire configuration object
-   * @returns Configuration object
-   */
-  public getAll(): Record<string, any> {
-    if (!this.initialized) {
-      this.loadConfiguration();
-    }
-    
-    return { ...this.config };
-  }
-
-  /**
-   * Get boolean value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getBoolean(key: string, defaultValue: boolean = false): boolean {
-    return this.get<boolean>(key, defaultValue);
-  }
-
-  /**
-   * Get number value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getNumber(key: string, defaultValue: number = 0): number {
-    return this.get<number>(key, defaultValue);
-  }
-
-  /**
-   * Get string value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getString(key: string, defaultValue: string = ''): string {
-    return this.get<string>(key, defaultValue);
-  }
-
-  /**
-   * Get array value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getArray<T>(key: string, defaultValue: T[] = []): T[] {
-    return this.get<T[]>(key, defaultValue);
-  }
-
-  /**
-   * Get object value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getObject<T extends Record<string, any>>(key: string, defaultValue: T = {} as T): T {
-    return this.get<T>(key, defaultValue);
-  }
-
-  /**
-   * Reset configuration (mainly for testing)
-   */
-  public reset(): void {
-    this.config = {};
-    this.initialized = false;
-    this.configSources = [];
   }
 }
