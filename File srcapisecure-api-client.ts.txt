@@ -1,166 +1,100 @@
-// src/api/asset-api-client.ts
-import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
-import { AxiosResponse } from 'axios';
+// src/step-definitions/api-steps/asset-api-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { AssetApiClient } from '../../api/asset-api-client';
+import { TestContext } from '../../support/test-context';
 import fs from 'fs';
 import path from 'path';
 
 /**
- * Asset response interface representing the API response structure
+ * Step definitions for Asset API testing using BDD style
  */
-export interface AssetResponse {
-  assetLayouts: Array<any>;
-  systemError: string | null;
-  responseMessageId: string;
-  validationErrorMessage: string | null;
-  errorMessage: string | null;
-}
 
-/**
- * Asset request interface for type safety
- */
-export interface AssetRequest {
-  messageId: string;
-  dealId: number;
-  reportDate: string;
-}
+// Client initialization
+Given('I have initialized the Khan Asset API client', async function(this: TestContext) {
+  this.assetApiClient = new AssetApiClient();
+  this.logger.info('Initialized Khan Asset API client');
+});
 
-/**
- * AssetApiClient for handling asset-related API operations
- */
-export class AssetApiClient extends BaseApiClient {
-  private readonly requestsDir: string;
+// Template-based requests
+When('I request assets using the {string} template', async function(this: TestContext, templateName: string) {
+  expect(this.assetApiClient).toBeDefined();
+  
+  this.response = await this.assetApiClient.getAssetsFromTemplate(templateName);
+  this.logger.info(`Retrieved assets using template: ${templateName}`);
+});
 
-  /**
-   * Constructor for AssetApiClient
-   */
-  constructor() {
-    // Pass custom settings to BaseApiClient
-    super();
+// Dynamic requests
+When('I request assets with message ID {string}, deal ID {int}, and report date {string}', 
+  async function(this: TestContext, messageId: string, dealId: number, reportDate: string) {
+    expect(this.assetApiClient).toBeDefined();
     
-    // Setup directory for request templates
-    this.requestsDir = path.resolve(process.cwd(), 'requests');
-    
-    // Override certificate and proxy settings specifically for Khan API
-    this.pfxCertPath = this.config.getString('KHAN_API_CERT_PATH', 
-      path.resolve(process.cwd(), 'certs', 'khanapicert.pfx'));
-    this.pfxCertPassphrase = this.config.getString('KHAN_API_CERT_PASSPHRASE', 'khanapipwd');
+    this.response = await this.assetApiClient.getAssets(messageId, dealId, reportDate);
+    this.logger.info(`Retrieved assets for deal ID: ${dealId}`);
+});
+
+// Request with overrides
+When('I request assets with the following details:', async function(this: TestContext, dataTable: any) {
+  expect(this.assetApiClient).toBeDefined();
+  
+  const requestData = dataTable.rowsHash();
+  
+  // Convert string to number for dealId
+  if (requestData.dealId) {
+    requestData.dealId = parseInt(requestData.dealId, 10);
   }
+  
+  this.response = await this.assetApiClient.getAssets(
+    requestData.messageId,
+    requestData.dealId,
+    requestData.reportDate
+  );
+  
+  this.logger.info(`Retrieved assets for deal ID: ${requestData.dealId}`);
+});
 
-  /**
-   * Load request body from JSON file
-   * @param filename - Name of the JSON file in requests directory
-   * @returns Object from JSON file
-   */
-  private loadRequestFromFile<T>(filename: string): T {
-    try {
-      const filePath = path.join(this.requestsDir, filename);
-      
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Request file not found: ${filePath}`);
-      }
-      
-      const fileContent = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(fileContent) as T;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        this.logger.error(`Invalid JSON in request file: ${filename}`);
-      }
-      throw error;
-    }
-  }
+// Response validation steps
+Then('the response should contain asset layouts', async function(this: TestContext) {
+  expect(this.response.data).toBeDefined();
+  expect(this.response.data.assetLayouts).toBeDefined();
+  expect(Array.isArray(this.response.data.assetLayouts)).toBeTruthy();
+  this.logger.info(`Response contains ${this.response.data.assetLayouts.length} asset layouts`);
+});
 
-  /**
-   * Get assets for a deal
-   * @param messageId - Message ID for the request
-   * @param dealId - Deal ID to get assets for
-   * @param reportDate - Report date in YYYY-MM-DD format
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response with assets
-   */
-  async getAssets(
-    messageId: string,
-    dealId: number,
-    reportDate: string,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<AssetResponse>> {
-    // Validate input
-    if (!messageId) {
-      throw new Error('Message ID is required');
-    }
-    
-    if (!dealId) {
-      throw new Error('Deal ID is required');
-    }
-    
-    if (!reportDate) {
-      throw new Error('Report date is required');
-    }
-    
-    // Validate date format (YYYY-MM-DD)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) {
-      throw new Error('Report date must be in YYYY-MM-DD format');
-    }
-    
-    // Create request body
-    const requestBody: AssetRequest = {
-      messageId,
-      dealId,
-      reportDate
-    };
-    
-    // Set up request options with certificate and headers
-    const requestOptions: ApiRequestOptions = {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      withCredentials: true,
-      pfxPath: this.pfxCertPath,
-      pfxPassphrase: this.pfxCertPassphrase,
-      useProxy: true,
-      // Default retry options
-      retryOptions: {
-        maxAttempts: 3,
-        retryDelay: 1000
-      },
-      ...options // Allow overriding options
-    };
-    
-    // Make the request
-    return await this.post<AssetResponse>('/assets', requestBody, requestOptions);
-  }
+Then('the response should have no system errors', async function(this: TestContext) {
+  expect(this.response.data.systemError).toBeNull();
+  expect(this.response.data.errorMessage).toBeNull();
+  expect(this.response.data.validationErrorMessage).toBeNull();
+  this.logger.info('Verified no errors in response');
+});
 
-  /**
-   * Get assets using a request template
-   * @param templateName - Name of the request template file (without .json extension)
-   * @param overrides - Optional overrides for the template values
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response with assets
-   */
-  async getAssetsFromTemplate(
-    templateName: string,
-    overrides?: Partial<AssetRequest>,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<AssetResponse>> {
-    try {
-      // Load request template
-      const template = this.loadRequestFromFile<AssetRequest>(`${templateName}.json`);
-      
-      // Apply overrides
-      const requestBody: AssetRequest = {
-        ...template,
-        ...overrides
-      };
-      
-      // Call the main method with the combined data
-      return await this.getAssets(
-        requestBody.messageId,
-        requestBody.dealId,
-        requestBody.reportDate,
-        options
-      );
-    } catch (error) {
-      this.logger.error(`Error using asset request template: ${error.message}`);
-      throw error;
-    }
+Then('the response message ID should be {string}', async function(this: TestContext, expectedId: string) {
+  expect(this.response.data.responseMessageId).toBe(expectedId);
+  this.logger.info(`Verified response message ID: ${expectedId}`);
+});
+
+Then('the response should contain at least {int} asset layouts', async function(this: TestContext, count: number) {
+  expect(this.response.data.assetLayouts.length).toBeGreaterThanOrEqual(count);
+  this.logger.info(`Verified response contains at least ${count} asset layouts`);
+});
+
+Then('the response time should be acceptable', async function(this: TestContext) {
+  const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 5000);
+  this.assetApiClient.assertResponseTime(this.response, maxResponseTime);
+  this.logger.info(`Verified response time is less than ${maxResponseTime}ms`);
+});
+
+// Save response for later analysis
+Then('I save the response to file {string}', async function(this: TestContext, filename: string) {
+  const responsesDir = path.resolve(process.cwd(), 'responses');
+  
+  // Create directory if it doesn't exist
+  if (!fs.existsSync(responsesDir)) {
+    fs.mkdirSync(responsesDir, { recursive: true });
   }
-}
+  
+  const filePath = path.join(responsesDir, filename);
+  fs.writeFileSync(filePath, JSON.stringify(this.response.data, null, 2));
+  
+  this.logger.info(`Saved response to file: ${filePath}`);
+});
