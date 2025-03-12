@@ -573,6 +573,7 @@ import { AssetApiClient } from '../../api/asset-api-client';
 import { TestContext } from '../../support/test-context';
 import fs from 'fs';
 import path from 'path';
+import { AxiosResponse } from 'axios';
 
 /**
  * Step definitions for Asset API testing using BDD style
@@ -587,7 +588,9 @@ Given('I have initialized the Khan Asset API client', async function(this: TestC
 
 // Template-based requests
 When('I request assets using the {string} template', async function(this: TestContext, templateName: string) {
-  expect(this.assetApiClient).toBeDefined();
+  if (!this.assetApiClient) {
+    throw new Error('Asset API client is not initialized. Call "I have initialized the Khan Asset API client" first.');
+  }
   
   try {
     this.startTime = Date.now(); // Track request start time
@@ -597,8 +600,9 @@ When('I request assets using the {string} template', async function(this: TestCo
     
     const duration = Date.now() - this.startTime;
     this.logger.info(`Retrieved assets using template: ${templateName} in ${duration}ms`);
-  } catch (error) {
-    this.logger.error(`Failed to retrieve assets: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
     throw error;
   }
 });
@@ -606,7 +610,9 @@ When('I request assets using the {string} template', async function(this: TestCo
 // Dynamic requests
 When('I request assets with message ID {string}, deal ID {int}, and report date {string}', 
   async function(this: TestContext, messageId: string, dealId: number, reportDate: string) {
-    expect(this.assetApiClient).toBeDefined();
+    if (!this.assetApiClient) {
+      throw new Error('Asset API client is not initialized. Call "I have initialized the Khan Asset API client" first.');
+    }
     
     try {
       this.startTime = Date.now(); // Track request start time
@@ -616,15 +622,18 @@ When('I request assets with message ID {string}, deal ID {int}, and report date 
       
       const duration = Date.now() - this.startTime;
       this.logger.info(`Retrieved assets for deal ID: ${dealId} in ${duration}ms`);
-    } catch (error) {
-      this.logger.error(`Failed to retrieve assets: ${error.message}`);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
       throw error;
     }
 });
 
 // Request with overrides
 When('I request assets with the following details:', async function(this: TestContext, dataTable: any) {
-  expect(this.assetApiClient).toBeDefined();
+  if (!this.assetApiClient) {
+    throw new Error('Asset API client is not initialized. Call "I have initialized the Khan Asset API client" first.');
+  }
   
   const requestData = dataTable.rowsHash();
   
@@ -645,17 +654,21 @@ When('I request assets with the following details:', async function(this: TestCo
     
     const duration = Date.now() - this.startTime;
     this.logger.info(`Retrieved assets for deal ID: ${requestData.dealId} in ${duration}ms`);
-  } catch (error) {
-    this.logger.error(`Failed to retrieve assets: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
     throw error;
   }
 });
 
 // Response validation steps
 Then('the response should contain asset layouts', async function(this: TestContext) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
   try {
     // Validate that the response data exists
-    expect(this.response).toBeDefined();
     expect(this.response.data).toBeDefined();
     
     // Validate that assetLayouts exists and is an array
@@ -666,7 +679,7 @@ Then('the response should contain asset layouts', async function(this: TestConte
     expect(this.response.data.assetLayouts.length).toBeGreaterThan(0);
     
     this.logger.info(`Response contains ${this.response.data.assetLayouts.length} asset layouts`);
-  } catch (error) {
+  } catch (error: unknown) {
     // Take a snapshot of the response for debugging
     if (this.response && this.response.data) {
       const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
@@ -678,7 +691,8 @@ Then('the response should contain asset layouts', async function(this: TestConte
       const filePath = path.join(snapshotsDir, `failed-response-${timestamp}.json`);
       fs.writeFileSync(filePath, JSON.stringify(this.response.data, null, 2));
       
-      this.logger.error(`Response validation failed. Snapshot saved to: ${filePath}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Response validation failed: ${errorMessage}. Snapshot saved to: ${filePath}`);
     }
     
     throw error;
@@ -686,6 +700,10 @@ Then('the response should contain asset layouts', async function(this: TestConte
 });
 
 Then('the response should have no system errors', async function(this: TestContext) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
   expect(this.response.data.systemError).toBeNull();
   expect(this.response.data.errorMessage).toBeNull();
   expect(this.response.data.validationErrorMessage).toBeNull();
@@ -693,16 +711,32 @@ Then('the response should have no system errors', async function(this: TestConte
 });
 
 Then('the response message ID should be {string}', async function(this: TestContext, expectedId: string) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
   expect(this.response.data.responseMessageId).toBe(expectedId);
   this.logger.info(`Verified response message ID: ${expectedId}`);
 });
 
 Then('the response should contain at least {int} asset layouts', async function(this: TestContext, count: number) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
   expect(this.response.data.assetLayouts.length).toBeGreaterThanOrEqual(count);
   this.logger.info(`Verified response contains at least ${count} asset layouts`);
 });
 
 Then('the response time should be acceptable', async function(this: TestContext) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
+  if (!this.assetApiClient) {
+    throw new Error('Asset API client is not initialized.');
+  }
+  
   const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 120000);
   
   // Calculate the total response time from the start time
@@ -720,16 +754,29 @@ Then('the response time should be acceptable', async function(this: TestContext)
 
 // Advanced validation and verification steps
 Then('the response passes complete asset validation', async function(this: TestContext) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
+  if (!this.assetApiClient) {
+    throw new Error('Asset API client is not initialized.');
+  }
+  
   try {
     this.assetApiClient.validateAssetResponse(this.response);
     this.logger.info('Asset response validation passed');
-  } catch (error) {
-    this.logger.error(`Asset response validation failed: ${error.message}`);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    this.logger.error(`Asset response validation failed: ${errorMessage}`);
     throw error;
   }
 });
 
 Then('the API should return a successful response', async function(this: TestContext) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
   expect(this.response.status).toBeGreaterThanOrEqual(200);
   expect(this.response.status).toBeLessThan(300);
   this.logger.info(`Verified successful response with status: ${this.response.status}`);
@@ -737,6 +784,10 @@ Then('the API should return a successful response', async function(this: TestCon
 
 // Save response for later analysis
 Then('I save the response to file {string}', async function(this: TestContext, filename: string) {
+  if (!this.response) {
+    throw new Error('No response available. Make sure you have made an API request first.');
+  }
+  
   const responsesDir = path.resolve(process.cwd(), 'responses');
   
   // Create directory if it doesn't exist
