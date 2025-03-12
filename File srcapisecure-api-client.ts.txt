@@ -163,3 +163,241 @@ export class TradeApiClient extends BaseApiClient {
     }
   }
 }
+
+// src/step-definitions/api-steps/trade-api-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { TradeApiClient } from '../../api/trade-api-client';
+import { TestContext } from '../../support/test-context';
+
+/**
+ * Interface for Trade Search Parameters
+ */
+interface TradeSearchParams {
+  tradeDate?: string;
+  symbol?: string;
+  side?: string;
+  trader?: string;
+  [key: string]: any;
+}
+
+Given('I have initialized the Trade API client', async function(this: TestContext) {
+  const apiBaseUrl = this.config.getString('API_BASE_URL', 'https://api.example.com');
+  
+  // Get certificate settings from config or environment
+  const pfxPath = this.config.getString('CERTIFICATE_PATH', '');
+  const pfxPassphrase = this.config.getString('CERTIFICATE_PASSPHRASE', '');
+  
+  // Get proxy URL if configured
+  const proxyUrl = this.config.getString('PROXY_URL', '');
+  
+  // Create the Trade API client
+  this.tradeApiClient = new TradeApiClient(
+    apiBaseUrl,
+    // Only include certificate if path is provided
+    pfxPath ? { path: pfxPath, passphrase: pfxPassphrase } : undefined,
+    // Only include proxy if URL is provided
+    proxyUrl || undefined
+  );
+  
+  this.logger.info('Trade API client initialized');
+});
+
+Given('I have an active trade API session', async function(this: TestContext) {
+  if (!this.tradeApiClient) {
+    throw new Error('Trade API client not initialized. Please use "I have initialized the Trade API client" step first.');
+  }
+  
+  // Initialize session
+  const sessionCookie = await this.tradeApiClient.initializeSession();
+  this.logger.info(`Active session established with cookie: ${sessionCookie}`);
+});
+
+When('I search for trades with the following criteria:', async function(this: TestContext, dataTable) {
+  if (!this.tradeApiClient) {
+    throw new Error('Trade API client not initialized. Please use "I have initialized the Trade API client" step first.');
+  }
+  
+  // Convert the data table to search parameters
+  const rawData = dataTable.rowsHash();
+  const searchParams: TradeSearchParams = {};
+  
+  // Process and convert data types as needed
+  Object.entries(rawData).forEach(([key, value]) => {
+    searchParams[key] = value;
+  });
+  
+  // Store search parameters for later steps
+  this.testData.searchParams = searchParams;
+  
+  // Perform the search
+  this.logger.info(`Searching trades with params: ${JSON.stringify(searchParams)}`);
+  this.response = await this.tradeApiClient.searchTrades(searchParams);
+  
+  // Store results for later steps
+  this.testData.searchResults = this.response.data;
+});
+
+When('I retrieve trade details for trade ID {string}', async function(this: TestContext, tradeId: string) {
+  if (!this.tradeApiClient) {
+    throw new Error('Trade API client not initialized. Please use "I have initialized the Trade API client" step first.');
+  }
+  
+  // Store trade ID for later steps
+  this.testData.tradeId = tradeId;
+  
+  // Get trade details
+  this.logger.info(`Retrieving details for trade ID: ${tradeId}`);
+  this.response = await this.tradeApiClient.getTradeById(tradeId);
+  
+  // Store trade details for later steps
+  this.testData.tradeDetails = this.response.data;
+});
+
+Then('the trade search should return at least {int} results', async function(this: TestContext, minResults: number) {
+  // Verify we have a response
+  expect(this.response).toBeDefined();
+  expect(this.response.data).toBeDefined();
+  
+  const results = Array.isArray(this.response.data) 
+    ? this.response.data 
+    : (this.response.data.trades || this.response.data.results || []);
+    
+  this.logger.info(`Search returned ${results.length} trades`);
+  
+  // Verify minimum number of results
+  expect(results.length).toBeGreaterThanOrEqual(minResults);
+});
+
+Then('the trade details should include the correct symbol {string}', async function(this: TestContext, expectedSymbol: string) {
+  // Verify we have a response
+  expect(this.response).toBeDefined();
+  expect(this.response.data).toBeDefined();
+  
+  const tradeDetails = this.response.data;
+  
+  // Verify symbol
+  expect(tradeDetails.symbol).toBe(expectedSymbol);
+  this.logger.info(`Verified trade has symbol: ${expectedSymbol}`);
+});
+
+Then('the API response should have status code {int}', async function(this: TestContext, expectedStatus: number) {
+  expect(this.response).toBeDefined();
+  expect(this.response.status).toBe(expectedStatus);
+  this.logger.info(`Response status code: ${this.response.status}`);
+});
+
+
+# features/api/trade-search.feature
+Feature: Trade API Search
+  As an API client
+  I want to search for trades and retrieve trade details
+  So that I can analyze trading activity
+
+  Background:
+    Given I have initialized the Trade API client
+    And I have an active trade API session
+
+  @api @trades
+  Scenario: Search for trades by date and symbol
+    When I search for trades with the following criteria:
+      | tradeDate | 2025-03-12   |
+      | symbol    | AAPL         |
+    Then the trade search should return at least 1 results
+    And the API response should have status code 200
+
+  @api @trades
+  Scenario: Search for trades by trader
+    When I search for trades with the following criteria:
+      | trader    | JohnDoe      |
+      | side      | BUY          |
+    Then the trade search should return at least 1 results
+    And the API response should have status code 200
+
+  @api @trades
+  Scenario: Retrieve trade details by ID
+    When I retrieve trade details for trade ID "TRADE-123456"
+    Then the trade details should include the correct symbol "AAPL"
+    And the API response should have status code 200
+
+// src/support/test-context.ts
+import { Page, BrowserContext } from '@playwright/test';
+import { AxiosResponse } from 'axios';
+import { Logger } from '../framework/utils/logger';
+import { ConfigManager } from '../framework/utils/config-manager';
+import { TradeApiClient } from '../api/trade-api-client';
+// Import other required classes
+
+/**
+ * Comprehensive test context that can be used for both UI and API tests
+ * Shared between steps to maintain state
+ */
+export interface TestContext {
+  // Playwright objects
+  page?: Page;
+  context?: BrowserContext;
+  
+  // Configuration and logging
+  logger: Logger;
+  config: ConfigManager;
+  
+  // API Clients
+  tradeApiClient?: TradeApiClient;
+  // Other API clients...
+  
+  // API testing properties
+  authToken?: string;
+  response?: AxiosResponse;
+  
+  // Common properties
+  testData: Record<string, any>; // For storing data between steps
+  scenarioName?: string;
+  scenarioTags?: string[];
+  result?: { status: string }; // For tracking test result status
+  
+  // Test execution metadata
+  startTime?: number;
+  endTime?: number;
+  
+  // Cucumber attachment function
+  attach: (data: any, mimeType: string) => void;
+}
+
+// src/support/hooks.ts (partial update for API tests)
+
+// In the Before hook, make sure the config is available
+Before(async function(this: TestContext, scenario) {
+  // ... existing code ...
+  
+  // Initialize config for all tests
+  this.config = ConfigManager.getInstance();
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
+  
+  // For API tests, preload any environment-specific configuration
+  if (this.scenarioTags.some(tag => tag === '@api')) {
+    this.logger.info('Initializing API test with environment config');
+    
+    // Example of reading environment-specific API settings
+    const apiBaseUrl = this.config.getString('API_BASE_URL');
+    if (apiBaseUrl) {
+      this.logger.info(`Using API base URL: ${apiBaseUrl}`);
+    }
+  }
+  
+  // ... existing code ...
+});
+
+// In the After hook, add proper cleanup for the TradeApiClient
+After(async function(this: TestContext) {
+  // ... existing code ...
+  
+  // Clean up API clients if needed
+  if (this.tradeApiClient) {
+    this.logger.info('Cleaning up Trade API client resources');
+    // Any specific cleanup needed...
+  }
+  
+  // ... existing code ...
+});
