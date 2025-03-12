@@ -1,21 +1,154 @@
-async searchTrades(requestData: any): Promise<any> {
-  try {
-    const response = await axios.post(
-      `${this.apiBaseUrl}/your-endpoint-path`, 
-      requestData, 
-      { headers: { 'Content-Type': 'application/json' } }
-    );
-    return response.data;
-  } catch (error) {
-    if (axios.isAxiosError(error) && error.response) {
-      console.log('============ API ERROR DETAILS ============');
-      console.log(`Status: ${error.response.status} ${error.response.statusText}`);
-      console.log('Response body:', JSON.stringify(error.response.data, null, 2));
-      console.log('Response headers:', JSON.stringify(error.response.headers, null, 2));
-      console.log('Request URL:', error.config?.url);
-      console.log('Request payload:', JSON.stringify(JSON.parse(error.config?.data as string), null, 2));
-      console.log('============================================');
+// src/api/trade-api-client.ts
+import axios, { AxiosInstance, AxiosResponse } from 'axios';
+import { CookieJar } from 'tough-cookie';
+import { wrapper } from 'axios-cookiejar-support';
+import { Logger } from '../framework/utils/logger';
+import { ConfigManager } from '../framework/utils/config-manager';
+
+export class TradeApiClient {
+  private readonly apiBaseUrl: string;
+  private readonly client: AxiosInstance;
+  private readonly logger: Logger;
+  private readonly config: ConfigManager;
+  private readonly maxRetries = 3;
+
+  /**
+   * Constructor for the TradeApiClient
+   */
+  constructor() {
+    this.config = ConfigManager.getInstance();
+    this.logger = new Logger('TradeApiClient');
+    this.apiBaseUrl = this.config.getString('API_BASE_URL', 'https://api.example.com');
+    
+    // Create cookie jar
+    const jar = new CookieJar();
+    
+    // Create client with cookie jar support
+    this.client = wrapper(axios.create({
+      baseURL: this.apiBaseUrl,
+      jar,
+      withCredentials: true,
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    }));
+    
+    this.logger.info(`TradeApiClient initialized with base URL: ${this.apiBaseUrl}`);
+  }
+
+  /**
+   * Search for trades based on provided filters
+   * @param requestData - Trade search filters
+   * @returns Promise with search results
+   */
+  async searchTrades(requestData: any): Promise<any> {
+    // Required headers for authentication
+    const headers = {
+      'X-CLINET-SUBJECT': this.config.getString('X_CLIENT_SUBJECT', ''),
+      'AUTHORIZED_UPN': this.config.getString('AUTHORIZED_UPN', '')
+    };
+    
+    // Endpoint path - adjust as needed
+    const endpoint = '/api/v1/trades/search';
+    
+    let attempt = 0;
+    let lastError: Error | null = null;
+    
+    // Retry logic
+    while (attempt < this.maxRetries) {
+      attempt++;
+      try {
+        this.logger.info(`Searching trades (attempt ${attempt}/${this.maxRetries})`);
+        this.logger.debug(`Request URL: ${this.apiBaseUrl}${endpoint}`);
+        this.logger.debug(`Request headers: ${JSON.stringify(headers)}`);
+        
+        // Log request body (truncated if too large)
+        const requestJson = JSON.stringify(requestData);
+        if (requestJson.length > 1000) {
+          this.logger.debug(`Request body (truncated): ${requestJson.substring(0, 1000)}...`);
+        } else {
+          this.logger.debug(`Request body: ${requestJson}`);
+        }
+        
+        // Make the API call
+        const response = await this.client.post(endpoint, requestData, { headers });
+        
+        this.logger.info(`Search trades successful: ${response.status} ${response.statusText}`);
+        return response.data;
+      } catch (err: any) {
+        lastError = err;
+        
+        if (axios.isAxiosError(err) && err.response) {
+          const status = err.response.status;
+          this.logger.error(`API error: ${status} ${err.response.statusText}`);
+          
+          // No need to retry on certain status codes
+          if (status === 400 || status === 404) {
+            this.logger.info('Not retrying due to client error status code');
+            throw err;
+          }
+          
+          // Log response data for debugging
+          try {
+            this.logger.debug(`Error response: ${JSON.stringify(err.response.data)}`);
+          } catch (e) {
+            this.logger.debug(`Error response body could not be stringified`);
+          }
+        } else {
+          this.logger.error(`Network error: ${err.message}`);
+        }
+        
+        // If we've reached max retries, throw the error
+        if (attempt >= this.maxRetries) {
+          this.logger.error(`Max retries (${this.maxRetries}) reached`);
+          throw err;
+        }
+        
+        // Wait before retrying (increasing delay with each attempt)
+        const delay = attempt * 1000;
+        this.logger.info(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
     }
-    throw error; // Re-throw the error to be caught by the step definition
+    
+    // This should never be reached due to throw in the loop, but TypeScript wants it
+    throw lastError || new Error('Unknown error occurred');
+  }
+  
+  /**
+   * Get trade details by ID
+   * @param tradeId - ID of the trade to fetch
+   * @returns Promise with trade details
+   */
+  async getTradeById(tradeId: string): Promise<any> {
+    const headers = {
+      'X-CLINET-SUBJECT': this.config.getString('X_CLIENT_SUBJECT', ''),
+      'AUTHORIZED_UPN': this.config.getString('AUTHORIZED_UPN', '')
+    };
+    
+    try {
+      const response = await this.client.get(`/api/v1/trades/${tradeId}`, { headers });
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Error fetching trade ${tradeId}: ${error}`);
+      throw error;
+    }
+  }
+  
+  /**
+   * Helper method to check if API is accessible
+   * @returns Promise<boolean> - Whether API is accessible
+   */
+  async healthCheck(): Promise<boolean> {
+    try {
+      // Try a simple endpoint that should return quickly
+      const response = await this.client.get('/health', { timeout: 5000 });
+      return response.status === 200;
+    } catch (error) {
+      this.logger.error(`Health check failed: ${error}`);
+      return false;
+    }
   }
 }
