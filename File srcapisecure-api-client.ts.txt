@@ -1,154 +1,156 @@
-// src/api/trade-api-client.ts
-import axios, { AxiosInstance, AxiosResponse } from 'axios';
-import { CookieJar } from 'tough-cookie';
-import { wrapper } from 'axios-cookiejar-support';
-import { Logger } from '../framework/utils/logger';
-import { ConfigManager } from '../framework/utils/config-manager';
+// src/api/enhanced-api-client.ts
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import * as fs from 'fs';
+import * as https from 'https';
 
-export class TradeApiClient {
-  private readonly apiBaseUrl: string;
-  private readonly client: AxiosInstance;
-  private readonly logger: Logger;
-  private readonly config: ConfigManager;
-  private readonly maxRetries = 3;
-
-  /**
-   * Constructor for the TradeApiClient
-   */
-  constructor() {
-    this.config = ConfigManager.getInstance();
-    this.logger = new Logger('TradeApiClient');
-    this.apiBaseUrl = this.config.getString('API_BASE_URL', 'https://api.example.com');
-    
-    // Create cookie jar
-    const jar = new CookieJar();
-    
-    // Create client with cookie jar support
-    this.client = wrapper(axios.create({
-      baseURL: this.apiBaseUrl,
-      jar,
-      withCredentials: true,
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    }));
-    
-    this.logger.info(`TradeApiClient initialized with base URL: ${this.apiBaseUrl}`);
-  }
+/**
+ * Enhanced API client with support for cookies, certificates, and proxy
+ */
+export class EnhancedApiClient extends BaseApiClient {
+  private pfxPath?: string;
+  private pfxPassphrase?: string;
+  private proxyUrl?: string;
 
   /**
-   * Search for trades based on provided filters
-   * @param requestData - Trade search filters
-   * @returns Promise with search results
+   * Constructor for the EnhancedApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param pfxOptions - PFX certificate options (optional)
+   * @param proxyUrl - Proxy URL (optional)
    */
-  async searchTrades(requestData: any): Promise<any> {
-    // Required headers for authentication
-    const headers = {
-      'X-CLINET-SUBJECT': this.config.getString('X_CLIENT_SUBJECT', ''),
-      'AUTHORIZED_UPN': this.config.getString('AUTHORIZED_UPN', '')
-    };
+  constructor(
+    apiBaseUrl?: string,
+    pfxOptions?: { path: string; passphrase: string },
+    proxyUrl?: string
+  ) {
+    super(apiBaseUrl);
     
-    // Endpoint path - adjust as needed
-    const endpoint = '/api/v1/trades/search';
-    
-    let attempt = 0;
-    let lastError: Error | null = null;
-    
-    // Retry logic
-    while (attempt < this.maxRetries) {
-      attempt++;
-      try {
-        this.logger.info(`Searching trades (attempt ${attempt}/${this.maxRetries})`);
-        this.logger.debug(`Request URL: ${this.apiBaseUrl}${endpoint}`);
-        this.logger.debug(`Request headers: ${JSON.stringify(headers)}`);
-        
-        // Log request body (truncated if too large)
-        const requestJson = JSON.stringify(requestData);
-        if (requestJson.length > 1000) {
-          this.logger.debug(`Request body (truncated): ${requestJson.substring(0, 1000)}...`);
-        } else {
-          this.logger.debug(`Request body: ${requestJson}`);
-        }
-        
-        // Make the API call
-        const response = await this.client.post(endpoint, requestData, { headers });
-        
-        this.logger.info(`Search trades successful: ${response.status} ${response.statusText}`);
-        return response.data;
-      } catch (err: any) {
-        lastError = err;
-        
-        if (axios.isAxiosError(err) && err.response) {
-          const status = err.response.status;
-          this.logger.error(`API error: ${status} ${err.response.statusText}`);
-          
-          // No need to retry on certain status codes
-          if (status === 400 || status === 404) {
-            this.logger.info('Not retrying due to client error status code');
-            throw err;
-          }
-          
-          // Log response data for debugging
-          try {
-            this.logger.debug(`Error response: ${JSON.stringify(err.response.data)}`);
-          } catch (e) {
-            this.logger.debug(`Error response body could not be stringified`);
-          }
-        } else {
-          this.logger.error(`Network error: ${err.message}`);
-        }
-        
-        // If we've reached max retries, throw the error
-        if (attempt >= this.maxRetries) {
-          this.logger.error(`Max retries (${this.maxRetries}) reached`);
-          throw err;
-        }
-        
-        // Wait before retrying (increasing delay with each attempt)
-        const delay = attempt * 1000;
-        this.logger.info(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
+    if (pfxOptions) {
+      this.pfxPath = pfxOptions.path;
+      this.pfxPassphrase = pfxOptions.passphrase;
     }
     
-    // This should never be reached due to throw in the loop, but TypeScript wants it
-    throw lastError || new Error('Unknown error occurred');
+    this.proxyUrl = proxyUrl;
   }
-  
+
   /**
-   * Get trade details by ID
-   * @param tradeId - ID of the trade to fetch
-   * @returns Promise with trade details
+   * Set cookie for API requests
+   * @param cookieValue - Cookie value (e.g., "JSESSIONID=abc123; other=value")
    */
-  async getTradeById(tradeId: string): Promise<any> {
-    const headers = {
-      'X-CLINET-SUBJECT': this.config.getString('X_CLIENT_SUBJECT', ''),
-      'AUTHORIZED_UPN': this.config.getString('AUTHORIZED_UPN', '')
-    };
+  setCookie(cookieValue: string): void {
+    // Update defaultHeaders with the cookie
+    this.defaultHeaders['Cookie'] = cookieValue;
+    this.logger.info(`Set cookie header: ${cookieValue}`);
+  }
+
+  /**
+   * Make a GET request with certificate and proxy support
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<any> {
+    return this.makeRequest('get', endpoint, undefined, options);
+  }
+
+  /**
+   * Make a POST request with certificate and proxy support
+   * @param endpoint - API endpoint
+   * @param data - Request data
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<any> {
+    return this.makeRequest('post', endpoint, data, options);
+  }
+
+  /**
+   * Make a PUT request with certificate and proxy support
+   * @param endpoint - API endpoint
+   * @param data - Request data
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<any> {
+    return this.makeRequest('put', endpoint, data, options);
+  }
+
+  /**
+   * Make a DELETE request with certificate and proxy support
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<any> {
+    return this.makeRequest('delete', endpoint, undefined, options);
+  }
+
+  /**
+   * Make a request with certificate and proxy support
+   * @param method - HTTP method
+   * @param endpoint - API endpoint
+   * @param data - Request data (for POST, PUT)
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  private async makeRequest<T = any>(
+    method: 'get' | 'post' | 'put' | 'delete',
+    endpoint: string,
+    data?: any,
+    options?: ApiRequestOptions
+  ): Promise<any> {
+    const url = new URL(endpoint, this.apiBaseUrl).toString();
+    this.logger.info(`Making ${method.toUpperCase()} request to: ${url}`);
     
+    const config: any = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    };
+
+    // Add PFX certificate if provided
+    if (this.pfxPath) {
+      const pfx = fs.readFileSync(this.pfxPath);
+      config.httpsAgent = new https.Agent({ 
+        pfx,
+        passphrase: this.pfxPassphrase,
+        rejectUnauthorized: false // Set to true in production
+      });
+    }
+
+    // Add proxy if provided
+    if (this.proxyUrl) {
+      config.proxy = {
+        host: new URL(this.proxyUrl).hostname,
+        port: Number(new URL(this.proxyUrl).port),
+        protocol: new URL(this.proxyUrl).protocol.replace(':', '')
+      };
+    }
+
     try {
-      const response = await this.client.get(`/api/v1/trades/${tradeId}`, { headers });
-      return response.data;
+      // Create a timestamp for request timing
+      const startTime = Date.now();
+      
+      let response;
+      switch (method) {
+        case 'get':
+          response = await super.get(endpoint, { ...options, ...config });
+          break;
+        case 'post':
+          response = await super.post(endpoint, data, { ...options, ...config });
+          break;
+        case 'put':
+          response = await super.put(endpoint, data, { ...options, ...config });
+          break;
+        case 'delete':
+          response = await super.delete(endpoint, { ...options, ...config });
+          break;
+      }
+      
+      return response;
     } catch (error) {
-      this.logger.error(`Error fetching trade ${tradeId}: ${error}`);
+      this.logger.error(`Request failed: ${error.message}`);
       throw error;
-    }
-  }
-  
-  /**
-   * Helper method to check if API is accessible
-   * @returns Promise<boolean> - Whether API is accessible
-   */
-  async healthCheck(): Promise<boolean> {
-    try {
-      // Try a simple endpoint that should return quickly
-      const response = await this.client.get('/health', { timeout: 5000 });
-      return response.status === 200;
-    } catch (error) {
-      this.logger.error(`Health check failed: ${error}`);
-      return false;
     }
   }
 }
