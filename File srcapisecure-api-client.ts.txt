@@ -1,30 +1,20 @@
-// IMPORTANT: Make sure the text matches EXACTLY what's in your feature file
-When('I search for trades with following filters', async function(this: TestContext, dataTable) {
+When('I search for trades with following filters', async function(this: TestContext) {
   if (!this.tradeApiClient) {
     throw new Error('Trade API client is not initialized');
   }
   
   try {
-    // Load the JSON file
+    // Use JSON file as the sole source - no dataTable
     const filePath = path.resolve(process.cwd(), 'requests', 'trade-search.json');
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Request body file not found: ${filePath}`);
+    }
+    
+    // Read the JSON file and parse it
     const fileContent = fs.readFileSync(filePath, 'utf8');
     const requestData = JSON.parse(fileContent);
-    
-    // Apply dataTable overrides if present
-    if (dataTable) {
-      const filters = dataTable.rowsHash();
-      for (const key of Object.keys(filters)) {
-        if (key === 'accountNumFilter' || key === 'tradeStatusFilter' || key === 'tradeTypeFilter') {
-          requestData[key] = filters[key].includes(',') ? filters[key].split(',') : filters[key];
-        } 
-        else if (key === 'priorityOrder') {
-          requestData[key] = filters[key] === 'true';
-        }
-        else {
-          requestData[key] = filters[key];
-        }
-      }
-    }
     
     // Store for later use
     this.testData = this.testData || {};
