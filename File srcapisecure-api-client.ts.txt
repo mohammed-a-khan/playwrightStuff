@@ -1,78 +1,52 @@
-// CORRECT VERSION - uses only async/await
-When('I search for trades with following filters', async function(this: TestContext, dataTable?) {
+// CALLBACK PATTERN (if you prefer this approach)
+When('I search for trades with following filters', function(this: TestContext, dataTable, callback) {
   // Ensure trade API client exists
   if (!this.tradeApiClient) {
-    throw new Error('Trade API client is not initialized');
+    return callback(new Error('Trade API client is not initialized'));
   }
   
   try {
     // Use JSON file as the primary source
     const filePath = path.resolve(process.cwd(), 'requests', 'trade-search.json');
     
-    if (this.logger) {
-      this.logger.info(`Loading base request from: ${filePath}`);
-    }
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Request body file not found: ${filePath}`);
-    }
-    
     // Read the JSON file and parse it
     const fileContent = fs.readFileSync(filePath, 'utf8');
-    const requestData: Record<string, any> = JSON.parse(fileContent);
+    const requestData = JSON.parse(fileContent);
     
-    // If dataTable is provided, override or extend the JSON file data
+    // Apply dataTable overrides if present
     if (dataTable) {
       const filters = dataTable.rowsHash();
-      
-      // Apply overrides from the data table
-      for (const key of Object.keys(filters)) {
-        if (key === 'accountNumFilter' || key === 'tradeStatusFilter' || key === 'tradeTypeFilter') {
-          const filterValue = filters[key];
-          if (typeof filterValue === 'string' && filterValue.includes(',')) {
-            requestData[key] = filterValue.split(',');
-          } else {
-            requestData[key] = filterValue;
-          }
-        } 
-        else if (key === 'priorityOrder') {
-          requestData[key] = filters[key] === 'true';
-        }
-        else {
-          requestData[key] = filters[key];
-        }
-      }
+      // Apply the filters to requestData
+      // ...rest of your filter handling code
     }
     
-    // Store request data for later assertions
+    // Store in test data
     if (!this.testData) {
       this.testData = {};
     }
     this.testData.tradeFilters = requestData;
     
-    // Execute the search
-    const searchResult = await this.tradeApiClient.searchTrades(requestData);
-    
-    // Store the response for later access
-    this.response = {
-      data: searchResult,
-      status: 200,
-      statusText: 'OK',
-      headers: {},
-      config: {} as any,
-    };
-  } catch (err) {
-    const error = err as Error;
-    
-    if (this.logger) {
-      this.logger.error(`Error searching trades: ${error.message}`);
-    }
-    
-    if (axios.isAxiosError(error) && error.response) {
-      this.response = error.response;
-    } else {
-      throw error;
-    }
+    // IMPORTANT: Use the callback pattern consistently
+    this.tradeApiClient.searchTrades(requestData)
+      .then(searchResult => {
+        this.response = {
+          data: searchResult,
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config: {} as any,
+        };
+        callback(); // Signal success
+      })
+      .catch(error => {
+        if (axios.isAxiosError(error) && error.response) {
+          this.response = error.response;
+          callback(); // Signal success even though API returned error
+        } else {
+          callback(error); // Signal test failure
+        }
+      });
+  } catch (error) {
+    callback(error); // Signal test failure
   }
 });
