@@ -1,42 +1,21 @@
-When('I search for trades with following filters', async function(this: TestContext) {
-  if (!this.tradeApiClient) {
-    throw new Error('Trade API client is not initialized');
-  }
-  
+async searchTrades(requestData: any): Promise<any> {
   try {
-    // Use JSON file as the sole source - no dataTable
-    const filePath = path.resolve(process.cwd(), 'requests', 'trade-search.json');
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      throw new Error(`Request body file not found: ${filePath}`);
-    }
-    
-    // Read the JSON file and parse it
-    const fileContent = fs.readFileSync(filePath, 'utf8');
-    const requestData = JSON.parse(fileContent);
-    
-    // Store for later use
-    this.testData = this.testData || {};
-    this.testData.tradeFilters = requestData;
-    
-    // Execute search with await
-    const searchResult = await this.tradeApiClient.searchTrades(requestData);
-    
-    // Store response
-    this.response = {
-      data: searchResult,
-      status: 200,
-      statusText: 'OK',
-      headers: {},
-      config: {} as any
-    };
-  } catch (err) {
-    const error = err as Error;
+    const response = await axios.post(
+      `${this.apiBaseUrl}/your-endpoint-path`, 
+      requestData, 
+      { headers: { 'Content-Type': 'application/json' } }
+    );
+    return response.data;
+  } catch (error) {
     if (axios.isAxiosError(error) && error.response) {
-      this.response = error.response;
-    } else {
-      throw error;
+      console.log('============ API ERROR DETAILS ============');
+      console.log(`Status: ${error.response.status} ${error.response.statusText}`);
+      console.log('Response body:', JSON.stringify(error.response.data, null, 2));
+      console.log('Response headers:', JSON.stringify(error.response.headers, null, 2));
+      console.log('Request URL:', error.config?.url);
+      console.log('Request payload:', JSON.stringify(JSON.parse(error.config?.data as string), null, 2));
+      console.log('============================================');
     }
+    throw error; // Re-throw the error to be caught by the step definition
   }
-});
+}
