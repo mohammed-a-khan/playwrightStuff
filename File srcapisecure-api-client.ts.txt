@@ -18,6 +18,37 @@ Given('I have initialized the Khan Asset API client', async function(this: TestC
   this.logger.info('Initialized Khan Asset API client');
 });
 
+// Helper method for taking error snapshots (async to ensure all file operations complete)
+async function takeErrorSnapshot(this: TestContext, prefix: string, error: unknown): Promise<void> {
+  try {
+    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
+    if (!fs.existsSync(snapshotsDir)) {
+      fs.mkdirSync(snapshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join(snapshotsDir, `${prefix}-${timestamp}.json`);
+    
+    const errorData = {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      response: this.response ? {
+        status: this.response.status,
+        statusText: this.response.statusText,
+        data: this.response.data,
+        headers: this.response.headers
+      } : undefined,
+      requestDuration: this.startTime ? Date.now() - this.startTime : undefined
+    };
+    
+    // Use writeFileSync to ensure the operation completes
+    await fs.promises.writeFile(filePath, JSON.stringify(errorData, null, 2));
+    this.logger.info(`Error snapshot saved to: ${filePath}`);
+  } catch (snapshotError) {
+    this.logger.error(`Failed to take error snapshot: ${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`);
+  }
+}
+
 // Template-based requests with explicit timeout control
 When('I request assets using the {string} template', async function(this: TestContext, templateName: string) {
   if (!this.assetApiClient) {
@@ -42,6 +73,7 @@ When('I request assets using the {string} template', async function(this: TestCo
       }
     };
     
+    // Await the API call and store the response
     this.response = await this.assetApiClient.getAssetsFromTemplate(templateName, undefined, options);
     
     const duration = Date.now() - this.startTime;
@@ -50,8 +82,8 @@ When('I request assets using the {string} template', async function(this: TestCo
     const errorMessage = error instanceof Error ? error.message : String(error);
     this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
     
-    // Take diagnostic snapshot in case of error
-    this.takeErrorSnapshot('failed-asset-request', error);
+    // Make sure to await the snapshot operation
+    await this.takeErrorSnapshot('failed-asset-request', error);
     
     throw error;
   }
@@ -82,6 +114,7 @@ When('I request assets with message ID {string}, deal ID {int}, and report date 
         }
       };
       
+      // Explicitly await the API call
       this.response = await this.assetApiClient.getAssets(messageId, dealId, reportDate, options);
       
       const duration = Date.now() - this.startTime;
@@ -90,42 +123,12 @@ When('I request assets with message ID {string}, deal ID {int}, and report date 
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
       
-      // Take diagnostic snapshot in case of error
-      this.takeErrorSnapshot('failed-asset-request', error);
+      // Make sure to await the snapshot operation
+      await this.takeErrorSnapshot('failed-asset-request', error);
       
       throw error;
     }
 });
-
-// Helper method for taking error snapshots
-function takeErrorSnapshot(this: TestContext, prefix: string, error: unknown): void {
-  try {
-    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
-    if (!fs.existsSync(snapshotsDir)) {
-      fs.mkdirSync(snapshotsDir, { recursive: true });
-    }
-    
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filePath = path.join(snapshotsDir, `${prefix}-${timestamp}.json`);
-    
-    const errorData = {
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      response: this.response ? {
-        status: this.response.status,
-        statusText: this.response.statusText,
-        data: this.response.data,
-        headers: this.response.headers
-      } : undefined,
-      requestDuration: this.startTime ? Date.now() - this.startTime : undefined
-    };
-    
-    fs.writeFileSync(filePath, JSON.stringify(errorData, null, 2));
-    this.logger.info(`Error snapshot saved to: ${filePath}`);
-  } catch (snapshotError) {
-    this.logger.error(`Failed to take error snapshot: ${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`);
-  }
-}
 
 // Request with overrides and explicit timeout control
 When('I request assets with the following details:', async function(this: TestContext, dataTable: any) {
@@ -158,6 +161,7 @@ When('I request assets with the following details:', async function(this: TestCo
       }
     };
     
+    // Explicitly await the API call
     this.response = await this.assetApiClient.getAssets(
       requestData.messageId,
       requestData.dealId,
@@ -171,8 +175,8 @@ When('I request assets with the following details:', async function(this: TestCo
     const errorMessage = error instanceof Error ? error.message : String(error);
     this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
     
-    // Take diagnostic snapshot in case of error
-    this.takeErrorSnapshot('failed-asset-request', error);
+    // Make sure to await the snapshot operation
+    await this.takeErrorSnapshot('failed-asset-request', error);
     
     throw error;
   }
@@ -206,7 +210,9 @@ Then('the response should contain asset layouts', async function(this: TestConte
       
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const filePath = path.join(snapshotsDir, `failed-response-${timestamp}.json`);
-      fs.writeFileSync(filePath, JSON.stringify(this.response.data, null, 2));
+      
+      // Use writeFileSync to ensure the operation completes
+      await fs.promises.writeFile(filePath, JSON.stringify(this.response.data, null, 2));
       
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Response validation failed: ${errorMessage}. Snapshot saved to: ${filePath}`);
@@ -221,6 +227,9 @@ Then('the response should have no system errors', async function(this: TestConte
     throw new Error('No response available. Make sure you have made an API request first.');
   }
   
+  // Wait for any potential async operations to complete
+  await Promise.resolve();
+  
   expect(this.response.data.systemError).toBeNull();
   expect(this.response.data.errorMessage).toBeNull();
   expect(this.response.data.validationErrorMessage).toBeNull();
@@ -232,6 +241,9 @@ Then('the response message ID should be {string}', async function(this: TestCont
     throw new Error('No response available. Make sure you have made an API request first.');
   }
   
+  // Wait for any potential async operations to complete
+  await Promise.resolve();
+  
   expect(this.response.data.responseMessageId).toBe(expectedId);
   this.logger.info(`Verified response message ID: ${expectedId}`);
 });
@@ -240,6 +252,9 @@ Then('the response should contain at least {int} asset layouts', async function(
   if (!this.response) {
     throw new Error('No response available. Make sure you have made an API request first.');
   }
+  
+  // Wait for any potential async operations to complete
+  await Promise.resolve();
   
   expect(this.response.data.assetLayouts.length).toBeGreaterThanOrEqual(count);
   this.logger.info(`Verified response contains at least ${count} asset layouts`);
@@ -253,6 +268,9 @@ Then('the response time should be acceptable', async function(this: TestContext)
   if (!this.assetApiClient) {
     throw new Error('Asset API client is not initialized.');
   }
+  
+  // Wait for any potential async operations to complete
+  await Promise.resolve();
   
   const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 300000); // 5 minutes default
   
@@ -280,7 +298,8 @@ Then('the response passes complete asset validation', async function(this: TestC
   }
   
   try {
-    this.assetApiClient.validateAssetResponse(this.response);
+    // Explicitly await the validation
+    await Promise.resolve(this.assetApiClient.validateAssetResponse(this.response));
     this.logger.info('Asset response validation passed');
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -293,6 +312,9 @@ Then('the API should return a successful response', async function(this: TestCon
   if (!this.response) {
     throw new Error('No response available. Make sure you have made an API request first.');
   }
+  
+  // Wait for any potential async operations to complete
+  await Promise.resolve();
   
   expect(this.response.status).toBeGreaterThanOrEqual(200);
   expect(this.response.status).toBeLessThan(300);
@@ -313,7 +335,9 @@ Then('I save the response to file {string}', async function(this: TestContext, f
   }
   
   const filePath = path.join(responsesDir, filename);
-  fs.writeFileSync(filePath, JSON.stringify(this.response.data, null, 2));
+  
+  // Use async file write to ensure it completes
+  await fs.promises.writeFile(filePath, JSON.stringify(this.response.data, null, 2));
   
   this.logger.info(`Saved response to file: ${filePath}`);
 });
@@ -321,7 +345,7 @@ Then('I save the response to file {string}', async function(this: TestContext, f
 // Add takeErrorSnapshot to TestContext interface
 declare module '../../support/test-context' {
   interface TestContext {
-    takeErrorSnapshot(prefix: string, error: unknown): void;
+    takeErrorSnapshot(prefix: string, error: unknown): Promise<void>;
   }
 }
 
