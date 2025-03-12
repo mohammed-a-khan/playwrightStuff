@@ -1,571 +1,3 @@
-// src/api/asset-api-client.ts
-import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
-import { AxiosResponse } from 'axios';
-import fs from 'fs';
-import path from 'path';
-
-/**
- * Asset response interface representing the API response structure
- */
-export interface AssetResponse {
-  assetLayouts: Array<any>;
-  systemError: string | null;
-  responseMessageId: string;
-  validationErrorMessage: string | null;
-  errorMessage: string | null;
-}
-
-/**
- * Asset request interface for type safety
- */
-export interface AssetRequest {
-  messageId: string;
-  dealId: number;
-  reportDate: string;
-}
-
-/**
- * AssetApiClient for handling asset-related API operations
- * Enhanced to support long-running requests with data loading from stored procedures
- */
-export class AssetApiClient extends BaseApiClient {
-  private readonly requestsDir: string;
-
-  /**
-   * Constructor for AssetApiClient
-   */
-  constructor() {
-    // Get environment-specific settings
-    const config = {
-      // The class will pick this up from ConfigManager
-      baseUrl: process.env.API_BASE_URL || 'https://khanapi-test.example.com/api/v1',
-      defaultHeaders: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    };
-    
-    // Pass custom settings to BaseApiClient
-    super(config.baseUrl, config.defaultHeaders);
-    
-    // Setup directory for request templates
-    this.requestsDir = path.resolve(process.cwd(), 'requests');
-    
-    // Override certificate and proxy settings specifically for Khan API
-    this.pfxCertPath = this.config.getString('KHAN_API_CERT_PATH', 
-      path.resolve(process.cwd(), 'certs', 'khanapicert.pfx'));
-    this.pfxCertPassphrase = this.config.getString('KHAN_API_CERT_PASSPHRASE', 'khanapipwd');
-    
-    this.logger.info('AssetApiClient initialized');
-  }
-
-  /**
-   * Load request body from JSON file
-   * @param filename - Name of the JSON file in requests directory
-   * @returns Object from JSON file
-   */
-  private loadRequestFromFile<T>(filename: string): T {
-    try {
-      const filePath = path.join(this.requestsDir, filename);
-      
-      if (!fs.existsSync(filePath)) {
-        throw new Error(`Request file not found: ${filePath}`);
-      }
-      
-      const fileContent = fs.readFileSync(filePath, 'utf8');
-      return JSON.parse(fileContent) as T;
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        this.logger.error(`Invalid JSON in request file: ${filename}`);
-      }
-      throw error;
-    }
-  }
-  
-  /**
-   * Asset-specific success condition for determining if a response is complete
-   * This is critical for long-running requests with polling
-   * @param response - Asset API response to check
-   * @returns boolean - Whether the response is complete
-   */
-  private assetResponseComplete(response: AxiosResponse<AssetResponse>): boolean {
-    // Check if response data exists
-    if (!response.data) {
-      this.logger.debug('Asset success check: Response data is missing');
-      return false;
-    }
-    
-    // Check if assetLayouts property exists (must exist, even if empty)
-    if (!response.data.hasOwnProperty('assetLayouts')) {
-      this.logger.debug('Asset success check: Missing assetLayouts property');
-      return false;
-    }
-    
-    // If assetLayouts exists and has items, response is complete
-    if (Array.isArray(response.data.assetLayouts) && response.data.assetLayouts.length > 0) {
-      this.logger.debug(`Asset success check: Found ${response.data.assetLayouts.length} assets`);
-      return true;
-    }
-    
-    // If assetLayouts is empty but there are error messages, the response is also complete
-    if (Array.isArray(response.data.assetLayouts) && response.data.assetLayouts.length === 0) {
-      if (response.data.systemError || response.data.errorMessage || response.data.validationErrorMessage) {
-        this.logger.debug('Asset success check: Empty assetLayouts but error messages found');
-        return true;
-      }
-      
-      this.logger.debug('Asset success check: Empty assetLayouts with no error messages');
-      return false;
-    }
-    
-    // Handle the case where assetLayouts is not an array (unexpected but possible)
-    this.logger.debug('Asset success check: Unexpected response structure');
-    return false;
-  }
-
-  /**
-   * Get assets for a deal
-   * @param messageId - Message ID for the request
-   * @param dealId - Deal ID to get assets for
-   * @param reportDate - Report date in YYYY-MM-DD format
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response with assets
-   */
-  async getAssets(
-    messageId: string,
-    dealId: number,
-    reportDate: string,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<AssetResponse>> {
-    // Validate input
-    if (!messageId) {
-      throw new Error('Message ID is required');
-    }
-    
-    if (!dealId) {
-      throw new Error('Deal ID is required');
-    }
-    
-    if (!reportDate) {
-      throw new Error('Report date is required');
-    }
-    
-    // Validate date format (YYYY-MM-DD)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) {
-      throw new Error('Report date must be in YYYY-MM-DD format');
-    }
-    
-    this.logger.info(`Preparing asset request for deal ID: ${dealId}, report date: ${reportDate}`);
-    
-    // Create request body
-    const requestBody: AssetRequest = {
-      messageId,
-      dealId,
-      reportDate
-    };
-    
-    // Configure polling for long-running requests
-    // The asset API involves stored procedures that can take time to complete
-    const pollingEnabled = this.config.getBoolean('ASSET_API_ENABLE_POLLING', true);
-    const pollingMaxAttempts = this.config.getNumber('ASSET_API_POLLING_MAX_ATTEMPTS', 15);
-    const pollingInterval = this.config.getNumber('ASSET_API_POLLING_INTERVAL', 8000);
-    const timeoutPerAttempt = this.config.getNumber('ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT', 20000);
-    
-    // Set up request options with certificate and headers
-    const requestOptions: ApiRequestOptions = {
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      withCredentials: true,
-      pfxPath: this.pfxCertPath,
-      pfxPassphrase: this.pfxCertPassphrase,
-      useProxy: true,
-      // Default retry options for network errors
-      retryOptions: {
-        maxAttempts: 3,
-        retryDelay: 1000
-      },
-      // Polling options for long-running requests with asset-specific settings
-      pollingOptions: {
-        enabled: pollingEnabled,
-        maxAttempts: pollingMaxAttempts,
-        interval: pollingInterval,
-        timeoutPerAttempt: timeoutPerAttempt,
-        successCondition: this.assetResponseComplete.bind(this),
-        preserveOriginalRequest: true  // Important: Use same request method/body for polling
-      },
-      ...options // Allow overriding options
-    };
-    
-    this.logger.debug(`Asset request configured with polling: ${pollingEnabled}, maxAttempts: ${pollingMaxAttempts}`);
-    
-    try {
-      // Make the request
-      const response = await this.post<AssetResponse>('/assets', requestBody, requestOptions);
-      this.logger.info(`Asset request completed successfully for deal ID: ${dealId}`);
-      return response;
-    } catch (error) {
-      this.logger.error(`Asset request failed for deal ID ${dealId}: ${error.message}`);
-      
-      // Add more diagnostic information to the error
-      if (error.response && error.response.data) {
-        this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
-      }
-      
-      throw error;
-    }
-  }
-
-  /**
-   * Get assets using a request template
-   * @param templateName - Name of the request template file (without .json extension)
-   * @param overrides - Optional overrides for the template values
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response with assets
-   */
-  async getAssetsFromTemplate(
-    templateName: string,
-    overrides?: Partial<AssetRequest>,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<AssetResponse>> {
-    try {
-      // Load request template
-      const template = this.loadRequestFromFile<AssetRequest>(`${templateName}.json`);
-      
-      // Apply overrides
-      const requestBody: AssetRequest = {
-        ...template,
-        ...overrides
-      };
-      
-      this.logger.info(`Using template '${templateName}' for asset request with deal ID: ${requestBody.dealId}`);
-      
-      // Call the main method with the combined data
-      return await this.getAssets(
-        requestBody.messageId,
-        requestBody.dealId,
-        requestBody.reportDate,
-        options
-      );
-    } catch (error) {
-      this.logger.error(`Error using asset request template '${templateName}': ${error.message}`);
-      throw error;
-    }
-  }
-  
-  /**
-   * Validate an asset response to ensure it contains all required data
-   * This is useful for testing to confirm that the long-running request completed successfully
-   * @param response - Asset response to validate
-   * @throws Error if the response is incomplete or invalid
-   */
-  validateAssetResponse(response: AxiosResponse<AssetResponse>): void {
-    this.logger.debug('Validating asset response...');
-    
-    // Check if response data exists
-    if (!response.data) {
-      throw new Error('Response data is missing');
-    }
-    
-    // Check if assetLayouts exists (even if empty)
-    if (!response.data.hasOwnProperty('assetLayouts')) {
-      throw new Error('Response is missing assetLayouts property');
-    }
-    
-    // If assetLayouts is empty, check if there's an error message explaining why
-    if (Array.isArray(response.data.assetLayouts) && response.data.assetLayouts.length === 0) {
-      // If there's no error message, there should be assets
-      if (!response.data.systemError && !response.data.errorMessage && !response.data.validationErrorMessage) {
-        throw new Error('Response contains empty assetLayouts with no error message');
-      }
-    }
-    
-    // Validate responseMessageId exists
-    if (!response.data.responseMessageId) {
-      throw new Error('Response is missing responseMessageId');
-    }
-    
-    this.logger.info('Asset response validation successful');
-  }
-}
-
-// src/step-definitions/api-steps/asset-api-steps.ts
-import { Given, When, Then } from '@cucumber/cucumber';
-import { expect } from '@playwright/test';
-import { AssetApiClient } from '../../api/asset-api-client';
-import { TestContext } from '../../support/test-context';
-import fs from 'fs';
-import path from 'path';
-
-/**
- * Step definitions for Asset API testing using BDD style
- * Enhanced with improved error handling and diagnostics for long-running requests
- */
-
-// Client initialization
-Given('I have initialized the Khan Asset API client', async function(this: TestContext) {
-  this.assetApiClient = new AssetApiClient();
-  this.logger.info('Initialized Khan Asset API client');
-});
-
-// Template-based requests
-When('I request assets using the {string} template', async function(this: TestContext, templateName: string) {
-  expect(this.assetApiClient).toBeDefined();
-  
-  try {
-    this.startTime = Date.now(); // Track request start time
-    this.logger.info(`Starting asset request with template: ${templateName}`);
-    
-    // Create directory for snapshots if it doesn't exist
-    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
-    if (!fs.existsSync(snapshotsDir)) {
-      fs.mkdirSync(snapshotsDir, { recursive: true });
-    }
-    
-    // Make the API request with enhanced polling
-    this.response = await this.assetApiClient.getAssetsFromTemplate(templateName);
-    
-    const duration = Date.now() - this.startTime;
-    this.logger.info(`Retrieved assets using template: ${templateName} in ${duration}ms`);
-    
-    // Save the successful response for debugging
-    const filePath = path.join(snapshotsDir, `successful-response-${Date.now()}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(this.response.data, null, 2));
-    this.logger.debug(`Saved successful response to: ${filePath}`);
-  } catch (error) {
-    this.logger.error(`Failed to retrieve assets: ${error.message}`);
-    
-    // Save error diagnostics
-    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
-    if (!fs.existsSync(snapshotsDir)) {
-      fs.mkdirSync(snapshotsDir, { recursive: true });
-    }
-    
-    const errorFilePath = path.join(snapshotsDir, `error-info-${Date.now()}.json`);
-    fs.writeFileSync(errorFilePath, JSON.stringify({
-      error: {
-        message: error.message,
-        stack: error.stack
-      },
-      response: error.response ? {
-        status: error.response.status,
-        data: error.response.data
-      } : null,
-      requestInfo: {
-        template: templateName,
-        startTime: this.startTime,
-        duration: Date.now() - this.startTime
-      }
-    }, null, 2));
-    this.logger.error(`Error diagnostics saved to: ${errorFilePath}`);
-    
-    throw error;
-  }
-});
-
-// Dynamic requests
-When('I request assets with message ID {string}, deal ID {int}, and report date {string}', 
-  async function(this: TestContext, messageId: string, dealId: number, reportDate: string) {
-    expect(this.assetApiClient).toBeDefined();
-    
-    try {
-      this.startTime = Date.now(); // Track request start time
-      this.logger.info(`Starting asset request for deal ID: ${dealId}`);
-      
-      this.response = await this.assetApiClient.getAssets(messageId, dealId, reportDate);
-      
-      const duration = Date.now() - this.startTime;
-      this.logger.info(`Retrieved assets for deal ID: ${dealId} in ${duration}ms`);
-    } catch (error) {
-      this.logger.error(`Failed to retrieve assets: ${error.message}`);
-      throw error;
-    }
-});
-
-// Request with overrides
-When('I request assets with the following details:', async function(this: TestContext, dataTable: any) {
-  expect(this.assetApiClient).toBeDefined();
-  
-  const requestData = dataTable.rowsHash();
-  
-  // Convert string to number for dealId
-  if (requestData.dealId) {
-    requestData.dealId = parseInt(requestData.dealId, 10);
-  }
-  
-  try {
-    this.startTime = Date.now(); // Track request start time
-    this.logger.info(`Starting asset request for deal ID: ${requestData.dealId}`);
-    
-    this.response = await this.assetApiClient.getAssets(
-      requestData.messageId,
-      requestData.dealId,
-      requestData.reportDate
-    );
-    
-    const duration = Date.now() - this.startTime;
-    this.logger.info(`Retrieved assets for deal ID: ${requestData.dealId} in ${duration}ms`);
-  } catch (error) {
-    this.logger.error(`Failed to retrieve assets: ${error.message}`);
-    throw error;
-  }
-});
-
-// Response validation steps
-Then('the response should contain asset layouts', async function(this: TestContext) {
-  try {
-    // Validate that the response data exists
-    expect(this.response).toBeDefined();
-    expect(this.response.data).toBeDefined();
-    
-    // Validate that assetLayouts exists and is an array
-    expect(this.response.data.assetLayouts).toBeDefined();
-    expect(Array.isArray(this.response.data.assetLayouts)).toBeTruthy();
-    
-    // Validate that assetLayouts is not empty
-    expect(this.response.data.assetLayouts.length).toBeGreaterThan(0);
-    
-    this.logger.info(`Response contains ${this.response.data.assetLayouts.length} asset layouts`);
-  } catch (error) {
-    // Take a snapshot of the response for debugging
-    if (this.response && this.response.data) {
-      const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
-      if (!fs.existsSync(snapshotsDir)) {
-        fs.mkdirSync(snapshotsDir, { recursive: true });
-      }
-      
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filePath = path.join(snapshotsDir, `failed-assertion-${timestamp}.json`);
-      fs.writeFileSync(filePath, JSON.stringify({
-        error: error.message,
-        response: this.response.data,
-        startTime: this.startTime,
-        duration: this.startTime ? Date.now() - this.startTime : null
-      }, null, 2));
-      
-      this.logger.error(`Response validation failed. Snapshot saved to: ${filePath}`);
-    }
-    
-    throw error;
-  }
-});
-
-Then('the response should have no system errors', async function(this: TestContext) {
-  expect(this.response.data.systemError).toBeNull();
-  expect(this.response.data.errorMessage).toBeNull();
-  expect(this.response.data.validationErrorMessage).toBeNull();
-  this.logger.info('Verified no errors in response');
-});
-
-Then('the response message ID should be {string}', async function(this: TestContext, expectedId: string) {
-  expect(this.response.data.responseMessageId).toBe(expectedId);
-  this.logger.info(`Verified response message ID: ${expectedId}`);
-});
-
-Then('the response should contain at least {int} asset layouts', async function(this: TestContext, count: number) {
-  expect(this.response.data.assetLayouts.length).toBeGreaterThanOrEqual(count);
-  this.logger.info(`Verified response contains at least ${count} asset layouts`);
-});
-
-Then('the response time should be acceptable', async function(this: TestContext) {
-  // Use a higher timeout for long-running requests that involve polling
-  const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 120000);
-  
-  // Calculate the total response time from the start time
-  if (this.startTime) {
-    const totalDuration = Date.now() - this.startTime;
-    this.logger.info(`Total response time: ${totalDuration}ms (max allowed: ${maxResponseTime}ms)`);
-    expect(totalDuration).toBeLessThanOrEqual(maxResponseTime);
-  } else {
-    // If no start time was captured, use the response's internal duration
-    this.assetApiClient.assertResponseTime(this.response, maxResponseTime);
-  }
-  
-  this.logger.info(`Verified response time is within acceptable limits`);
-});
-
-// Advanced validation and verification steps
-Then('the response passes complete asset validation', async function(this: TestContext) {
-  try {
-    this.assetApiClient.validateAssetResponse(this.response);
-    this.logger.info('Asset response validation passed');
-  } catch (error) {
-    this.logger.error(`Asset response validation failed: ${error.message}`);
-    throw error;
-  }
-});
-
-// Save response for later analysis
-Then('I save the response to file {string}', async function(this: TestContext, filename: string) {
-  const responsesDir = path.resolve(process.cwd(), 'responses');
-  
-  // Create directory if it doesn't exist
-  if (!fs.existsSync(responsesDir)) {
-    fs.mkdirSync(responsesDir, { recursive: true });
-  }
-  
-  const filePath = path.join(responsesDir, filename);
-  fs.writeFileSync(filePath, JSON.stringify({
-    data: this.response.data,
-    metadata: {
-      duration: this.startTime ? Date.now() - this.startTime : null,
-      status: this.response.status,
-      statusText: this.response.statusText,
-      headers: this.response.headers
-    }
-  }, null, 2));
-  
-  this.logger.info(`Saved response with metadata to file: ${filePath}`);
-});
-
-# .env.sit
-# Environment-specific configuration for SIT environment
-# Optimized for long-running asset requests
-
-# Base URLs
-API_BASE_URL=https://khanapi-sit.indias.net/api/v1
-BASE_URL=https://khanapi-sit.indias.net
-
-# Khan API Certificate settings
-KHAN_API_CERT_PATH=./certs/khanapicert.pfx
-KHAN_API_CERT_PASSPHRASE=khanapipwd
-
-# Generic certificate fallback (if specific ones not provided)
-PFX_CERT_PATH=./certs/khanapicert.pfx
-PFX_CERT_PASSPHRASE=khanapipwd
-
-# Proxy settings
-PROXY_URL=http://167.221.23.8:8080
-
-# Timeouts and retry settings
-DEFAULT_TIMEOUT=120000
-API_RETRY_ATTEMPTS=3
-API_RETRY_DELAY=2000
-MAX_RESPONSE_TIME=300000  # Increased to 5 minutes for long-running requests
-
-# Global polling configuration for long-running requests
-API_ENABLE_POLLING=true
-API_POLLING_MAX_ATTEMPTS=20  # Increased from 12 to 20
-API_POLLING_INTERVAL=10000   # Increased from 5s to 10s
-API_POLLING_TIMEOUT_PER_ATTEMPT=15000
-API_PRESERVE_ORIGINAL_REQUEST=true
-
-# Asset API specific settings - these override the global settings
-ASSET_API_ENABLE_POLLING=true
-ASSET_API_POLLING_MAX_ATTEMPTS=30     # Significantly increased for asset API
-ASSET_API_POLLING_INTERVAL=6000       # Reduced slightly to poll more frequently
-ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT=20000
-ASSET_API_MAX_RESPONSE_TIME=300000    # 5 minutes total max time
-
-# Debug settings
-API_DEBUG=true
-API_DEBUG_HEADERS=true
-API_DEBUG_BODY_LENGTH=2000
-REJECT_UNAUTHORIZED=true
-
-# Test data settings
-TEST_DATA_CLEANUP=true
-
 // src/step-definitions/api-steps/asset-api-steps.ts
 import { Given, When, Then } from '@cucumber/cucumber';
 import { expect } from '@playwright/test';
@@ -586,7 +18,7 @@ Given('I have initialized the Khan Asset API client', async function(this: TestC
   this.logger.info('Initialized Khan Asset API client');
 });
 
-// Template-based requests
+// Template-based requests with explicit timeout control
 When('I request assets using the {string} template', async function(this: TestContext, templateName: string) {
   if (!this.assetApiClient) {
     throw new Error('Asset API client is not initialized. Call "I have initialized the Khan Asset API client" first.');
@@ -596,18 +28,36 @@ When('I request assets using the {string} template', async function(this: TestCo
     this.startTime = Date.now(); // Track request start time
     this.logger.info(`Starting asset request with template: ${templateName}`);
     
-    this.response = await this.assetApiClient.getAssetsFromTemplate(templateName);
+    // Get custom timeout for this specific API
+    const timeout = this.config.getNumber('ASSET_API_TIMEOUT', 300000); // 5 minutes default
+    
+    // Set explicit timeout for this request
+    const options = {
+      timeout: timeout,
+      pollingOptions: {
+        enabled: true,
+        maxAttempts: this.config.getNumber('ASSET_API_POLLING_MAX_ATTEMPTS', 30),
+        interval: this.config.getNumber('ASSET_API_POLLING_INTERVAL', 10000),
+        timeoutPerAttempt: this.config.getNumber('ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT', 30000)
+      }
+    };
+    
+    this.response = await this.assetApiClient.getAssetsFromTemplate(templateName, undefined, options);
     
     const duration = Date.now() - this.startTime;
     this.logger.info(`Retrieved assets using template: ${templateName} in ${duration}ms`);
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
+    
+    // Take diagnostic snapshot in case of error
+    this.takeErrorSnapshot('failed-asset-request', error);
+    
     throw error;
   }
 });
 
-// Dynamic requests
+// Dynamic requests with explicit timeout control
 When('I request assets with message ID {string}, deal ID {int}, and report date {string}', 
   async function(this: TestContext, messageId: string, dealId: number, reportDate: string) {
     if (!this.assetApiClient) {
@@ -618,18 +68,66 @@ When('I request assets with message ID {string}, deal ID {int}, and report date 
       this.startTime = Date.now(); // Track request start time
       this.logger.info(`Starting asset request for deal ID: ${dealId}`);
       
-      this.response = await this.assetApiClient.getAssets(messageId, dealId, reportDate);
+      // Get custom timeout for this specific API
+      const timeout = this.config.getNumber('ASSET_API_TIMEOUT', 300000); // 5 minutes default
+      
+      // Set explicit timeout for this request
+      const options = {
+        timeout: timeout,
+        pollingOptions: {
+          enabled: true,
+          maxAttempts: this.config.getNumber('ASSET_API_POLLING_MAX_ATTEMPTS', 30),
+          interval: this.config.getNumber('ASSET_API_POLLING_INTERVAL', 10000),
+          timeoutPerAttempt: this.config.getNumber('ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT', 30000)
+        }
+      };
+      
+      this.response = await this.assetApiClient.getAssets(messageId, dealId, reportDate, options);
       
       const duration = Date.now() - this.startTime;
       this.logger.info(`Retrieved assets for deal ID: ${dealId} in ${duration}ms`);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
+      
+      // Take diagnostic snapshot in case of error
+      this.takeErrorSnapshot('failed-asset-request', error);
+      
       throw error;
     }
 });
 
-// Request with overrides
+// Helper method for taking error snapshots
+function takeErrorSnapshot(this: TestContext, prefix: string, error: unknown): void {
+  try {
+    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
+    if (!fs.existsSync(snapshotsDir)) {
+      fs.mkdirSync(snapshotsDir, { recursive: true });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join(snapshotsDir, `${prefix}-${timestamp}.json`);
+    
+    const errorData = {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      response: this.response ? {
+        status: this.response.status,
+        statusText: this.response.statusText,
+        data: this.response.data,
+        headers: this.response.headers
+      } : undefined,
+      requestDuration: this.startTime ? Date.now() - this.startTime : undefined
+    };
+    
+    fs.writeFileSync(filePath, JSON.stringify(errorData, null, 2));
+    this.logger.info(`Error snapshot saved to: ${filePath}`);
+  } catch (snapshotError) {
+    this.logger.error(`Failed to take error snapshot: ${snapshotError instanceof Error ? snapshotError.message : String(snapshotError)}`);
+  }
+}
+
+// Request with overrides and explicit timeout control
 When('I request assets with the following details:', async function(this: TestContext, dataTable: any) {
   if (!this.assetApiClient) {
     throw new Error('Asset API client is not initialized. Call "I have initialized the Khan Asset API client" first.');
@@ -646,10 +144,25 @@ When('I request assets with the following details:', async function(this: TestCo
     this.startTime = Date.now(); // Track request start time
     this.logger.info(`Starting asset request for deal ID: ${requestData.dealId}`);
     
+    // Get custom timeout for this specific API
+    const timeout = this.config.getNumber('ASSET_API_TIMEOUT', 300000); // 5 minutes default
+    
+    // Set explicit timeout for this request
+    const options = {
+      timeout: timeout,
+      pollingOptions: {
+        enabled: true,
+        maxAttempts: this.config.getNumber('ASSET_API_POLLING_MAX_ATTEMPTS', 30),
+        interval: this.config.getNumber('ASSET_API_POLLING_INTERVAL', 10000),
+        timeoutPerAttempt: this.config.getNumber('ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT', 30000)
+      }
+    };
+    
     this.response = await this.assetApiClient.getAssets(
       requestData.messageId,
       requestData.dealId,
-      requestData.reportDate
+      requestData.reportDate,
+      options
     );
     
     const duration = Date.now() - this.startTime;
@@ -657,6 +170,10 @@ When('I request assets with the following details:', async function(this: TestCo
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     this.logger.error(`Failed to retrieve assets: ${errorMessage}`);
+    
+    // Take diagnostic snapshot in case of error
+    this.takeErrorSnapshot('failed-asset-request', error);
+    
     throw error;
   }
 });
@@ -737,7 +254,7 @@ Then('the response time should be acceptable', async function(this: TestContext)
     throw new Error('Asset API client is not initialized.');
   }
   
-  const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 120000);
+  const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 300000); // 5 minutes default
   
   // Calculate the total response time from the start time
   if (this.startTime) {
@@ -800,3 +317,13 @@ Then('I save the response to file {string}', async function(this: TestContext, f
   
   this.logger.info(`Saved response to file: ${filePath}`);
 });
+
+// Add takeErrorSnapshot to TestContext interface
+declare module '../../support/test-context' {
+  interface TestContext {
+    takeErrorSnapshot(prefix: string, error: unknown): void;
+  }
+}
+
+// Attach the method to TestContext prototype
+TestContext.prototype.takeErrorSnapshot = takeErrorSnapshot;
