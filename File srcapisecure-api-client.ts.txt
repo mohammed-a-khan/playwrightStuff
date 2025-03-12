@@ -1,5 +1,305 @@
+// src/api/trade-api-client.ts
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import axios, { AxiosResponse } from 'axios';
+import * as fs from 'fs';
+import * as https from 'https';
+
+/**
+ * Interface for Certificate Options
+ */
+export interface CertificateOptions {
+  path: string;
+  passphrase: string;
+}
+
+/**
+ * Trade API client with session management
+ */
+export class TradeApiClient extends BaseApiClient {
+  private pfxOptions?: CertificateOptions;
+  private proxyUrl?: string;
+  private sessionCookie?: string;
+
+  /**
+   * Constructor for the TradeApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param pfxOptions - PFX certificate options (optional)
+   * @param proxyUrl - Proxy URL (optional)
+   */
+  constructor(
+    apiBaseUrl: string,
+    pfxOptions?: CertificateOptions,
+    proxyUrl?: string
+  ) {
+    super(apiBaseUrl);
+    this.pfxOptions = pfxOptions;
+    this.proxyUrl = proxyUrl;
+  }
+
+  /**
+   * Initialize a session by making a request to the server to get JSESSIONID
+   * @returns Promise<string> - The session cookie
+   */
+  async initializeSession(): Promise<string> {
+    this.logger.info('Initializing session to obtain JSESSIONID');
+    
+    // Configure request options
+    const options: Record<string, any> = {
+      headers: this.defaultHeaders,
+      withCredentials: true // Enable cookie handling
+    };
+    
+    // Add certificate if provided
+    if (this.pfxOptions) {
+      options.httpsAgent = new https.Agent({
+        pfx: fs.readFileSync(this.pfxOptions.path),
+        passphrase: this.pfxOptions.passphrase,
+        rejectUnauthorized: false // Consider setting to true in production
+      });
+    }
+    
+    // Add proxy if provided
+    if (this.proxyUrl) {
+      const proxyUrl = new URL(this.proxyUrl);
+      options.proxy = {
+        host: proxyUrl.hostname,
+        port: Number(proxyUrl.port),
+        protocol: proxyUrl.protocol.replace(':', '')
+      };
+    }
+    
+    try {
+      // Make a GET request to initialize session
+      const response = await axios.get(this.apiBaseUrl, options);
+      
+      // Extract cookies from response
+      const setCookieHeader = response.headers['set-cookie'];
+      if (!setCookieHeader || setCookieHeader.length === 0) {
+        throw new Error('No session cookie received from server');
+      }
+      
+      // Store the cookie string
+      this.sessionCookie = setCookieHeader.join('; ');
+      this.logger.info('Session initialized successfully');
+      
+      return this.sessionCookie;
+    } catch (error: any) {
+      this.logger.error(`Session initialization failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Search for trades with current session
+   * @param searchParams - Search parameters
+   * @returns Promise<AxiosResponse> - Search results
+   */
+  async searchTrades(searchParams: Record<string, any>): Promise<AxiosResponse> {
+    // Ensure we have a session
+    if (!this.sessionCookie) {
+      await this.initializeSession();
+    }
+    
+    const endpoint = '/api/trades/search';
+    const options: ApiRequestOptions = {
+      headers: {
+        'Cookie': this.sessionCookie as string
+      }
+    };
+    
+    try {
+      this.logger.info(`Searching trades with params: ${JSON.stringify(searchParams)}`);
+      const response = await this.post(endpoint, searchParams, options);
+      return response;
+    } catch (error: any) {
+      // If unauthorized, try to reinitialize session and retry
+      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+        this.logger.warn('Session expired, reinitializing...');
+        await this.initializeSession();
+        
+        // Retry with new session
+        const retryOptions: ApiRequestOptions = {
+          headers: {
+            'Cookie': this.sessionCookie as string
+          }
+        };
+        return await this.post(endpoint, searchParams, retryOptions);
+      }
+      
+      this.logger.error(`Trade search failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Get trade details by ID
+   * @param tradeId - Trade ID
+   * @returns Promise<AxiosResponse> - Trade details
+   */
+  async getTradeById(tradeId: string): Promise<AxiosResponse> {
+    // Ensure we have a session
+    if (!this.sessionCookie) {
+      await this.initializeSession();
+    }
+    
+    const endpoint = `/api/trades/${tradeId}`;
+    const options: ApiRequestOptions = {
+      headers: {
+        'Cookie': this.sessionCookie as string
+      }
+    };
+    
+    try {
+      this.logger.info(`Getting trade details for ID: ${tradeId}`);
+      const response = await this.get(endpoint, options);
+      return response;
+    } catch (error: any) {
+      // If unauthorized, try to reinitialize session and retry
+      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+        this.logger.warn('Session expired, reinitializing...');
+        await this.initializeSession();
+        
+        // Retry with new session
+        const retryOptions: ApiRequestOptions = {
+          headers: {
+            'Cookie': this.sessionCookie as string
+          }
+        };
+        return await this.get(endpoint, retryOptions);
+      }
+      
+      this.logger.error(`Failed to get trade: ${error.message}`);
+      throw error;
+    }
+  }
+}
+
+// src/framework/utils/config-manager.ts
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+import * as fs from 'fs';
+
+/**
+ * Configuration Manager for handling environment-specific configurations
+ * Implements singleton pattern
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private config: Record<string, any> = {};
+  private initialized: boolean = false;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.loadConfiguration();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns ConfigManager instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
+    }
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Load configuration from .env files and process.env
+   * @private
+   */
+  private loadConfiguration(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    try {
+      // Determine current environment
+      const env = process.env.NODE_ENV || 'development';
+      console.log(`Loading configuration for environment: ${env}`);
+      
+      // Load base .env file first
+      const baseEnvPath = path.resolve(process.cwd(), '.env');
+      if (fs.existsSync(baseEnvPath)) {
+        console.log(`Loading base environment from: ${baseEnvPath}`);
+        dotenv.config({ path: baseEnvPath });
+      }
+
+      // Then load environment-specific .env file
+      const envSpecificPath = path.resolve(process.cwd(), `.env.${env}`);
+      if (fs.existsSync(envSpecificPath)) {
+        console.log(`Loading environment-specific config from: ${envSpecificPath}`);
+        // Override with environment-specific values
+        dotenv.config({ path: envSpecificPath, override: true });
+      }
+
+      // Copy all environment variables to config object
+      this.config = { ...process.env };
+      
+      this.initialized = true;
+    } catch (error) {
+      console.error(`Error loading environment configuration: ${error}`);
+    }
+  }
+
+  /**
+   * Get configuration value with type conversion
+   * @param key - Configuration key
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value with appropriate type
+   */
+  public getString(key: string, defaultValue: string = ''): string {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    return this.config[key] !== undefined ? String(this.config[key]) : defaultValue;
+  }
+  
+  /**
+   * Get number configuration value
+   * @param key - Configuration key
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value as number
+   */
+  public getNumber(key: string, defaultValue: number = 0): number {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    const value = this.config[key];
+    if (value === undefined) {
+      return defaultValue;
+    }
+    
+    const numValue = Number(value);
+    return isNaN(numValue) ? defaultValue : numValue;
+  }
+  
+  /**
+   * Get boolean configuration value
+   * @param key - Configuration key
+   * @param defaultValue - Default value if configuration not found
+   * @returns Configuration value as boolean
+   */
+  public getBoolean(key: string, defaultValue: boolean = false): boolean {
+    if (!this.initialized) {
+      this.loadConfiguration();
+    }
+    
+    const value = this.config[key];
+    if (value === undefined) {
+      return defaultValue;
+    }
+    
+    return value === 'true' || value === '1' || value === 'yes';
+  }
+}
+
 // src/step-definitions/api-steps/trade-api-steps.ts
-import { Given, When, Then } from '@cucumber/cucumber';
+import { Given, When, Then, DataTable } from '@cucumber/cucumber';
 import { expect } from '@playwright/test';
 import { TradeApiClient } from '../../api/trade-api-client';
 import { TestContext } from '../../support/test-context';
@@ -15,22 +315,38 @@ interface TradeSearchParams {
   [key: string]: any;
 }
 
-Given('I have initialized the Trade API client', async function(this: TestContext) {
-  const apiBaseUrl = this.config.getString('API_BASE_URL', 'https://api.example.com');
+Given('I have initialized the Trade API client', function(this: TestContext) {
+  // Ensure config is available (should be initialized in hooks)
+  if (!this.config) {
+    throw new Error('Configuration manager not initialized in test context');
+  }
   
-  // Get certificate settings from config or environment
-  const pfxPath = this.config.getString('CERTIFICATE_PATH', '');
-  const pfxPassphrase = this.config.getString('CERTIFICATE_PASSPHRASE', '');
+  // Get API URL from environment config
+  const apiBaseUrl: string = this.config.getString('TRADE_API_BASE_URL', 'https://api.example.com');
   
-  // Get proxy URL if configured
-  const proxyUrl = this.config.getString('PROXY_URL', '');
+  // Get certificate settings from environment config
+  const pfxPath: string = this.config.getString('TRADE_CERTIFICATE_PATH', '');
+  const pfxPassphrase: string = this.config.getString('TRADE_CERTIFICATE_PASSPHRASE', '');
+  
+  // Get proxy URL from environment config
+  const proxyUrl: string = this.config.getString('PROXY_URL', '');
+  
+  // Log configuration (without sensitive info)
+  this.logger.info(`Using Trade API URL: ${apiBaseUrl}`);
+  this.logger.info(`Using certificate: ${pfxPath ? 'Yes' : 'No'}`);
+  this.logger.info(`Using proxy: ${proxyUrl ? 'Yes' : 'No'}`);
+  
+  // Create certificate options only if path is provided
+  const certOptions = pfxPath ? 
+    { 
+      path: pfxPath, 
+      passphrase: pfxPassphrase 
+    } : undefined;
   
   // Create the Trade API client
   this.tradeApiClient = new TradeApiClient(
     apiBaseUrl,
-    // Only include certificate if path is provided
-    pfxPath ? { path: pfxPath, passphrase: pfxPassphrase } : undefined,
-    // Only include proxy if URL is provided
+    certOptions,
     proxyUrl || undefined
   );
   
@@ -42,18 +358,18 @@ Given('I have an active trade API session', async function(this: TestContext) {
     throw new Error('Trade API client not initialized. Please use "I have initialized the Trade API client" step first.');
   }
   
-  // Initialize session - fixed to properly await the Promise
+  // Initialize session
   await this.tradeApiClient.initializeSession();
   this.logger.info('Active session established successfully');
 });
 
-When('I search for trades with the following criteria:', async function(this: TestContext, dataTable) {
+When('I search for trades with the following criteria:', async function(this: TestContext, dataTable: DataTable) {
   if (!this.tradeApiClient) {
     throw new Error('Trade API client not initialized. Please use "I have initialized the Trade API client" step first.');
   }
   
   // Convert the data table to search parameters
-  const rawData = dataTable.rowsHash();
+  const rawData: Record<string, string> = dataTable.rowsHash();
   const searchParams: TradeSearchParams = {};
   
   // Process and convert data types as needed
@@ -66,10 +382,15 @@ When('I search for trades with the following criteria:', async function(this: Te
   
   // Perform the search
   this.logger.info(`Searching trades with params: ${JSON.stringify(searchParams)}`);
-  this.response = await this.tradeApiClient.searchTrades(searchParams);
+  const response = await this.tradeApiClient.searchTrades(searchParams);
+  
+  // Store the response
+  this.response = response;
   
   // Store results for later steps
-  this.testData.searchResults = this.response.data;
+  if (response && response.data) {
+    this.testData.searchResults = response.data;
+  }
 });
 
 When('I retrieve trade details for trade ID {string}', async function(this: TestContext, tradeId: string) {
@@ -82,20 +403,29 @@ When('I retrieve trade details for trade ID {string}', async function(this: Test
   
   // Get trade details
   this.logger.info(`Retrieving details for trade ID: ${tradeId}`);
-  this.response = await this.tradeApiClient.getTradeById(tradeId);
+  const response = await this.tradeApiClient.getTradeById(tradeId);
+  
+  // Store the response
+  this.response = response;
   
   // Store trade details for later steps
-  this.testData.tradeDetails = this.response.data;
+  if (response && response.data) {
+    this.testData.tradeDetails = response.data;
+  }
 });
 
-Then('the trade search should return at least {int} results', async function(this: TestContext, minResults: number) {
-  // Fixed: Check for undefined response
+Then('the trade search should return at least {int} results', function(this: TestContext, minResults: number) {
+  // Check for undefined response
   if (!this.response) {
     throw new Error('No response received from trade search');
   }
   
-  expect(this.response.data).toBeDefined();
+  // Check for undefined data
+  if (!this.response.data) {
+    throw new Error('No data received in trade search response');
+  }
   
+  // Get results array from response
   const results = Array.isArray(this.response.data) 
     ? this.response.data 
     : (this.response.data.trades || this.response.data.results || []);
@@ -106,27 +436,141 @@ Then('the trade search should return at least {int} results', async function(thi
   expect(results.length).toBeGreaterThanOrEqual(minResults);
 });
 
-Then('the trade details should include the correct symbol {string}', async function(this: TestContext, expectedSymbol: string) {
-  // Fixed: Check for undefined response
+Then('the trade details should include the correct symbol {string}', function(this: TestContext, expectedSymbol: string) {
+  // Check for undefined response
   if (!this.response) {
     throw new Error('No response received from trade details request');
   }
   
-  expect(this.response.data).toBeDefined();
+  // Check for undefined data
+  if (!this.response.data) {
+    throw new Error('No data received in trade details response');
+  }
   
   const tradeDetails = this.response.data;
+  
+  // Verify symbol exists
+  if (!tradeDetails.symbol) {
+    throw new Error(`Symbol property not found in trade details: ${JSON.stringify(tradeDetails)}`);
+  }
   
   // Verify symbol
   expect(tradeDetails.symbol).toBe(expectedSymbol);
   this.logger.info(`Verified trade has symbol: ${expectedSymbol}`);
 });
 
-Then('the API response should have status code {int}', async function(this: TestContext, expectedStatus: number) {
-  // Fixed: Check for undefined response
+Then('the API response should have status code {int}', function(this: TestContext, expectedStatus: number) {
+  // Check for undefined response
   if (!this.response) {
     throw new Error('No response received from API');
   }
   
   expect(this.response.status).toBe(expectedStatus);
   this.logger.info(`Response status code: ${this.response.status}`);
+});
+
+// src/support/test-context.ts
+import { Page, BrowserContext } from '@playwright/test';
+import { AxiosResponse } from 'axios';
+import { Logger } from '../framework/utils/logger';
+import { ConfigManager } from '../framework/utils/config-manager';
+import { TradeApiClient } from '../api/trade-api-client';
+// Import other required classes as needed
+
+/**
+ * Comprehensive test context that can be used for both UI and API tests
+ * Shared between steps to maintain state
+ */
+export interface TestContext {
+  // Playwright objects
+  page?: Page;
+  context?: BrowserContext;
+  
+  // Configuration and logging
+  logger: Logger;
+  config: ConfigManager;
+  
+  // API Clients
+  tradeApiClient?: TradeApiClient;
+  // Other API clients...
+  
+  // API testing properties
+  authToken?: string;
+  response?: AxiosResponse;
+  
+  // Common properties
+  testData: Record<string, any>; // For storing data between steps
+  scenarioName?: string;
+  scenarioTags?: string[];
+  result?: { status: string }; // For tracking test result status
+  
+  // Test execution metadata
+  startTime?: number;
+  endTime?: number;
+  
+  // Cucumber attachment function
+  attach: (data: any, mimeType: string) => void;
+}
+
+// src/support/hooks.ts (partial update for configuration)
+import { Before, After, BeforeAll, AfterAll } from '@cucumber/cucumber';
+import * as path from 'path';
+import * as fs from 'fs';
+import { Logger } from '../framework/utils/logger';
+import { ConfigManager } from '../framework/utils/config-manager';
+import { BrowserManager } from '../framework/browser-manager';
+import { TestContext } from './test-context';
+
+// Get the browser manager instance
+const browserManager = BrowserManager.getInstance();
+
+// Before all scenarios
+BeforeAll(async function() {
+  const globalLogger = new Logger('GlobalSetup');
+  
+  // Load correct environment variables based on NODE_ENV
+  const env = process.env.NODE_ENV || 'development';
+  globalLogger.info(`Running tests in ${env} environment`);
+  
+  // Get the config manager instance (this will load environment variables)
+  const config = ConfigManager.getInstance();
+  
+  // Ensure report directories exist
+  const dirs = ['reports/screenshots', 'reports/videos', 'reports/logs', 'reports/html', 'reports/json'];
+  dirs.forEach(dir => {
+    const dirPath = path.join(process.cwd(), dir);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      globalLogger.info(`Created directory: ${dirPath}`);
+    }
+  });
+  
+  // For web tests, initialize the browser once if configured
+  if (config.getBoolean('PRELAUNCH_BROWSER', false)) {
+    globalLogger.info('Pre-launching browser');
+    await browserManager.initialize();
+    globalLogger.info('Browser pre-launched successfully');
+  }
+});
+
+// Before each scenario
+Before(async function(this: TestContext, scenario) {
+  this.startTime = Date.now();
+  this.scenarioName = scenario.pickle.name;
+  this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
+  
+  // Create a unique test ID based on scenario name and timestamp
+  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  
+  // Initialize logger with test ID
+  this.logger = new Logger(testId);
+  this.logger.info(`Starting scenario: ${scenario.pickle.name}`);
+  
+  // Initialize config manager
+  this.config = ConfigManager.getInstance();
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
+  
+  // Additional initialization based on scenario tags...
 });
