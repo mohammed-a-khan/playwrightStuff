@@ -1,4 +1,5 @@
-When('I search for trades with following filters', async function(this: TestContext, dataTable?: DataTable) {
+// CORRECT VERSION - uses only async/await
+When('I search for trades with following filters', async function(this: TestContext, dataTable?) {
   // Ensure trade API client exists
   if (!this.tradeApiClient) {
     throw new Error('Trade API client is not initialized');
@@ -27,7 +28,6 @@ When('I search for trades with following filters', async function(this: TestCont
       
       // Apply overrides from the data table
       for (const key of Object.keys(filters)) {
-        // Handle specific field conversions
         if (key === 'accountNumFilter' || key === 'tradeStatusFilter' || key === 'tradeTypeFilter') {
           const filterValue = filters[key];
           if (typeof filterValue === 'string' && filterValue.includes(',')) {
@@ -43,10 +43,6 @@ When('I search for trades with following filters', async function(this: TestCont
           requestData[key] = filters[key];
         }
       }
-      
-      if (this.logger) {
-        this.logger.info(`Applied overrides from data table`);
-      }
     }
     
     // Store request data for later assertions
@@ -56,10 +52,6 @@ When('I search for trades with following filters', async function(this: TestCont
     this.testData.tradeFilters = requestData;
     
     // Execute the search
-    if (this.logger) {
-      this.logger.info(`Searching trades with filters`);
-    }
-    
     const searchResult = await this.tradeApiClient.searchTrades(requestData);
     
     // Store the response for later access
@@ -71,7 +63,6 @@ When('I search for trades with following filters', async function(this: TestCont
       config: {} as any,
     };
   } catch (err) {
-    // Type the error properly
     const error = err as Error;
     
     if (this.logger) {
