@@ -1,169 +1,3 @@
-// src/api/trade-api-client.ts
-import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
-import axios, { AxiosResponse } from 'axios';
-import * as fs from 'fs';
-import * as https from 'https';
-
-/**
- * Interface for Certificate Options
- */
-interface CertificateOptions {
-  path: string;
-  passphrase: string;
-}
-
-/**
- * Trade API client with session management
- */
-export class TradeApiClient extends BaseApiClient {
-  private pfxOptions?: CertificateOptions;
-  private proxyUrl?: string;
-  private sessionCookie?: string;
-
-  /**
-   * Constructor for the TradeApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   * @param pfxOptions - PFX certificate options (optional)
-   * @param proxyUrl - Proxy URL (optional)
-   */
-  constructor(
-    apiBaseUrl: string,
-    pfxOptions?: CertificateOptions,
-    proxyUrl?: string
-  ) {
-    super(apiBaseUrl);
-    this.pfxOptions = pfxOptions;
-    this.proxyUrl = proxyUrl;
-  }
-
-  /**
-   * Initialize a session by making a request to the server to get JSESSIONID
-   * @returns Promise<string> - The session cookie
-   */
-  async initializeSession(): Promise<string> {
-    this.logger.info('Initializing session to obtain JSESSIONID');
-    
-    // Configure request options
-    const options: any = {
-      headers: this.defaultHeaders,
-      withCredentials: true // Enable cookie handling
-    };
-    
-    // Add certificate if provided
-    if (this.pfxOptions) {
-      options.httpsAgent = new https.Agent({
-        pfx: fs.readFileSync(this.pfxOptions.path),
-        passphrase: this.pfxOptions.passphrase,
-        rejectUnauthorized: false // Consider setting to true in production
-      });
-    }
-    
-    // Add proxy if provided
-    if (this.proxyUrl) {
-      const proxyUrl = new URL(this.proxyUrl);
-      options.proxy = {
-        host: proxyUrl.hostname,
-        port: Number(proxyUrl.port),
-        protocol: proxyUrl.protocol.replace(':', '')
-      };
-    }
-    
-    try {
-      // Make a GET request to initialize session
-      const response = await axios.get(this.apiBaseUrl, options);
-      
-      // Extract cookies from response
-      const setCookieHeader = response.headers['set-cookie'];
-      if (!setCookieHeader || setCookieHeader.length === 0) {
-        throw new Error('No session cookie received from server');
-      }
-      
-      // Store the cookie string
-      this.sessionCookie = setCookieHeader.join('; ');
-      this.logger.info('Session initialized successfully');
-      
-      return this.sessionCookie;
-    } catch (error: any) {
-      this.logger.error(`Session initialization failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Search for trades with current session
-   * @param searchParams - Search parameters
-   * @returns Promise<AxiosResponse> - Search results
-   */
-  async searchTrades(searchParams: any): Promise<AxiosResponse> {
-    // Ensure we have a session
-    if (!this.sessionCookie) {
-      await this.initializeSession();
-    }
-    
-    const endpoint = '/api/trades/search';
-    const options: ApiRequestOptions = {
-      headers: {
-        'Cookie': this.sessionCookie as string
-      }
-    };
-    
-    try {
-      this.logger.info(`Searching trades with params: ${JSON.stringify(searchParams)}`);
-      return await this.post(endpoint, searchParams, options);
-    } catch (error: any) {
-      // If unauthorized, try to reinitialize session and retry
-      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-        this.logger.warn('Session expired, reinitializing...');
-        await this.initializeSession();
-        
-        // Retry with new session
-        options.headers = { 'Cookie': this.sessionCookie as string };
-        return await this.post(endpoint, searchParams, options);
-      }
-      
-      this.logger.error(`Trade search failed: ${error.message}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Get trade details by ID
-   * @param tradeId - Trade ID
-   * @returns Promise<AxiosResponse> - Trade details
-   */
-  async getTradeById(tradeId: string): Promise<AxiosResponse> {
-    // Ensure we have a session
-    if (!this.sessionCookie) {
-      await this.initializeSession();
-    }
-    
-    const endpoint = `/api/trades/${tradeId}`;
-    const options: ApiRequestOptions = {
-      headers: {
-        'Cookie': this.sessionCookie as string
-      }
-    };
-    
-    try {
-      this.logger.info(`Getting trade details for ID: ${tradeId}`);
-      return await this.get(endpoint, options);
-    } catch (error: any) {
-      // If unauthorized, try to reinitialize session and retry
-      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-        this.logger.warn('Session expired, reinitializing...');
-        await this.initializeSession();
-        
-        // Retry with new session
-        options.headers = { 'Cookie': this.sessionCookie as string };
-        return await this.get(endpoint, options);
-      }
-      
-      this.logger.error(`Failed to get trade: ${error.message}`);
-      throw error;
-    }
-  }
-}
-
 // src/step-definitions/api-steps/trade-api-steps.ts
 import { Given, When, Then } from '@cucumber/cucumber';
 import { expect } from '@playwright/test';
@@ -208,9 +42,9 @@ Given('I have an active trade API session', async function(this: TestContext) {
     throw new Error('Trade API client not initialized. Please use "I have initialized the Trade API client" step first.');
   }
   
-  // Initialize session
-  const sessionCookie = await this.tradeApiClient.initializeSession();
-  this.logger.info(`Active session established with cookie: ${sessionCookie}`);
+  // Initialize session - fixed to properly await the Promise
+  await this.tradeApiClient.initializeSession();
+  this.logger.info('Active session established successfully');
 });
 
 When('I search for trades with the following criteria:', async function(this: TestContext, dataTable) {
@@ -255,8 +89,11 @@ When('I retrieve trade details for trade ID {string}', async function(this: Test
 });
 
 Then('the trade search should return at least {int} results', async function(this: TestContext, minResults: number) {
-  // Verify we have a response
-  expect(this.response).toBeDefined();
+  // Fixed: Check for undefined response
+  if (!this.response) {
+    throw new Error('No response received from trade search');
+  }
+  
   expect(this.response.data).toBeDefined();
   
   const results = Array.isArray(this.response.data) 
@@ -270,8 +107,11 @@ Then('the trade search should return at least {int} results', async function(thi
 });
 
 Then('the trade details should include the correct symbol {string}', async function(this: TestContext, expectedSymbol: string) {
-  // Verify we have a response
-  expect(this.response).toBeDefined();
+  // Fixed: Check for undefined response
+  if (!this.response) {
+    throw new Error('No response received from trade details request');
+  }
+  
   expect(this.response.data).toBeDefined();
   
   const tradeDetails = this.response.data;
@@ -282,122 +122,11 @@ Then('the trade details should include the correct symbol {string}', async funct
 });
 
 Then('the API response should have status code {int}', async function(this: TestContext, expectedStatus: number) {
-  expect(this.response).toBeDefined();
+  // Fixed: Check for undefined response
+  if (!this.response) {
+    throw new Error('No response received from API');
+  }
+  
   expect(this.response.status).toBe(expectedStatus);
   this.logger.info(`Response status code: ${this.response.status}`);
-});
-
-
-# features/api/trade-search.feature
-Feature: Trade API Search
-  As an API client
-  I want to search for trades and retrieve trade details
-  So that I can analyze trading activity
-
-  Background:
-    Given I have initialized the Trade API client
-    And I have an active trade API session
-
-  @api @trades
-  Scenario: Search for trades by date and symbol
-    When I search for trades with the following criteria:
-      | tradeDate | 2025-03-12   |
-      | symbol    | AAPL         |
-    Then the trade search should return at least 1 results
-    And the API response should have status code 200
-
-  @api @trades
-  Scenario: Search for trades by trader
-    When I search for trades with the following criteria:
-      | trader    | JohnDoe      |
-      | side      | BUY          |
-    Then the trade search should return at least 1 results
-    And the API response should have status code 200
-
-  @api @trades
-  Scenario: Retrieve trade details by ID
-    When I retrieve trade details for trade ID "TRADE-123456"
-    Then the trade details should include the correct symbol "AAPL"
-    And the API response should have status code 200
-
-// src/support/test-context.ts
-import { Page, BrowserContext } from '@playwright/test';
-import { AxiosResponse } from 'axios';
-import { Logger } from '../framework/utils/logger';
-import { ConfigManager } from '../framework/utils/config-manager';
-import { TradeApiClient } from '../api/trade-api-client';
-// Import other required classes
-
-/**
- * Comprehensive test context that can be used for both UI and API tests
- * Shared between steps to maintain state
- */
-export interface TestContext {
-  // Playwright objects
-  page?: Page;
-  context?: BrowserContext;
-  
-  // Configuration and logging
-  logger: Logger;
-  config: ConfigManager;
-  
-  // API Clients
-  tradeApiClient?: TradeApiClient;
-  // Other API clients...
-  
-  // API testing properties
-  authToken?: string;
-  response?: AxiosResponse;
-  
-  // Common properties
-  testData: Record<string, any>; // For storing data between steps
-  scenarioName?: string;
-  scenarioTags?: string[];
-  result?: { status: string }; // For tracking test result status
-  
-  // Test execution metadata
-  startTime?: number;
-  endTime?: number;
-  
-  // Cucumber attachment function
-  attach: (data: any, mimeType: string) => void;
-}
-
-// src/support/hooks.ts (partial update for API tests)
-
-// In the Before hook, make sure the config is available
-Before(async function(this: TestContext, scenario) {
-  // ... existing code ...
-  
-  // Initialize config for all tests
-  this.config = ConfigManager.getInstance();
-  
-  // Create test data object for sharing data between steps
-  this.testData = {};
-  
-  // For API tests, preload any environment-specific configuration
-  if (this.scenarioTags.some(tag => tag === '@api')) {
-    this.logger.info('Initializing API test with environment config');
-    
-    // Example of reading environment-specific API settings
-    const apiBaseUrl = this.config.getString('API_BASE_URL');
-    if (apiBaseUrl) {
-      this.logger.info(`Using API base URL: ${apiBaseUrl}`);
-    }
-  }
-  
-  // ... existing code ...
-});
-
-// In the After hook, add proper cleanup for the TradeApiClient
-After(async function(this: TestContext) {
-  // ... existing code ...
-  
-  // Clean up API clients if needed
-  if (this.tradeApiClient) {
-    this.logger.info('Cleaning up Trade API client resources');
-    // Any specific cleanup needed...
-  }
-  
-  // ... existing code ...
 });
