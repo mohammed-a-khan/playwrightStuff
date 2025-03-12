@@ -1,857 +1,568 @@
-// src/framework/base-api-client.ts
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-import { expect } from '@playwright/test';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
+// src/api/asset-api-client.ts
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import { AxiosResponse } from 'axios';
 import fs from 'fs';
-import https from 'https';
 import path from 'path';
-import { URL } from 'url';
 
 /**
- * Interface for API request options
+ * Asset response interface representing the API response structure
  */
-export interface ApiRequestOptions {
-  headers?: Record<string, string>;
-  params?: Record<string, any>;
-  data?: any;
-  timeout?: number;
-  validateStatus?: boolean;
-  withCredentials?: boolean;
-  pfxPath?: string;         // Path to PFX file
-  pfxPassphrase?: string;   // Passphrase for PFX file
-  useProxy?: boolean;       // Whether to use proxy settings
-  retryOptions?: {
-    maxAttempts?: number;
-    retryDelay?: number;
-    retryCondition?: (error: any) => boolean;
-  };
-  pollingOptions?: {        // Options for long-running requests with polling
-    enabled?: boolean;      // Whether to enable polling for this request
-    maxAttempts?: number;   // Maximum number of polling attempts
-    interval?: number;      // Interval between polling attempts in ms
-    timeoutPerAttempt?: number; // Timeout for each polling attempt
-    successCondition?: (response: AxiosResponse) => boolean; // Function to determine if response is complete
-    urlTransform?: (originalUrl: string) => string; // Function to transform URL for polling requests
-    preserveOriginalRequest?: boolean; // Whether to use the original request for polling or just GET the URL
-  };
+export interface AssetResponse {
+  assetLayouts: Array<any>;
+  systemError: string | null;
+  responseMessageId: string;
+  validationErrorMessage: string | null;
+  errorMessage: string | null;
 }
 
 /**
- * Base API client for all API interactions
- * Enhanced with improved long-running request support, certificate handling, and robust error handling
+ * Asset request interface for type safety
  */
-export class BaseApiClient {
-  readonly apiBaseUrl: string;
-  readonly defaultTimeout: number;
-  readonly logger: Logger;
-  readonly defaultHeaders: Record<string, string>;
-  readonly config: ConfigManager;
-  
-  // Certificate and proxy settings
-  readonly pfxCertPath?: string;
-  readonly pfxCertPassphrase?: string;
-  readonly proxyUrl?: string;
-  readonly defaultRetryOptions: { maxAttempts: number; retryDelay: number };
-  readonly defaultPollingOptions: {
-    enabled: boolean;
-    maxAttempts: number;
-    interval: number;
-    timeoutPerAttempt: number;
-    preserveOriginalRequest: boolean;
-  };
+export interface AssetRequest {
+  messageId: string;
+  dealId: number;
+  reportDate: string;
+}
+
+/**
+ * AssetApiClient for handling asset-related API operations
+ * Enhanced to support long-running requests with data loading from stored procedures
+ */
+export class AssetApiClient extends BaseApiClient {
+  private readonly requestsDir: string;
 
   /**
-   * Constructor for the BaseApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   * @param defaultHeaders - Default headers to include in all requests
+   * Constructor for AssetApiClient
    */
-  constructor(
-    apiBaseUrl?: string,
-    defaultHeaders: Record<string, string> = {}
-  ) {
-    this.config = ConfigManager.getInstance();
-    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
-    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
-    this.logger = new Logger(this.constructor.name);
-    this.defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...defaultHeaders
+  constructor() {
+    // Get environment-specific settings
+    const config = {
+      // The class will pick this up from ConfigManager
+      baseUrl: process.env.API_BASE_URL || 'https://khanapi-test.example.com/api/v1',
+      defaultHeaders: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
     };
     
-    // Initialize certificate settings from config
-    this.pfxCertPath = this.config.getString('PFX_CERT_PATH', '');
-    this.pfxCertPassphrase = this.config.getString('PFX_CERT_PASSPHRASE', '');
-    this.proxyUrl = this.config.getString('PROXY_URL', '');
+    // Pass custom settings to BaseApiClient
+    super(config.baseUrl, config.defaultHeaders);
     
-    this.defaultRetryOptions = {
-      maxAttempts: this.config.getNumber('API_RETRY_ATTEMPTS', 3),
-      retryDelay: this.config.getNumber('API_RETRY_DELAY', 1000)
-    };
+    // Setup directory for request templates
+    this.requestsDir = path.resolve(process.cwd(), 'requests');
     
-    // Initialize polling options for long-running requests
-    this.defaultPollingOptions = {
-      enabled: this.config.getBoolean('API_ENABLE_POLLING', false),
-      maxAttempts: this.config.getNumber('API_POLLING_MAX_ATTEMPTS', 10),
-      interval: this.config.getNumber('API_POLLING_INTERVAL', 2000),
-      timeoutPerAttempt: this.config.getNumber('API_POLLING_TIMEOUT_PER_ATTEMPT', 10000),
-      preserveOriginalRequest: this.config.getBoolean('API_PRESERVE_ORIGINAL_REQUEST', true)
-    };
+    // Override certificate and proxy settings specifically for Khan API
+    this.pfxCertPath = this.config.getString('KHAN_API_CERT_PATH', 
+      path.resolve(process.cwd(), 'certs', 'khanapicert.pfx'));
+    this.pfxCertPassphrase = this.config.getString('KHAN_API_CERT_PASSPHRASE', 'khanapipwd');
     
-    // Set up request/response interceptors for debugging
-    this.setupInterceptors();
+    this.logger.info('AssetApiClient initialized');
   }
 
   /**
-   * Set up axios interceptors for debugging request/response
-   * @private
+   * Load request body from JSON file
+   * @param filename - Name of the JSON file in requests directory
+   * @returns Object from JSON file
    */
-  private setupInterceptors(): void {
-    // Request interceptor
-    axios.interceptors.request.use(
-      (config) => {
-        if (this.config.getBoolean('API_DEBUG', false)) {
-          this.logger.debug(`Full request config: ${JSON.stringify({
-            url: config.url,
-            method: config.method,
-            headers: config.headers,
-            params: config.params,
-            data: config.data
-          }, null, 2)}`);
-        }
-        return config;
-      },
-      (error) => {
-        this.logger.error(`Request interceptor error: ${error.message}`);
-        return Promise.reject(error);
-      }
-    );
-    
-    // Response interceptor
-    axios.interceptors.response.use(
-      (response) => {
-        return response;
-      },
-      (error) => {
-        if (error.response) {
-          this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
-        } else if (error.request) {
-          this.logger.error(`No response received: ${error.message}`);
-        } else {
-          this.logger.error(`Request configuration error: ${error.message}`);
-        }
-        return Promise.reject(error);
-      }
-    );
-  }
-
-  /**
-   * Create request configuration with certificate and proxy settings
-   * @param options - API request options
-   * @returns Axios request configuration
-   */
-  protected createRequestConfig(options?: ApiRequestOptions): AxiosRequestConfig {
-    const config: AxiosRequestConfig = {
-      headers: { ...this.defaultHeaders, ...options?.headers },
-      params: options?.params || {},
-      timeout: options?.timeout || this.defaultTimeout,
-      validateStatus: options?.validateStatus !== false ? undefined : () => true,
-      withCredentials: options?.withCredentials
-    };
-    
-    // Add certificate if needed
-    const pfxPath = options?.pfxPath || this.pfxCertPath;
-    const passphrase = options?.pfxPassphrase || this.pfxCertPassphrase;
-    
-    if (pfxPath && fs.existsSync(pfxPath)) {
-      try {
-        const pfx = fs.readFileSync(pfxPath);
-        config.httpsAgent = new https.Agent({
-          pfx,
-          passphrase,
-          rejectUnauthorized: this.config.getBoolean('REJECT_UNAUTHORIZED', true)
-        });
-        this.logger.debug(`Using PFX certificate from: ${pfxPath}`);
-      } catch (error) {
-        this.logger.error(`Error loading PFX certificate: ${error.message}`);
-      }
-    }
-    
-    // Add proxy if needed
-    const useProxy = options?.useProxy !== false; // Use proxy by default if available
-    const proxyUrl = this.proxyUrl;
-    
-    if (useProxy && proxyUrl) {
-      try {
-        // Ensure proxy URL has a protocol
-        const formattedProxyUrl = proxyUrl.startsWith('http') 
-          ? proxyUrl 
-          : `http://${proxyUrl}`;
-        
-        const parsedUrl = new URL(formattedProxyUrl);
-        
-        config.proxy = {
-          host: parsedUrl.hostname,
-          port: parseInt(parsedUrl.port || '80'),
-          protocol: parsedUrl.protocol.replace(':', '')
-        };
-        
-        this.logger.debug(`Using proxy: ${formattedProxyUrl}`);
-      } catch (error) {
-        this.logger.error(`Invalid proxy URL: ${proxyUrl}`);
-      }
-    }
-    
-    return config;
-  }
-
-  /**
-   * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
-   * @param endpoint - API endpoint
-   * @returns Full URL string
-   */
-  protected normalizeUrl(endpoint: string): string {
-    // Ensure baseUrl has a protocol
-    const baseUrl = this.apiBaseUrl.startsWith('http') 
-      ? this.apiBaseUrl 
-      : `https://${this.apiBaseUrl}`;
-      
-    // If endpoint is already a full URL, return it
-    if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) {
-      return endpoint;
-    }
-      
-    // Ensure endpoint starts with a slash if not empty and doesn't already have one
-    if (endpoint && !endpoint.startsWith('/')) {
-      endpoint = '/' + endpoint;
-    }
-    
+  private loadRequestFromFile<T>(filename: string): T {
     try {
-      return new URL(endpoint, baseUrl).toString();
+      const filePath = path.join(this.requestsDir, filename);
+      
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Request file not found: ${filePath}`);
+      }
+      
+      const fileContent = fs.readFileSync(filePath, 'utf8');
+      return JSON.parse(fileContent) as T;
     } catch (error) {
-      this.logger.error(`Error creating URL from ${baseUrl} and ${endpoint}: ${error.message}`);
-      throw new Error(`Invalid URL: Cannot combine ${baseUrl} and ${endpoint}`);
+      if (error instanceof SyntaxError) {
+        this.logger.error(`Invalid JSON in request file: ${filename}`);
+      }
+      throw error;
     }
   }
-
+  
   /**
-   * Make a GET request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Asset-specific success condition for determining if a response is complete
+   * This is critical for long-running requests with polling
+   * @param response - Asset API response to check
+   * @returns boolean - Whether the response is complete
    */
-  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making GET request to: ${url}`);
-    
-    const requestConfig = this.createRequestConfig(options);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return this.handleLongRunningRequest<T>(
-        'get',
-        url,
-        undefined,
-        requestConfig,
-        options?.pollingOptions
-      );
+  private assetResponseComplete(response: AxiosResponse<AssetResponse>): boolean {
+    // Check if response data exists
+    if (!response.data) {
+      this.logger.debug('Asset success check: Response data is missing');
+      return false;
     }
     
-    return this.retryRequest<T>(
-      () => this.executeRequest('get', url, undefined, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Make a POST request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making POST request to: ${url}`);
-    
-    const requestConfig = this.createRequestConfig(options);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return this.handleLongRunningRequest<T>(
-        'post',
-        url,
-        data,
-        requestConfig,
-        options?.pollingOptions
-      );
+    // Check if assetLayouts property exists (must exist, even if empty)
+    if (!response.data.hasOwnProperty('assetLayouts')) {
+      this.logger.debug('Asset success check: Missing assetLayouts property');
+      return false;
     }
     
-    return this.retryRequest<T>(
-      () => this.executeRequest('post', url, data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Make a PUT request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making PUT request to: ${url}`);
-    
-    const requestConfig = this.createRequestConfig(options);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return this.handleLongRunningRequest<T>(
-        'put',
-        url,
-        data,
-        requestConfig,
-        options?.pollingOptions
-      );
+    // If assetLayouts exists and has items, response is complete
+    if (Array.isArray(response.data.assetLayouts) && response.data.assetLayouts.length > 0) {
+      this.logger.debug(`Asset success check: Found ${response.data.assetLayouts.length} assets`);
+      return true;
     }
     
-    return this.retryRequest<T>(
-      () => this.executeRequest('put', url, data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Make a PATCH request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making PATCH request to: ${url}`);
-    
-    const requestConfig = this.createRequestConfig(options);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return this.handleLongRunningRequest<T>(
-        'patch',
-        url,
-        data,
-        requestConfig,
-        options?.pollingOptions
-      );
-    }
-    
-    return this.retryRequest<T>(
-      () => this.executeRequest('patch', url, data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Make a DELETE request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making DELETE request to: ${url}`);
-    
-    const requestConfig = this.createRequestConfig(options);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return this.handleLongRunningRequest<T>(
-        'delete',
-        url,
-        options?.data,
-        requestConfig,
-        options?.pollingOptions
-      );
-    }
-    
-    return this.retryRequest<T>(
-      () => this.executeRequest('delete', url, options?.data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Execute a request with timing metrics
-   * @param method - HTTP method
-   * @param url - Request URL
-   * @param data - Request data
-   * @param config - Axios request config
-   * @returns Promise<AxiosResponse> - API response
-   * @private
-   */
-  private async executeRequest<T = any>(
-    method: 'get' | 'post' | 'put' | 'patch' | 'delete',
-    url: string,
-    data?: any,
-    config?: AxiosRequestConfig
-  ): Promise<AxiosResponse<T>> {
-    const startTime = Date.now();
-    
-    try {
-      let response;
-      
-      switch (method) {
-        case 'get':
-          response = await axios.get<T>(url, config);
-          break;
-        case 'post':
-          response = await axios.post<T>(url, data, config);
-          break;
-        case 'put':
-          response = await axios.put<T>(url, data, config);
-          break;
-        case 'patch':
-          response = await axios.patch<T>(url, data, config);
-          break;
-        case 'delete':
-          response = await axios.delete<T>(url, config);
-          break;
+    // If assetLayouts is empty but there are error messages, the response is also complete
+    if (Array.isArray(response.data.assetLayouts) && response.data.assetLayouts.length === 0) {
+      if (response.data.systemError || response.data.errorMessage || response.data.validationErrorMessage) {
+        this.logger.debug('Asset success check: Empty assetLayouts but error messages found');
+        return true;
       }
       
-      // Calculate and log duration
-      const duration = Date.now() - startTime;
-      this.logger.debug(`Response time: ${duration}ms`);
+      this.logger.debug('Asset success check: Empty assetLayouts with no error messages');
+      return false;
+    }
+    
+    // Handle the case where assetLayouts is not an array (unexpected but possible)
+    this.logger.debug('Asset success check: Unexpected response structure');
+    return false;
+  }
+
+  /**
+   * Get assets for a deal
+   * @param messageId - Message ID for the request
+   * @param dealId - Deal ID to get assets for
+   * @param reportDate - Report date in YYYY-MM-DD format
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response with assets
+   */
+  async getAssets(
+    messageId: string,
+    dealId: number,
+    reportDate: string,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<AssetResponse>> {
+    // Validate input
+    if (!messageId) {
+      throw new Error('Message ID is required');
+    }
+    
+    if (!dealId) {
+      throw new Error('Deal ID is required');
+    }
+    
+    if (!reportDate) {
+      throw new Error('Report date is required');
+    }
+    
+    // Validate date format (YYYY-MM-DD)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(reportDate)) {
+      throw new Error('Report date must be in YYYY-MM-DD format');
+    }
+    
+    this.logger.info(`Preparing asset request for deal ID: ${dealId}, report date: ${reportDate}`);
+    
+    // Create request body
+    const requestBody: AssetRequest = {
+      messageId,
+      dealId,
+      reportDate
+    };
+    
+    // Configure polling for long-running requests
+    // The asset API involves stored procedures that can take time to complete
+    const pollingEnabled = this.config.getBoolean('ASSET_API_ENABLE_POLLING', true);
+    const pollingMaxAttempts = this.config.getNumber('ASSET_API_POLLING_MAX_ATTEMPTS', 15);
+    const pollingInterval = this.config.getNumber('ASSET_API_POLLING_INTERVAL', 8000);
+    const timeoutPerAttempt = this.config.getNumber('ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT', 20000);
+    
+    // Set up request options with certificate and headers
+    const requestOptions: ApiRequestOptions = {
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      withCredentials: true,
+      pfxPath: this.pfxCertPath,
+      pfxPassphrase: this.pfxCertPassphrase,
+      useProxy: true,
+      // Default retry options for network errors
+      retryOptions: {
+        maxAttempts: 3,
+        retryDelay: 1000
+      },
+      // Polling options for long-running requests with asset-specific settings
+      pollingOptions: {
+        enabled: pollingEnabled,
+        maxAttempts: pollingMaxAttempts,
+        interval: pollingInterval,
+        timeoutPerAttempt: timeoutPerAttempt,
+        successCondition: this.assetResponseComplete.bind(this),
+        preserveOriginalRequest: true  // Important: Use same request method/body for polling
+      },
+      ...options // Allow overriding options
+    };
+    
+    this.logger.debug(`Asset request configured with polling: ${pollingEnabled}, maxAttempts: ${pollingMaxAttempts}`);
+    
+    try {
+      // Make the request
+      const response = await this.post<AssetResponse>('/assets', requestBody, requestOptions);
+      this.logger.info(`Asset request completed successfully for deal ID: ${dealId}`);
+      return response;
+    } catch (error) {
+      this.logger.error(`Asset request failed for deal ID ${dealId}: ${error.message}`);
       
-      // Store duration for assertion use
-      (response as any)._duration = duration;
+      // Add more diagnostic information to the error
+      if (error.response && error.response.data) {
+        this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+      }
       
-      // Save the original request info for potential polling
-      (response as any)._requestInfo = {
-        method,
-        url,
-        data,
-        config
+      throw error;
+    }
+  }
+
+  /**
+   * Get assets using a request template
+   * @param templateName - Name of the request template file (without .json extension)
+   * @param overrides - Optional overrides for the template values
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response with assets
+   */
+  async getAssetsFromTemplate(
+    templateName: string,
+    overrides?: Partial<AssetRequest>,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<AssetResponse>> {
+    try {
+      // Load request template
+      const template = this.loadRequestFromFile<AssetRequest>(`${templateName}.json`);
+      
+      // Apply overrides
+      const requestBody: AssetRequest = {
+        ...template,
+        ...overrides
       };
       
-      this.logResponse(response);
-      return response;
-    } catch (error) {
-      // Add request duration to error for potential retry logic
-      const duration = Date.now() - startTime;
-      (error as any)._duration = duration;
+      this.logger.info(`Using template '${templateName}' for asset request with deal ID: ${requestBody.dealId}`);
       
-      this.logError(error);
-      throw error;
-    }
-  }
-
-  /**
-   * Handle long-running request with enhanced polling
-   * Suitable for requests where the backend needs time to process before returning complete data
-   * @param method - HTTP method for initial request
-   * @param url - Request URL
-   * @param data - Request data
-   * @param config - Axios request config
-   * @param options - Polling options
-   * @returns Promise<AxiosResponse> - Final API response
-   * @private
-   */
-  private async handleLongRunningRequest<T = any>(
-    method: 'get' | 'post' | 'put' | 'patch' | 'delete',
-    url: string,
-    data?: any,
-    config?: AxiosRequestConfig,
-    options?: {
-      enabled?: boolean;
-      maxAttempts?: number;
-      interval?: number;
-      timeoutPerAttempt?: number;
-      successCondition?: (response: AxiosResponse<T>) => boolean;
-      urlTransform?: (originalUrl: string) => string;
-      preserveOriginalRequest?: boolean;
-    }
-  ): Promise<AxiosResponse<T>> {
-    // Merge options with defaults
-    const pollOptions = {
-      maxAttempts: options?.maxAttempts || this.defaultPollingOptions.maxAttempts,
-      interval: options?.interval || this.defaultPollingOptions.interval,
-      timeoutPerAttempt: options?.timeoutPerAttempt || this.defaultPollingOptions.timeoutPerAttempt,
-      preserveOriginalRequest: options?.preserveOriginalRequest !== undefined ? 
-        options.preserveOriginalRequest : this.defaultPollingOptions.preserveOriginalRequest,
-      // Default success condition: check if response data is not empty
-      successCondition: options?.successCondition || ((response: AxiosResponse<T>) => {
-        // Check if the response has data
-        if (!response.data) {
-          return false;
-        }
-        
-        // For array responses, check if there are elements
-        if (Array.isArray(response.data)) {
-          return response.data.length > 0;
-        }
-        
-        // For object responses with specific fields, check if required fields have data
-        if (typeof response.data === 'object') {
-          // A general check for common response patterns
-          // You may need to customize this based on your API's response structure
-          const dataObj = response.data as any;
-          
-          // Check for common patterns in response objects
-          if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-            return dataObj.assetLayouts.length > 0;
-          }
-          
-          if (dataObj.items && Array.isArray(dataObj.items)) {
-            return dataObj.items.length > 0;
-          }
-          
-          if (dataObj.data && Array.isArray(dataObj.data)) {
-            return dataObj.data.length > 0;
-          }
-          
-          // Special case for asset responses which might have error messages
-          if (dataObj.assetLayouts !== undefined) {
-            if (Array.isArray(dataObj.assetLayouts) && dataObj.assetLayouts.length > 0) {
-              return true;
-            }
-            // If assetLayouts is empty but there's an error message, consider the response complete
-            if (dataObj.systemError || dataObj.errorMessage || dataObj.validationErrorMessage) {
-              return true;
-            }
-            // If no errors and no layouts, the response is incomplete
-            return false;
-          }
-          
-          // Check if the object has any properties (not empty)
-          return Object.keys(dataObj).length > 0;
-        }
-        
-        // For primitive types, check if it's not null, undefined, or empty string
-        return response.data !== null && response.data !== undefined && response.data !== '';
-      }),
-      // Allow URL transformation for polling requests
-      urlTransform: options?.urlTransform || ((url: string) => url)
-    };
-    
-    // If there's a URL transform function, apply it to get the polling URL
-    const pollingUrl = pollOptions.urlTransform(url);
-    
-    // Make the initial request
-    let response: AxiosResponse<T>;
-    try {
-      this.logger.info(`Making initial request for long-running operation to: ${url}`);
-      response = await this.executeRequest<T>(method, url, data, config);
-    } catch (error) {
-      this.logger.error(`Initial request failed: ${error.message}`);
-      throw error;
-    }
-    
-    // Check if we need to poll for completion
-    if (pollOptions.successCondition(response)) {
-      this.logger.info(`Initial response is complete, no polling needed`);
-      return response;
-    }
-    
-    // Start polling for completion
-    this.logger.info(`Initial response incomplete, starting polling...`);
-    
-    // Capture initial response for diagnostic purposes
-    const initialResponseData = JSON.stringify(response.data).substring(0, 200) + '...';
-    this.logger.debug(`Initial response data (truncated): ${initialResponseData}`);
-    
-    // Save the original request for future reference
-    const originalRequestInfo = {
-      method,
-      url,
-      data,
-      config
-    };
-    
-    for (let attempt = 1; attempt <= pollOptions.maxAttempts; attempt++) {
-      // Wait for the polling interval
-      this.logger.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
-      await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
-      
-      try {
-        // Make another request with a shorter timeout
-        let pollingConfig = { ...config, timeout: pollOptions.timeoutPerAttempt };
-        
-        // Create a new request
-        this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts}`);
-        
-        // Decide whether to use the original request method/data or switch to GET
-        if (pollOptions.preserveOriginalRequest) {
-          // Use the same method, URL, and data as the original request
-          response = await this.executeRequest<T>(method, pollingUrl, data, pollingConfig);
-        } else {
-          // Use GET method for polling, regardless of the original method
-          response = await this.executeRequest<T>('get', pollingUrl, undefined, pollingConfig);
-        }
-        
-        // Check if the response is now complete
-        if (pollOptions.successCondition(response)) {
-          this.logger.info(`Polling successful after ${attempt} attempts`);
-          
-          // Store information about the polling that occurred
-          (response as any)._pollingInfo = {
-            attempts: attempt,
-            totalTime: Date.now() - (response as any)._requestInfo.startTime,
-            originalRequest: originalRequestInfo
-          };
-          
-          return response;
-        }
-        
-        // Log detailed diagnostic information for debugging
-        const responseData = JSON.stringify(response.data).substring(0, 200) + '...';
-        this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete. Response (truncated): ${responseData}`);
-      } catch (error) {
-        this.logger.warn(`Polling attempt ${attempt} failed: ${error.message}`);
-        
-        // For the last attempt, rethrow the error
-        if (attempt === pollOptions.maxAttempts) {
-          throw error;
-        }
-      }
-    }
-    
-    // If we get here, we've exceeded the maximum polling attempts
-    this.logger.error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
-    
-    // Save diagnostic information for the last response
-    const diagnosticInfo = {
-      originalRequest: {
-        method,
-        url,
-        dataSize: data ? JSON.stringify(data).length : 0
-      },
-      finalResponse: {
-        status: response.status,
-        dataSnippet: JSON.stringify(response.data).substring(0, 500) + '...'
-      },
-      pollingConfig: {
-        attempts: pollOptions.maxAttempts,
-        interval: pollOptions.interval,
-        url: pollingUrl,
-        preserveOriginalRequest: pollOptions.preserveOriginalRequest
-      }
-    };
-    
-    this.logger.debug(`Diagnostic information: ${JSON.stringify(diagnosticInfo, null, 2)}`);
-    
-    throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts. The response data is not complete.`);
-  }
-
-  /**
-   * Retry a request with backoff strategy
-   * @param requestFn - Function to retry
-   * @param options - Retry options
-   * @returns Promise<AxiosResponse> - API response
-   * @private
-   */
-  private async retryRequest<T = any>(
-    requestFn: () => Promise<AxiosResponse<T>>,
-    options?: {
-      maxAttempts?: number;
-      retryDelay?: number;
-      retryCondition?: (error: any) => boolean;
-    }
-  ): Promise<AxiosResponse<T>> {
-    const maxAttempts = options?.maxAttempts || this.defaultRetryOptions.maxAttempts;
-    const retryDelay = options?.retryDelay || this.defaultRetryOptions.retryDelay;
-    
-    // Default retry condition: retry on network errors or 5xx errors
-    const retryCondition = options?.retryCondition || ((error: any) => {
-      return (
-        error.code === 'ECONNRESET' ||
-        error.code === 'ECONNABORTED' ||
-        error.code === 'ETIMEDOUT' ||
-        (error.response && error.response.status >= 500 && error.response.status < 600)
+      // Call the main method with the combined data
+      return await this.getAssets(
+        requestBody.messageId,
+        requestBody.dealId,
+        requestBody.reportDate,
+        options
       );
-    });
-    
-    let lastError: any;
-    
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        this.logger.debug(`Request attempt ${attempt}/${maxAttempts}`);
-        return await requestFn();
-      } catch (error) {
-        lastError = error;
-        
-        // Log the error with attempt number
-        this.logger.debug(`Attempt ${attempt} failed: ${error.message}`);
-        
-        // Check if we should retry
-        if (attempt < maxAttempts && retryCondition(error)) {
-          // Calculate backoff delay with jitter to avoid thundering herd
-          const jitter = Math.random() * 0.3 + 0.85; // Random factor between 0.85 and 1.15
-          const delay = Math.floor(retryDelay * Math.pow(1.5, attempt - 1) * jitter);
-          
-          this.logger.info(`Retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        } else {
-          break;
-        }
-      }
-    }
-    
-    throw lastError;
-  }
-
-  /**
-   * Assert API response status code
-   * @param response - Axios response
-   * @param expectedStatus - Expected status code
-   */
-  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
-    this.logger.debug(`Asserting status code: ${expectedStatus}`);
-    expect(response.status).toBe(expectedStatus);
-  }
-
-  /**
-   * Assert API response contains specific data
-   * @param response - Axios response
-   * @param expectedData - Data to check for
-   */
-  assertResponseData(response: AxiosResponse, expectedData: any): void {
-    this.logger.debug(`Asserting response data`);
-    expect(response.data).toMatchObject(expectedData);
-  }
-
-  /**
-   * Assert response has data
-   * Specifically useful for checking that a response contains data after a long-running request
-   * @param response - Axios response
-   */
-  assertHasData(response: AxiosResponse): void {
-    this.logger.debug(`Asserting response has data`);
-    expect(response.data).toBeDefined();
-    
-    if (Array.isArray(response.data)) {
-      expect(response.data.length).toBeGreaterThan(0);
-    } else if (typeof response.data === 'object') {
-      const dataObj = response.data as any;
-      
-      // Check for common patterns in response objects
-      if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-        expect(dataObj.assetLayouts.length).toBeGreaterThan(0);
-      } else if (dataObj.items && Array.isArray(dataObj.items)) {
-        expect(dataObj.items.length).toBeGreaterThan(0);
-      } else if (dataObj.data && Array.isArray(dataObj.data)) {
-        expect(dataObj.data.length).toBeGreaterThan(0);
-      } else {
-        expect(Object.keys(dataObj).length).toBeGreaterThan(0);
-      }
-    } else {
-      expect(response.data).not.toBeNull();
-      expect(response.data).not.toEqual('');
-    }
-  }
-
-  /**
-   * Assert response header has a specific value
-   * @param response - Axios response
-   * @param headerName - Header name
-   * @param expectedValue - Expected header value
-   */
-  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
-    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
-    const headerValue = response.headers[headerName.toLowerCase()];
-    expect(headerValue).toBe(expectedValue);
-  }
-
-  /**
-   * Assert response time is within acceptable limits
-   * @param response - Axios response
-   * @param maxTime - Maximum acceptable response time in ms
-   */
-  assertResponseTime(response: AxiosResponse, maxTime: number): void {
-    const duration = (response as any)._duration;
-    if (duration !== undefined) {
-      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
-      expect(duration).toBeLessThanOrEqual(maxTime);
-    } else {
-      this.logger.warn('Response time metrics not available');
-    }
-  }
-
-  /**
-   * Get authentication token (to be implemented by derived classes)
-   * @returns Promise<string> - Authentication token
-   */
-  async getAuthToken(): Promise<string> {
-    throw new Error('getAuthToken() method must be implemented by derived API client classes');
-  }
-
-  /**
-   * Create auth header with token
-   * @param token - Authentication token
-   * @returns Record<string, string> - Headers with authentication
-   */
-  createAuthHeader(token: string): Record<string, string> {
-    return { 'Authorization': `Bearer ${token}` };
-  }
-
-  /**
-   * Log response details
-   * @private
-   * @param response - Axios response
-   */
-  private logResponse(response: AxiosResponse): void {
-    this.logger.debug(`Response status: ${response.status}`);
-    
-    if (this.config.getBoolean('API_DEBUG_HEADERS', false)) {
-      this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
-    }
-    
-    // Log response body in a safe way (truncate if too large)
-    try {
-      const responseBody = JSON.stringify(response.data);
-      const maxBodyLength = this.config.getNumber('API_DEBUG_BODY_LENGTH', 1000);
-      
-      if (responseBody.length > maxBodyLength) {
-        this.logger.debug(`Response body (truncated): ${responseBody.substring(0, maxBodyLength)}...`);
-      } else {
-        this.logger.debug(`Response body: ${responseBody}`);
-      }
     } catch (error) {
-      this.logger.debug('Response body: [Could not stringify response data]');
+      this.logger.error(`Error using asset request template '${templateName}': ${error.message}`);
+      throw error;
     }
   }
-
+  
   /**
-   * Log error details
-   * @private
-   * @param error - Axios error
+   * Validate an asset response to ensure it contains all required data
+   * This is useful for testing to confirm that the long-running request completed successfully
+   * @param response - Asset response to validate
+   * @throws Error if the response is incomplete or invalid
    */
-  private logError(error: any): void {
-    if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
-      this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
-      
-      if (this.config.getBoolean('API_DEBUG_HEADERS', false)) {
-        this.logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
-      }
-    } else if (error.request) {
-      // The request was made but no response was received
-      this.logger.error(`Request error (no response): ${error.message}`);
-      
-      if (error.code) {
-        this.logger.debug(`Error code: ${error.code}`);
-      }
-    } else {
-      // Something happened in setting up the request that triggered an Error
-      this.logger.error(`Request configuration error: ${error.message}`);
+  validateAssetResponse(response: AxiosResponse<AssetResponse>): void {
+    this.logger.debug('Validating asset response...');
+    
+    // Check if response data exists
+    if (!response.data) {
+      throw new Error('Response data is missing');
     }
     
-    if (error.config) {
-      this.logger.debug(`Failed request URL: ${error.config.url}`);
-      this.logger.debug(`Failed request method: ${error.config.method}`);
+    // Check if assetLayouts exists (even if empty)
+    if (!response.data.hasOwnProperty('assetLayouts')) {
+      throw new Error('Response is missing assetLayouts property');
     }
+    
+    // If assetLayouts is empty, check if there's an error message explaining why
+    if (Array.isArray(response.data.assetLayouts) && response.data.assetLayouts.length === 0) {
+      // If there's no error message, there should be assets
+      if (!response.data.systemError && !response.data.errorMessage && !response.data.validationErrorMessage) {
+        throw new Error('Response contains empty assetLayouts with no error message');
+      }
+    }
+    
+    // Validate responseMessageId exists
+    if (!response.data.responseMessageId) {
+      throw new Error('Response is missing responseMessageId');
+    }
+    
+    this.logger.info('Asset response validation successful');
   }
+}
+
+// src/step-definitions/api-steps/asset-api-steps.ts
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { AssetApiClient } from '../../api/asset-api-client';
+import { TestContext } from '../../support/test-context';
+import fs from 'fs';
+import path from 'path';
+
+/**
+ * Step definitions for Asset API testing using BDD style
+ * Enhanced with improved error handling and diagnostics for long-running requests
+ */
+
+// Client initialization
+Given('I have initialized the Khan Asset API client', async function(this: TestContext) {
+  this.assetApiClient = new AssetApiClient();
+  this.logger.info('Initialized Khan Asset API client');
+});
+
+// Template-based requests
+When('I request assets using the {string} template', async function(this: TestContext, templateName: string) {
+  expect(this.assetApiClient).toBeDefined();
+  
+  try {
+    this.startTime = Date.now(); // Track request start time
+    this.logger.info(`Starting asset request with template: ${templateName}`);
+    
+    // Create directory for snapshots if it doesn't exist
+    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
+    if (!fs.existsSync(snapshotsDir)) {
+      fs.mkdirSync(snapshotsDir, { recursive: true });
+    }
+    
+    // Make the API request with enhanced polling
+    this.response = await this.assetApiClient.getAssetsFromTemplate(templateName);
+    
+    const duration = Date.now() - this.startTime;
+    this.logger.info(`Retrieved assets using template: ${templateName} in ${duration}ms`);
+    
+    // Save the successful response for debugging
+    const filePath = path.join(snapshotsDir, `successful-response-${Date.now()}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(this.response.data, null, 2));
+    this.logger.debug(`Saved successful response to: ${filePath}`);
+  } catch (error) {
+    this.logger.error(`Failed to retrieve assets: ${error.message}`);
+    
+    // Save error diagnostics
+    const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
+    if (!fs.existsSync(snapshotsDir)) {
+      fs.mkdirSync(snapshotsDir, { recursive: true });
+    }
+    
+    const errorFilePath = path.join(snapshotsDir, `error-info-${Date.now()}.json`);
+    fs.writeFileSync(errorFilePath, JSON.stringify({
+      error: {
+        message: error.message,
+        stack: error.stack
+      },
+      response: error.response ? {
+        status: error.response.status,
+        data: error.response.data
+      } : null,
+      requestInfo: {
+        template: templateName,
+        startTime: this.startTime,
+        duration: Date.now() - this.startTime
+      }
+    }, null, 2));
+    this.logger.error(`Error diagnostics saved to: ${errorFilePath}`);
+    
+    throw error;
+  }
+});
+
+// Dynamic requests
+When('I request assets with message ID {string}, deal ID {int}, and report date {string}', 
+  async function(this: TestContext, messageId: string, dealId: number, reportDate: string) {
+    expect(this.assetApiClient).toBeDefined();
+    
+    try {
+      this.startTime = Date.now(); // Track request start time
+      this.logger.info(`Starting asset request for deal ID: ${dealId}`);
+      
+      this.response = await this.assetApiClient.getAssets(messageId, dealId, reportDate);
+      
+      const duration = Date.now() - this.startTime;
+      this.logger.info(`Retrieved assets for deal ID: ${dealId} in ${duration}ms`);
+    } catch (error) {
+      this.logger.error(`Failed to retrieve assets: ${error.message}`);
+      throw error;
+    }
+});
+
+// Request with overrides
+When('I request assets with the following details:', async function(this: TestContext, dataTable: any) {
+  expect(this.assetApiClient).toBeDefined();
+  
+  const requestData = dataTable.rowsHash();
+  
+  // Convert string to number for dealId
+  if (requestData.dealId) {
+    requestData.dealId = parseInt(requestData.dealId, 10);
+  }
+  
+  try {
+    this.startTime = Date.now(); // Track request start time
+    this.logger.info(`Starting asset request for deal ID: ${requestData.dealId}`);
+    
+    this.response = await this.assetApiClient.getAssets(
+      requestData.messageId,
+      requestData.dealId,
+      requestData.reportDate
+    );
+    
+    const duration = Date.now() - this.startTime;
+    this.logger.info(`Retrieved assets for deal ID: ${requestData.dealId} in ${duration}ms`);
+  } catch (error) {
+    this.logger.error(`Failed to retrieve assets: ${error.message}`);
+    throw error;
+  }
+});
+
+// Response validation steps
+Then('the response should contain asset layouts', async function(this: TestContext) {
+  try {
+    // Validate that the response data exists
+    expect(this.response).toBeDefined();
+    expect(this.response.data).toBeDefined();
+    
+    // Validate that assetLayouts exists and is an array
+    expect(this.response.data.assetLayouts).toBeDefined();
+    expect(Array.isArray(this.response.data.assetLayouts)).toBeTruthy();
+    
+    // Validate that assetLayouts is not empty
+    expect(this.response.data.assetLayouts.length).toBeGreaterThan(0);
+    
+    this.logger.info(`Response contains ${this.response.data.assetLayouts.length} asset layouts`);
+  } catch (error) {
+    // Take a snapshot of the response for debugging
+    if (this.response && this.response.data) {
+      const snapshotsDir = path.resolve(process.cwd(), 'reports', 'snapshots');
+      if (!fs.existsSync(snapshotsDir)) {
+        fs.mkdirSync(snapshotsDir, { recursive: true });
+      }
+      
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filePath = path.join(snapshotsDir, `failed-assertion-${timestamp}.json`);
+      fs.writeFileSync(filePath, JSON.stringify({
+        error: error.message,
+        response: this.response.data,
+        startTime: this.startTime,
+        duration: this.startTime ? Date.now() - this.startTime : null
+      }, null, 2));
+      
+      this.logger.error(`Response validation failed. Snapshot saved to: ${filePath}`);
+    }
+    
+    throw error;
+  }
+});
+
+Then('the response should have no system errors', async function(this: TestContext) {
+  expect(this.response.data.systemError).toBeNull();
+  expect(this.response.data.errorMessage).toBeNull();
+  expect(this.response.data.validationErrorMessage).toBeNull();
+  this.logger.info('Verified no errors in response');
+});
+
+Then('the response message ID should be {string}', async function(this: TestContext, expectedId: string) {
+  expect(this.response.data.responseMessageId).toBe(expectedId);
+  this.logger.info(`Verified response message ID: ${expectedId}`);
+});
+
+Then('the response should contain at least {int} asset layouts', async function(this: TestContext, count: number) {
+  expect(this.response.data.assetLayouts.length).toBeGreaterThanOrEqual(count);
+  this.logger.info(`Verified response contains at least ${count} asset layouts`);
+});
+
+Then('the response time should be acceptable', async function(this: TestContext) {
+  // Use a higher timeout for long-running requests that involve polling
+  const maxResponseTime = this.config.getNumber('MAX_RESPONSE_TIME', 120000);
+  
+  // Calculate the total response time from the start time
+  if (this.startTime) {
+    const totalDuration = Date.now() - this.startTime;
+    this.logger.info(`Total response time: ${totalDuration}ms (max allowed: ${maxResponseTime}ms)`);
+    expect(totalDuration).toBeLessThanOrEqual(maxResponseTime);
+  } else {
+    // If no start time was captured, use the response's internal duration
+    this.assetApiClient.assertResponseTime(this.response, maxResponseTime);
+  }
+  
+  this.logger.info(`Verified response time is within acceptable limits`);
+});
+
+// Advanced validation and verification steps
+Then('the response passes complete asset validation', async function(this: TestContext) {
+  try {
+    this.assetApiClient.validateAssetResponse(this.response);
+    this.logger.info('Asset response validation passed');
+  } catch (error) {
+    this.logger.error(`Asset response validation failed: ${error.message}`);
+    throw error;
+  }
+});
+
+// Save response for later analysis
+Then('I save the response to file {string}', async function(this: TestContext, filename: string) {
+  const responsesDir = path.resolve(process.cwd(), 'responses');
+  
+  // Create directory if it doesn't exist
+  if (!fs.existsSync(responsesDir)) {
+    fs.mkdirSync(responsesDir, { recursive: true });
+  }
+  
+  const filePath = path.join(responsesDir, filename);
+  fs.writeFileSync(filePath, JSON.stringify({
+    data: this.response.data,
+    metadata: {
+      duration: this.startTime ? Date.now() - this.startTime : null,
+      status: this.response.status,
+      statusText: this.response.statusText,
+      headers: this.response.headers
+    }
+  }, null, 2));
+  
+  this.logger.info(`Saved response with metadata to file: ${filePath}`);
+});
+
+# .env.sit
+# Environment-specific configuration for SIT environment
+# Optimized for long-running asset requests
+
+# Base URLs
+API_BASE_URL=https://khanapi-sit.indias.net/api/v1
+BASE_URL=https://khanapi-sit.indias.net
+
+# Khan API Certificate settings
+KHAN_API_CERT_PATH=./certs/khanapicert.pfx
+KHAN_API_CERT_PASSPHRASE=khanapipwd
+
+# Generic certificate fallback (if specific ones not provided)
+PFX_CERT_PATH=./certs/khanapicert.pfx
+PFX_CERT_PASSPHRASE=khanapipwd
+
+# Proxy settings
+PROXY_URL=http://167.221.23.8:8080
+
+# Timeouts and retry settings
+DEFAULT_TIMEOUT=120000
+API_RETRY_ATTEMPTS=3
+API_RETRY_DELAY=2000
+MAX_RESPONSE_TIME=300000  # Increased to 5 minutes for long-running requests
+
+# Global polling configuration for long-running requests
+API_ENABLE_POLLING=true
+API_POLLING_MAX_ATTEMPTS=20  # Increased from 12 to 20
+API_POLLING_INTERVAL=10000   # Increased from 5s to 10s
+API_POLLING_TIMEOUT_PER_ATTEMPT=15000
+API_PRESERVE_ORIGINAL_REQUEST=true
+
+# Asset API specific settings - these override the global settings
+ASSET_API_ENABLE_POLLING=true
+ASSET_API_POLLING_MAX_ATTEMPTS=30     # Significantly increased for asset API
+ASSET_API_POLLING_INTERVAL=6000       # Reduced slightly to poll more frequently
+ASSET_API_POLLING_TIMEOUT_PER_ATTEMPT=20000
+ASSET_API_MAX_RESPONSE_TIME=300000    # 5 minutes total max time
+
+# Debug settings
+API_DEBUG=true
+API_DEBUG_HEADERS=true
+API_DEBUG_BODY_LENGTH=2000
+REJECT_UNAUTHORIZED=true
+
+# Test data settings
+TEST_DATA_CLEANUP=true
+
