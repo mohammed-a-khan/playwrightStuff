@@ -1,155 +1,164 @@
-// src/api/enhanced-api-client.ts
+// src/api/trade-api-client.ts
 import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import axios, { AxiosResponse } from 'axios';
 import * as fs from 'fs';
 import * as https from 'https';
 
 /**
- * Enhanced API client with support for cookies, certificates, and proxy
+ * Interface for Certificate Options
  */
-export class EnhancedApiClient extends BaseApiClient {
-  private pfxPath?: string;
-  private pfxPassphrase?: string;
+interface CertificateOptions {
+  path: string;
+  passphrase: string;
+}
+
+/**
+ * Trade API client with session management
+ */
+export class TradeApiClient extends BaseApiClient {
+  private pfxOptions?: CertificateOptions;
   private proxyUrl?: string;
+  private sessionCookie?: string;
 
   /**
-   * Constructor for the EnhancedApiClient
+   * Constructor for the TradeApiClient
    * @param apiBaseUrl - Base URL for API requests
    * @param pfxOptions - PFX certificate options (optional)
    * @param proxyUrl - Proxy URL (optional)
    */
   constructor(
-    apiBaseUrl?: string,
-    pfxOptions?: { path: string; passphrase: string },
+    apiBaseUrl: string,
+    pfxOptions?: CertificateOptions,
     proxyUrl?: string
   ) {
     super(apiBaseUrl);
-    
-    if (pfxOptions) {
-      this.pfxPath = pfxOptions.path;
-      this.pfxPassphrase = pfxOptions.passphrase;
-    }
-    
+    this.pfxOptions = pfxOptions;
     this.proxyUrl = proxyUrl;
   }
 
   /**
-   * Set cookie for API requests
-   * @param cookieValue - Cookie value (e.g., "JSESSIONID=abc123; other=value")
+   * Initialize a session by making a request to the server to get JSESSIONID
+   * @returns Promise<string> - The session cookie
    */
-  setCookie(cookieValue: string): void {
-    // Update defaultHeaders with the cookie
-    this.defaultHeaders['Cookie'] = cookieValue;
-    this.logger.info(`Set cookie header: ${cookieValue}`);
-  }
-
-  /**
-   * Make a GET request with certificate and proxy support
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<any> {
-    return this.makeRequest('get', endpoint, undefined, options);
-  }
-
-  /**
-   * Make a POST request with certificate and proxy support
-   * @param endpoint - API endpoint
-   * @param data - Request data
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<any> {
-    return this.makeRequest('post', endpoint, data, options);
-  }
-
-  /**
-   * Make a PUT request with certificate and proxy support
-   * @param endpoint - API endpoint
-   * @param data - Request data
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<any> {
-    return this.makeRequest('put', endpoint, data, options);
-  }
-
-  /**
-   * Make a DELETE request with certificate and proxy support
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<any> {
-    return this.makeRequest('delete', endpoint, undefined, options);
-  }
-
-  /**
-   * Make a request with certificate and proxy support
-   * @param method - HTTP method
-   * @param endpoint - API endpoint
-   * @param data - Request data (for POST, PUT)
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  private async makeRequest<T = any>(
-    method: 'get' | 'post' | 'put' | 'delete',
-    endpoint: string,
-    data?: any,
-    options?: ApiRequestOptions
-  ): Promise<any> {
-    const url = new URL(endpoint, this.apiBaseUrl).toString();
-    this.logger.info(`Making ${method.toUpperCase()} request to: ${url}`);
+  async initializeSession(): Promise<string> {
+    this.logger.info('Initializing session to obtain JSESSIONID');
     
-    const config: any = {
-      headers: { ...this.defaultHeaders, ...options?.headers },
-      params: options?.params || {},
-      timeout: options?.timeout || this.defaultTimeout,
-      validateStatus: options?.validateStatus !== false ? undefined : () => true
+    // Configure request options
+    const options: any = {
+      headers: this.defaultHeaders,
+      withCredentials: true // Enable cookie handling
     };
-
-    // Add PFX certificate if provided
-    if (this.pfxPath) {
-      const pfx = fs.readFileSync(this.pfxPath);
-      config.httpsAgent = new https.Agent({ 
-        pfx,
-        passphrase: this.pfxPassphrase,
-        rejectUnauthorized: false // Set to true in production
+    
+    // Add certificate if provided
+    if (this.pfxOptions) {
+      options.httpsAgent = new https.Agent({
+        pfx: fs.readFileSync(this.pfxOptions.path),
+        passphrase: this.pfxOptions.passphrase,
+        rejectUnauthorized: false // Consider setting to true in production
       });
     }
-
+    
     // Add proxy if provided
     if (this.proxyUrl) {
-      config.proxy = {
-        host: new URL(this.proxyUrl).hostname,
-        port: Number(new URL(this.proxyUrl).port),
-        protocol: new URL(this.proxyUrl).protocol.replace(':', '')
+      const proxyUrl = new URL(this.proxyUrl);
+      options.proxy = {
+        host: proxyUrl.hostname,
+        port: Number(proxyUrl.port),
+        protocol: proxyUrl.protocol.replace(':', '')
       };
     }
-
+    
     try {
-      // Create a timestamp for request timing
-      const startTime = Date.now();
+      // Make a GET request to initialize session
+      const response = await axios.get(this.apiBaseUrl, options);
       
-      let response;
-      switch (method) {
-        case 'get':
-          response = await super.get(endpoint, { ...options, ...config });
-          break;
-        case 'post':
-          response = await super.post(endpoint, data, { ...options, ...config });
-          break;
-        case 'put':
-          response = await super.put(endpoint, data, { ...options, ...config });
-          break;
-        case 'delete':
-          response = await super.delete(endpoint, { ...options, ...config });
-          break;
+      // Extract cookies from response
+      const setCookieHeader = response.headers['set-cookie'];
+      if (!setCookieHeader || setCookieHeader.length === 0) {
+        throw new Error('No session cookie received from server');
       }
       
-      return response;
-    } catch (error) {
-      this.logger.error(`Request failed: ${error.message}`);
+      // Store the cookie string
+      this.sessionCookie = setCookieHeader.join('; ');
+      this.logger.info('Session initialized successfully');
+      
+      return this.sessionCookie;
+    } catch (error: any) {
+      this.logger.error(`Session initialization failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Search for trades with current session
+   * @param searchParams - Search parameters
+   * @returns Promise<AxiosResponse> - Search results
+   */
+  async searchTrades(searchParams: any): Promise<AxiosResponse> {
+    // Ensure we have a session
+    if (!this.sessionCookie) {
+      await this.initializeSession();
+    }
+    
+    const endpoint = '/api/trades/search';
+    const options: ApiRequestOptions = {
+      headers: {
+        'Cookie': this.sessionCookie as string
+      }
+    };
+    
+    try {
+      this.logger.info(`Searching trades with params: ${JSON.stringify(searchParams)}`);
+      return await this.post(endpoint, searchParams, options);
+    } catch (error: any) {
+      // If unauthorized, try to reinitialize session and retry
+      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+        this.logger.warn('Session expired, reinitializing...');
+        await this.initializeSession();
+        
+        // Retry with new session
+        options.headers = { 'Cookie': this.sessionCookie as string };
+        return await this.post(endpoint, searchParams, options);
+      }
+      
+      this.logger.error(`Trade search failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Get trade details by ID
+   * @param tradeId - Trade ID
+   * @returns Promise<AxiosResponse> - Trade details
+   */
+  async getTradeById(tradeId: string): Promise<AxiosResponse> {
+    // Ensure we have a session
+    if (!this.sessionCookie) {
+      await this.initializeSession();
+    }
+    
+    const endpoint = `/api/trades/${tradeId}`;
+    const options: ApiRequestOptions = {
+      headers: {
+        'Cookie': this.sessionCookie as string
+      }
+    };
+    
+    try {
+      this.logger.info(`Getting trade details for ID: ${tradeId}`);
+      return await this.get(endpoint, options);
+    } catch (error: any) {
+      // If unauthorized, try to reinitialize session and retry
+      if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+        this.logger.warn('Session expired, reinitializing...');
+        await this.initializeSession();
+        
+        // Retry with new session
+        options.headers = { 'Cookie': this.sessionCookie as string };
+        return await this.get(endpoint, options);
+      }
+      
+      this.logger.error(`Failed to get trade: ${error.message}`);
       throw error;
     }
   }
