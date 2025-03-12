@@ -1,142 +1,64 @@
-// In BaseApiClient.ts - Enhance the certificate handling and connection settings
+// In AssetApiClient - modify getAssets method
 
-import * as fs from 'fs';
-import * as https from 'https';
-import * as path from 'path';
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-
-// Add this method to the BaseApiClient class
-protected createCertificateAgent(pfxPath: string, passphrase: string): https.Agent {
-  try {
-    // Log details about certificate
-    this.logger.debug(`Loading certificate from: ${pfxPath}`);
-    this.logger.debug(`Certificate exists: ${fs.existsSync(pfxPath)}`);
-    
-    // Load the certificate
-    const pfx = fs.readFileSync(pfxPath);
-    
-    // Create an HTTPS agent with detailed options
-    const agent = new https.Agent({
-      pfx,
-      passphrase,
-      rejectUnauthorized: this.config.getBoolean('REJECT_UNAUTHORIZED', false), // Try with false first
-      secureOptions: require('constants').SSL_OP_NO_TLSv1_3, // Disable TLS 1.3 which can cause issues
-      ciphers: 'DEFAULT:@SECLEVEL=1', // Lower security level for compatibility
-      maxVersion: 'TLSv1.2', // Limit to TLS 1.2 which is more widely compatible
-      keepAlive: true, // Enable keep-alive for better connection handling
-    });
-    
-    this.logger.debug('Certificate loaded successfully');
-    return agent;
-  } catch (error) {
-    this.logger.error(`Certificate load error: ${error.message}`);
-    throw error; // Rethrow to handle it in the calling method
-  }
-}
-
-// Update executeRequest method to add ECONNRESET specific handling
-private async executeRequest<T = any>(
-  method: 'get' | 'post' | 'put' | 'patch' | 'delete',
-  url: string,
-  data?: any,
-  config?: AxiosRequestConfig
-): Promise<AxiosResponse<T>> {
-  // Add more detailed debugging
-  this.logger.debug(`Request details for ${method.toUpperCase()} ${url}:`);
-  this.logger.debug(`Headers: ${JSON.stringify(config?.headers)}`);
-  this.logger.debug(`Using custom agent: ${!!config?.httpsAgent}`);
-  this.logger.debug(`Using proxy: ${!!config?.proxy}`);
-  this.logger.debug(`Data: ${JSON.stringify(data)}`);
+async getAssets(
+  messageId: string,
+  dealId: number,
+  reportDate: string,
+  options?: ApiRequestOptions
+): Promise<AxiosResponse<AssetResponse>> {
+  // Validation code as before
   
-  const startTime = Date.now();
+  // Create request body
+  const requestBody: AssetRequest = {
+    messageId,
+    dealId,
+    reportDate
+  };
+  
+  // Set up request options to match Postman exactly
+  const requestOptions: ApiRequestOptions = {
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Connection': 'keep-alive', // Add these headers to match Postman
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36' // Add a standard user agent
+    },
+    withCredentials: true,
+    pfxPath: this.pfxCertPath,
+    pfxPassphrase: this.pfxCertPassphrase,
+    useProxy: false, // Try disabling proxy for testing
+    timeout: 60000, // Longer timeout for stability
+    retryOptions: {
+      maxAttempts: 3,
+      retryDelay: 2000,
+      retryCondition: (error) => {
+        // Retry specifically on ECONNRESET
+        return error.code === 'ECONNRESET' || 
+               (error.response && error.response.status >= 500);
+      }
+    },
+    ...options
+  };
+  
+  // Log full request details
+  this.logger.info(`Making asset request with ID: ${messageId}, Deal: ${dealId}`);
+  this.logger.debug(`Full request body: ${JSON.stringify(requestBody)}`);
+  this.logger.debug(`Using certificate: ${this.pfxCertPath}`);
   
   try {
-    let response;
-    
-    switch (method) {
-      case 'get':
-        response = await axios.get<T>(url, config);
-        break;
-      case 'post':
-        response = await axios.post<T>(url, data, config);
-        break;
-      case 'put':
-        response = await axios.put<T>(url, data, config);
-        break;
-      case 'patch':
-        response = await axios.patch<T>(url, data, config);
-        break;
-      case 'delete':
-        response = await axios.delete<T>(url, config);
-        break;
-    }
-    
-    // Calculate and log duration
-    const duration = Date.now() - startTime;
-    this.logger.debug(`Response time: ${duration}ms`);
-    
-    // Store duration for assertion use
-    (response as any)._duration = duration;
-    
-    this.logResponse(response);
-    return response;
+    // Make the request
+    return await this.post<AssetResponse>('/assets', requestBody, requestOptions);
   } catch (error) {
-    const duration = Date.now() - startTime;
-    this.logger.error(`Request failed after ${duration}ms: ${error.message}`);
+    // Enhanced error handling
+    this.logger.error(`Asset request failed: ${error.message}`);
     
-    // Enhanced error handling for ECONNRESET
+    // Try one more time with modified settings if it fails
     if (error.code === 'ECONNRESET') {
-      this.logger.error('Connection was reset by the server (ECONNRESET)');
-      this.logger.error('This often indicates SSL/TLS negotiation issues or proxy problems');
-      // Additional information that might help diagnose
-      this.logger.error(`URL: ${url}`);
-      this.logger.error(`Method: ${method}`);
-      if (config?.httpsAgent) {
-        this.logger.error('Using custom HTTPS agent with certificate');
-      }
-      if (config?.proxy) {
-        this.logger.error(`Using proxy: ${JSON.stringify(config.proxy)}`);
-      }
+      this.logger.info('Retrying with modified connection settings...');
+      requestOptions.useProxy = false; // Disable proxy
+      return await this.post<AssetResponse>('/assets', requestBody, requestOptions);
     }
     
     throw error;
   }
-}
-
-// Update the createRequestConfig method
-protected createRequestConfig(options?: ApiRequestOptions): AxiosRequestConfig {
-  const config: AxiosRequestConfig = {
-    headers: { ...this.defaultHeaders, ...options?.headers },
-    params: options?.params || {},
-    timeout: options?.timeout || this.defaultTimeout * 2, // Double timeout for stability
-    validateStatus: options?.validateStatus !== false ? undefined : () => true,
-    withCredentials: options?.withCredentials,
-    // Add these options to improve connection stability
-    maxRedirects: 5,
-    maxContentLength: 50 * 1024 * 1024, // 50MB
-    decompress: true,
-    // Follow redirects
-    followRedirect: true
-  };
-  
-  // Add certificate if needed
-  const pfxPath = options?.pfxPath || this.pfxCertPath;
-  const passphrase = options?.pfxPassphrase || this.pfxCertPassphrase;
-  
-  if (pfxPath && fs.existsSync(pfxPath)) {
-    try {
-      config.httpsAgent = this.createCertificateAgent(pfxPath, passphrase);
-    } catch (error) {
-      this.logger.error(`Failed to create HTTPS agent: ${error.message}`);
-      // Continue without certificate
-    }
-  }
-  
-  // Disable proxy for testing to see if that's the issue
-  const useProxy = this.config.getBoolean('USE_PROXY', false); // Set to false for testing
-  if (useProxy && this.proxyUrl) {
-    // Proxy configuration as before
-  }
-  
-  return config;
 }
