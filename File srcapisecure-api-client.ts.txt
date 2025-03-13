@@ -1,3 +1,11 @@
+/**
+ * Handle long-running request with polling
+ * Suitable for requests where the backend needs time to process before returning complete data
+ * @param requestFn - Function to execute the initial request
+ * @param options - Polling options
+ * @returns Promise<AxiosResponse> - Final API response
+ * @private
+ */
 private async handleLongRunningRequest<T = any>(
   requestFn: () => Promise<AxiosResponse<T>>,
   options?: {
@@ -8,9 +16,48 @@ private async handleLongRunningRequest<T = any>(
     successCondition?: (response: AxiosResponse<T>) => boolean;
   }
 ): Promise<AxiosResponse<T>> {
-  // Merge options with defaults and create pollOptions
+  // Merge options with defaults
   const pollOptions = {
-    // Your existing options merging code...
+    maxAttempts: options?.maxAttempts || this.defaultPollingOptions.maxAttempts,
+    interval: options?.interval || this.defaultPollingOptions.interval,
+    timeoutPerAttempt: options?.timeoutPerAttempt || this.defaultPollingOptions.timeoutPerAttempt,
+    // Default success condition: check if response data is not empty
+    successCondition: options?.successCondition || ((response: AxiosResponse<T>) => {
+      // Check if the response has data
+      if (!response.data) {
+        return false;
+      }
+      
+      // For array responses, check if there are elements
+      if (Array.isArray(response.data)) {
+        return response.data.length > 0;
+      }
+      
+      // For object responses with specific fields, check if required fields have data
+      if (typeof response.data === 'object') {
+        // A general check for common response patterns
+        const dataObj = response.data as any;
+        
+        // Check for common patterns in response objects
+        if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
+          return dataObj.assetLayouts.length > 0;
+        }
+        
+        if (dataObj.items && Array.isArray(dataObj.items)) {
+          return dataObj.items.length > 0;
+        }
+        
+        if (dataObj.data && Array.isArray(dataObj.data)) {
+          return dataObj.data.length > 0;
+        }
+        
+        // Check if the object has any properties (not empty)
+        return Object.keys(dataObj).length > 0;
+      }
+      
+      // For primitive types, check if it's not null, undefined, or empty string
+      return response.data !== null && response.data !== undefined && response.data !== '';
+    })
   };
   
   // Make the initial request
@@ -19,15 +66,12 @@ private async handleLongRunningRequest<T = any>(
     this.logger.info(`Making initial request for long-running operation`);
     response = await requestFn();
     
-    // Store the original request URL for later use in polling
-    const originalUrl = response.config.url;
-    this.logger.debug(`Original request URL: ${originalUrl}`);
-    
-    // Store original method for retry
-    const originalMethod = response.config.method?.toLowerCase() || 'get';
-    
-    // Store original data if any
+    // Store the original request details for retries
+    const originalUrl = response.config.url || '';
+    const originalMethod = (response.config.method || 'get').toLowerCase();
     const originalData = response.config.data;
+    
+    this.logger.debug(`Original request URL: ${originalUrl}`);
     
     // Check if we need to poll for completion
     if (pollOptions.successCondition(response)) {
@@ -44,25 +88,59 @@ private async handleLongRunningRequest<T = any>(
       await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
       
       try {
-        // Instead of reusing the entire config, create a fresh request with the essential parts
-        const requestConfig = this.createRequestConfig({
-          timeout: pollOptions.timeoutPerAttempt,
+        // Create a fresh request config
+        const pollConfig: AxiosRequestConfig = {
+          url: originalUrl,
+          method: originalMethod as Method,
           headers: response.config.headers,
-          // Reuse any auth/certificate settings
-          pfxPath: this.pfxCertPath,
-          pfxPassphrase: this.pfxCertPassphrase,
-          useProxy: true
-        });
+          timeout: pollOptions.timeoutPerAttempt,
+          data: originalData
+        };
         
-        // Add debug logging to see what's being requested
-        this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} to URL: ${originalUrl}`);
-        
-        // Use our executeRequest method to ensure consistency
-        if (originalMethod === 'post' || originalMethod === 'put' || originalMethod === 'patch') {
-          response = await this.executeRequest(originalMethod as any, originalUrl, originalData, requestConfig);
-        } else {
-          response = await this.executeRequest(originalMethod as any, originalUrl, undefined, requestConfig);
+        // If using certificates, add those to the config
+        if (this.pfxCertPath && fs.existsSync(this.pfxCertPath)) {
+          try {
+            const pfx = fs.readFileSync(this.pfxCertPath);
+            pollConfig.httpsAgent = new https.Agent({
+              pfx,
+              passphrase: this.pfxCertPassphrase,
+              rejectUnauthorized: this.config.getBoolean('REJECT_UNAUTHORIZED', true)
+            });
+          } catch (error) {
+            this.logger.error(`Error loading PFX certificate: ${error.message}`);
+          }
         }
+        
+        // If using proxy, add that to the config
+        if (this.proxyUrl) {
+          try {
+            const formattedProxyUrl = this.proxyUrl.startsWith('http') 
+              ? this.proxyUrl 
+              : `http://${this.proxyUrl}`;
+            
+            const parsedUrl = new URL(formattedProxyUrl);
+            
+            pollConfig.proxy = {
+              host: parsedUrl.hostname,
+              port: parseInt(parsedUrl.port || '80'),
+              protocol: parsedUrl.protocol.replace(':', '') as any
+            };
+          } catch (error) {
+            this.logger.error(`Invalid proxy URL: ${this.proxyUrl}`);
+          }
+        }
+        
+        this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts}`);
+        
+        // Make the polling request
+        const pollResponse = await axios.request<T>(pollConfig);
+        
+        // Update our response reference
+        response = pollResponse;
+        
+        // Calculate and add response time for metrics
+        const duration = Date.now() - (pollConfig.metadata?.startTime || Date.now());
+        (response as any)._duration = duration;
         
         // Check if the response is now complete
         if (pollOptions.successCondition(response)) {
@@ -71,38 +149,40 @@ private async handleLongRunningRequest<T = any>(
         }
         
         this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
-      } catch (error) {
-        // Enhanced error logging
+      } catch (error: any) {
         this.logger.warn(`Polling attempt ${attempt} failed: ${error.message}`);
         
-        if (error.response) {
-          this.logger.debug(`Error status: ${error.response.status}`);
-          if (error.response.status === 502) {
-            this.logger.debug(`DNS Error detected - attempting to resolve hostname...`);
-            try {
+        // Handle specific error types with additional diagnostics
+        if (error.response && error.response.status === 502) {
+          this.logger.debug('Received 502 Bad Gateway - likely DNS resolution issue');
+          
+          // Try to resolve the hostname for debugging
+          try {
+            if (originalUrl) {
               const parsedUrl = new URL(originalUrl);
               const dns = require('dns');
-              const result = await new Promise((resolve, reject) => {
-                dns.lookup(parsedUrl.hostname, (err, address) => {
-                  if (err) reject(err);
-                  else resolve(address);
-                });
+              this.logger.debug(`Attempting DNS lookup for ${parsedUrl.hostname}...`);
+              
+              // This is a non-blocking diagnostic, we don't wait for it
+              dns.lookup(parsedUrl.hostname, (err: Error | null, address: string) => {
+                if (err) {
+                  this.logger.debug(`DNS lookup failed: ${err.message}`);
+                } else {
+                  this.logger.debug(`DNS lookup successful: ${parsedUrl.hostname} -> ${address}`);
+                }
               });
-              this.logger.debug(`Hostname resolved to: ${result}`);
-            } catch (dnsError) {
-              this.logger.debug(`DNS resolution failed: ${dnsError.message}`);
             }
+          } catch (dnsError: any) {
+            this.logger.debug(`Error parsing URL for DNS lookup: ${dnsError.message}`);
           }
         }
-        
-        // Continue to next attempt despite error
       }
     }
     
     // If we get here, we've exceeded the maximum polling attempts
     throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
-  } catch (error) {
-    this.logger.error(`Initial request failed: ${error.message}`);
+  } catch (error: any) {
+    this.logger.error(`Long-running request failed: ${error.message}`);
     throw error;
   }
 }
