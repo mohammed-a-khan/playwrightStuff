@@ -1,188 +1,865 @@
+// src/framework/base-api-client.ts
+import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
+import { expect } from '@playwright/test';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
+import fs from 'fs';
+import https from 'https';
+import path from 'path';
+import { URL } from 'url';
+
 /**
- * Handle long-running request with polling
- * Suitable for requests where the backend needs time to process before returning complete data
- * @param requestFn - Function to execute the initial request
- * @param options - Polling options
- * @returns Promise<AxiosResponse> - Final API response
- * @private
+ * Interface for API request options
  */
-private async handleLongRunningRequest<T = any>(
-  requestFn: () => Promise<AxiosResponse<T>>,
-  options?: {
-    enabled?: boolean;
+export interface ApiRequestOptions {
+  headers?: Record<string, string>;
+  params?: Record<string, any>;
+  data?: any;
+  timeout?: number;
+  validateStatus?: boolean;
+  withCredentials?: boolean;
+  pfxPath?: string;         // Path to PFX file
+  pfxPassphrase?: string;   // Passphrase for PFX file
+  useProxy?: boolean;       // Whether to use proxy settings
+  retryOptions?: {
     maxAttempts?: number;
-    interval?: number;
-    timeoutPerAttempt?: number;
-    successCondition?: (response: AxiosResponse<T>) => boolean;
-  }
-): Promise<AxiosResponse<T>> {
-  // Merge options with defaults
-  const pollOptions = {
-    maxAttempts: options?.maxAttempts || this.defaultPollingOptions.maxAttempts,
-    interval: options?.interval || this.defaultPollingOptions.interval,
-    timeoutPerAttempt: options?.timeoutPerAttempt || this.defaultPollingOptions.timeoutPerAttempt,
-    // Default success condition: check if response data is not empty
-    successCondition: options?.successCondition || ((response: AxiosResponse<T>) => {
-      // Check if the response has data
-      if (!response.data) {
-        return false;
-      }
-      
-      // For array responses, check if there are elements
-      if (Array.isArray(response.data)) {
-        return response.data.length > 0;
-      }
-      
-      // For object responses with specific fields, check if required fields have data
-      if (typeof response.data === 'object') {
-        // A general check for common response patterns
-        const dataObj = response.data as any;
-        
-        // Check for common patterns in response objects
-        if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-          return dataObj.assetLayouts.length > 0;
-        }
-        
-        if (dataObj.items && Array.isArray(dataObj.items)) {
-          return dataObj.items.length > 0;
-        }
-        
-        if (dataObj.data && Array.isArray(dataObj.data)) {
-          return dataObj.data.length > 0;
-        }
-        
-        // Check if the object has any properties (not empty)
-        return Object.keys(dataObj).length > 0;
-      }
-      
-      // For primitive types, check if it's not null, undefined, or empty string
-      return response.data !== null && response.data !== undefined && response.data !== '';
-    })
+    retryDelay?: number;
+    retryCondition?: (error: any) => boolean;
   };
+  pollingOptions?: {        // Options for long-running requests with polling
+    enabled?: boolean;      // Whether to enable polling for this request
+    maxAttempts?: number;   // Maximum number of polling attempts
+    interval?: number;      // Interval between polling attempts in ms
+    timeoutPerAttempt?: number; // Timeout for each polling attempt
+    successCondition?: (response: AxiosResponse) => boolean; // Function to determine if response is complete
+  };
+}
+
+/**
+ * Base API client for all API interactions
+ * Enhanced with long-running request support, certificate handling, and robust error handling
+ */
+export class BaseApiClient {
+  readonly apiBaseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly defaultHeaders: Record<string, string>;
+  readonly config: ConfigManager;
   
-  // Make the initial request
-  let response: AxiosResponse<T>;
-  try {
-    this.logger.info(`Making initial request for long-running operation`);
-    response = await requestFn();
+  // Certificate and proxy settings
+  readonly pfxCertPath?: string;
+  readonly pfxCertPassphrase?: string;
+  readonly proxyUrl?: string;
+  readonly defaultRetryOptions: { maxAttempts: number; retryDelay: number };
+  readonly defaultPollingOptions: {
+    enabled: boolean;
+    maxAttempts: number;
+    interval: number;
+    timeoutPerAttempt: number;
+  };
+
+  /**
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
+   */
+  constructor(
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
+  ) {
+    this.config = ConfigManager.getInstance();
+    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
+    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
+    this.logger = new Logger(this.constructor.name);
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
+    };
     
-    // Store the original request details for retries
-    const originalUrl = response.config.url || '';
-    const originalMethod = (response.config.method || 'get').toLowerCase();
-    const originalData = response.config.data;
+    // Initialize certificate settings from config
+    this.pfxCertPath = this.config.getString('PFX_CERT_PATH', '');
+    this.pfxCertPassphrase = this.config.getString('PFX_CERT_PASSPHRASE', '');
+    this.proxyUrl = this.config.getString('PROXY_URL', '');
     
-    this.logger.debug(`Original request URL: ${originalUrl}`);
+    this.defaultRetryOptions = {
+      maxAttempts: this.config.getNumber('API_RETRY_ATTEMPTS', 3),
+      retryDelay: this.config.getNumber('API_RETRY_DELAY', 1000)
+    };
     
-    // Check if we need to poll for completion
-    if (pollOptions.successCondition(response)) {
-      this.logger.info(`Initial response is complete, no polling needed`);
-      return response;
+    // Initialize polling options for long-running requests
+    this.defaultPollingOptions = {
+      enabled: this.config.getBoolean('API_ENABLE_POLLING', false),
+      maxAttempts: this.config.getNumber('API_POLLING_MAX_ATTEMPTS', 10),
+      interval: this.config.getNumber('API_POLLING_INTERVAL', 2000),
+      timeoutPerAttempt: this.config.getNumber('API_POLLING_TIMEOUT_PER_ATTEMPT', 10000)
+    };
+    
+    // Set up request/response interceptors for debugging
+    this.setupInterceptors();
+  }
+
+  /**
+   * Set up axios interceptors for debugging request/response
+   * @private
+   */
+  private setupInterceptors(): void {
+    // Request interceptor
+    axios.interceptors.request.use(
+      (config) => {
+        if (this.config.getBoolean('API_DEBUG', false)) {
+          this.logger.debug(`Full request config: ${JSON.stringify({
+            url: config.url,
+            method: config.method,
+            headers: config.headers,
+            params: config.params,
+            data: config.data
+          }, null, 2)}`);
+        }
+        return config;
+      },
+      (error) => {
+        this.logger.error(`Request interceptor error: ${error.message}`);
+        return Promise.reject(error);
+      }
+    );
+    
+    // Response interceptor
+    axios.interceptors.response.use(
+      (response) => {
+        return response;
+      },
+      (error) => {
+        if (error.response) {
+          this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+        } else if (error.request) {
+          this.logger.error(`No response received: ${error.message}`);
+        } else {
+          this.logger.error(`Request configuration error: ${error.message}`);
+        }
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  /**
+   * Create request configuration with certificate and proxy settings
+   * @param options - API request options
+   * @returns Axios request configuration
+   */
+  protected createRequestConfig(options?: ApiRequestOptions): AxiosRequestConfig {
+    const config: AxiosRequestConfig = {
+      headers: { ...this.defaultHeaders, ...options?.headers },
+      params: options?.params || {},
+      timeout: options?.timeout || this.defaultTimeout,
+      validateStatus: options?.validateStatus !== false ? undefined : () => true,
+      withCredentials: options?.withCredentials
+    };
+    
+    // Add certificate if needed
+    const pfxPath = options?.pfxPath || this.pfxCertPath;
+    const passphrase = options?.pfxPassphrase || this.pfxCertPassphrase;
+    
+    if (pfxPath && fs.existsSync(pfxPath)) {
+      try {
+        const pfx = fs.readFileSync(pfxPath);
+        config.httpsAgent = new https.Agent({
+          pfx,
+          passphrase,
+          rejectUnauthorized: this.config.getBoolean('REJECT_UNAUTHORIZED', true)
+        });
+        this.logger.debug(`Using PFX certificate from: ${pfxPath}`);
+      } catch (error: any) {
+        this.logger.error(`Error loading PFX certificate: ${error.message}`);
+      }
     }
     
-    // Start polling for completion
-    this.logger.info(`Initial response incomplete, starting polling...`);
+    // Add proxy if needed
+    const useProxy = options?.useProxy !== false; // Use proxy by default if available
+    const proxyUrl = this.proxyUrl;
     
-    for (let attempt = 1; attempt <= pollOptions.maxAttempts; attempt++) {
-      // Wait for the polling interval
-      this.logger.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
-      await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
-      
+    if (useProxy && proxyUrl) {
       try {
-        // Create a fresh request config
-        const pollConfig: AxiosRequestConfig = {
-          url: originalUrl,
-          method: originalMethod as Method,
-          headers: response.config.headers,
-          timeout: pollOptions.timeoutPerAttempt,
-          data: originalData
+        // Ensure proxy URL has a protocol
+        const formattedProxyUrl = proxyUrl.startsWith('http') 
+          ? proxyUrl 
+          : `http://${proxyUrl}`;
+        
+        const parsedUrl = new URL(formattedProxyUrl);
+        
+        config.proxy = {
+          host: parsedUrl.hostname,
+          port: parseInt(parsedUrl.port || '80'),
+          protocol: parsedUrl.protocol.replace(':', '') as 'http' | 'https'
         };
         
-        // If using certificates, add those to the config
-        if (this.pfxCertPath && fs.existsSync(this.pfxCertPath)) {
-          try {
-            const pfx = fs.readFileSync(this.pfxCertPath);
-            pollConfig.httpsAgent = new https.Agent({
-              pfx,
-              passphrase: this.pfxCertPassphrase,
-              rejectUnauthorized: this.config.getBoolean('REJECT_UNAUTHORIZED', true)
-            });
-          } catch (error) {
-            this.logger.error(`Error loading PFX certificate: ${error.message}`);
-          }
-        }
-        
-        // If using proxy, add that to the config
-        if (this.proxyUrl) {
-          try {
-            const formattedProxyUrl = this.proxyUrl.startsWith('http') 
-              ? this.proxyUrl 
-              : `http://${this.proxyUrl}`;
-            
-            const parsedUrl = new URL(formattedProxyUrl);
-            
-            pollConfig.proxy = {
-              host: parsedUrl.hostname,
-              port: parseInt(parsedUrl.port || '80'),
-              protocol: parsedUrl.protocol.replace(':', '') as any
-            };
-          } catch (error) {
-            this.logger.error(`Invalid proxy URL: ${this.proxyUrl}`);
-          }
-        }
-        
-        this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts}`);
-        
-        // Make the polling request
-        const pollResponse = await axios.request<T>(pollConfig);
-        
-        // Update our response reference
-        response = pollResponse;
-        
-        // Calculate and add response time for metrics
-        const duration = Date.now() - (pollConfig.metadata?.startTime || Date.now());
-        (response as any)._duration = duration;
-        
-        // Check if the response is now complete
-        if (pollOptions.successCondition(response)) {
-          this.logger.info(`Polling successful after ${attempt} attempts`);
-          return response;
-        }
-        
-        this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
+        this.logger.debug(`Using proxy: ${formattedProxyUrl}`);
       } catch (error: any) {
-        this.logger.warn(`Polling attempt ${attempt} failed: ${error.message}`);
+        this.logger.error(`Invalid proxy URL: ${proxyUrl}`);
+      }
+    }
+    
+    return config;
+  }
+
+  /**
+   * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
+   * @param endpoint - API endpoint
+   * @returns Full URL string
+   */
+  protected normalizeUrl(endpoint: string): string {
+    // Ensure baseUrl has a protocol
+    const baseUrl = this.apiBaseUrl.startsWith('http') 
+      ? this.apiBaseUrl 
+      : `https://${this.apiBaseUrl}`;
+      
+    // Ensure endpoint starts with a slash if not empty and doesn't already have one
+    if (endpoint && !endpoint.startsWith('/')) {
+      endpoint = '/' + endpoint;
+    }
+    
+    try {
+      return new URL(endpoint, baseUrl).toString();
+    } catch (error: any) {
+      this.logger.error(`Error creating URL from ${baseUrl} and ${endpoint}: ${error.message}`);
+      throw new Error(`Invalid URL: Cannot combine ${baseUrl} and ${endpoint}`);
+    }
+  }
+
+  /**
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making GET request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return this.handleLongRunningRequest<T>(
+        () => this.executeRequest('get', url, undefined, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('get', url, undefined, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making POST request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return this.handleLongRunningRequest<T>(
+        () => this.executeRequest('post', url, data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('post', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return this.handleLongRunningRequest<T>(
+        () => this.executeRequest('put', url, data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('put', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return this.handleLongRunningRequest<T>(
+        () => this.executeRequest('patch', url, data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('patch', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a DELETE request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const requestConfig = this.createRequestConfig(options);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return this.handleLongRunningRequest<T>(
+        () => this.executeRequest('delete', url, options?.data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryRequest<T>(
+      () => this.executeRequest('delete', url, options?.data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Execute a request with timing metrics
+   * @param method - HTTP method
+   * @param url - Request URL
+   * @param data - Request data
+   * @param config - Axios request config
+   * @returns Promise<AxiosResponse> - API response
+   * @private
+   */
+  private async executeRequest<T = any>(
+    method: 'get' | 'post' | 'put' | 'patch' | 'delete',
+    url: string,
+    data?: any,
+    config?: AxiosRequestConfig
+  ): Promise<AxiosResponse<T>> {
+    const startTime = Date.now();
+    
+    try {
+      let response: AxiosResponse<T>;
+      
+      switch (method) {
+        case 'get':
+          response = await axios.get<T>(url, config);
+          break;
+        case 'post':
+          response = await axios.post<T>(url, data, config);
+          break;
+        case 'put':
+          response = await axios.put<T>(url, data, config);
+          break;
+        case 'patch':
+          response = await axios.patch<T>(url, data, config);
+          break;
+        case 'delete':
+          response = await axios.delete<T>(url, config);
+          break;
+        default:
+          throw new Error(`Unsupported HTTP method: ${method}`);
+      }
+      
+      // Calculate and log duration
+      const duration = Date.now() - startTime;
+      this.logger.debug(`Response time: ${duration}ms`);
+      
+      // Store duration for assertion use
+      (response as any)._duration = duration;
+      
+      // Log the complete response for debugging
+      if (this.config.getBoolean('API_DEBUG_DETAILED', false)) {
+        this.logger.debug('RESPONSE RECEIVED: ' + JSON.stringify(response.data, null, 2));
+      }
+      
+      this.logResponse(response);
+      return response;
+    } catch (error: any) {
+      // Add request duration to error for potential retry logic
+      const duration = Date.now() - startTime;
+      (error as any)._duration = duration;
+      
+      this.logError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle long-running request with polling
+   * Suitable for requests where the backend needs time to process before returning complete data
+   * @param requestFn - Function to execute the initial request
+   * @param options - Polling options
+   * @returns Promise<AxiosResponse> - Final API response
+   * @private
+   */
+  private async handleLongRunningRequest<T = any>(
+    requestFn: () => Promise<AxiosResponse<T>>,
+    options?: {
+      enabled?: boolean;
+      maxAttempts?: number;
+      interval?: number;
+      timeoutPerAttempt?: number;
+      successCondition?: (response: AxiosResponse<T>) => boolean;
+    }
+  ): Promise<AxiosResponse<T>> {
+    // Merge options with defaults
+    const pollOptions = {
+      maxAttempts: options?.maxAttempts || this.defaultPollingOptions.maxAttempts,
+      interval: options?.interval || this.defaultPollingOptions.interval,
+      timeoutPerAttempt: options?.timeoutPerAttempt || this.defaultPollingOptions.timeoutPerAttempt,
+      // Default success condition: check if response data is not empty
+      successCondition: options?.successCondition || ((response: AxiosResponse<T>) => {
+        // Check if the response has data
+        if (!response.data) {
+          return false;
+        }
         
-        // Handle specific error types with additional diagnostics
-        if (error.response && error.response.status === 502) {
-          this.logger.debug('Received 502 Bad Gateway - likely DNS resolution issue');
+        // For array responses, check if there are elements
+        if (Array.isArray(response.data)) {
+          return response.data.length > 0;
+        }
+        
+        // For object responses with specific fields, check if required fields have data
+        if (typeof response.data === 'object') {
+          // A general check for common response patterns
+          const dataObj = response.data as any;
           
-          // Try to resolve the hostname for debugging
-          try {
-            if (originalUrl) {
-              const parsedUrl = new URL(originalUrl);
-              const dns = require('dns');
-              this.logger.debug(`Attempting DNS lookup for ${parsedUrl.hostname}...`);
-              
-              // This is a non-blocking diagnostic, we don't wait for it
-              dns.lookup(parsedUrl.hostname, (err: Error | null, address: string) => {
-                if (err) {
-                  this.logger.debug(`DNS lookup failed: ${err.message}`);
-                } else {
-                  this.logger.debug(`DNS lookup successful: ${parsedUrl.hostname} -> ${address}`);
-                }
-              });
-            }
-          } catch (dnsError: any) {
-            this.logger.debug(`Error parsing URL for DNS lookup: ${dnsError.message}`);
+          // Check for common patterns in response objects
+          if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
+            return dataObj.assetLayouts.length > 0;
           }
+          
+          if (dataObj.items && Array.isArray(dataObj.items)) {
+            return dataObj.items.length > 0;
+          }
+          
+          if (dataObj.data && Array.isArray(dataObj.data)) {
+            return dataObj.data.length > 0;
+          }
+          
+          // Check if the object has any properties (not empty)
+          return Object.keys(dataObj).length > 0;
+        }
+        
+        // For primitive types, check if it's not null, undefined, or empty string
+        return response.data !== null && response.data !== undefined && response.data !== '';
+      })
+    };
+    
+    // Make the initial request
+    let response: AxiosResponse<T>;
+    
+    try {
+      this.logger.info(`Making initial request for long-running operation`);
+      response = await requestFn();
+      
+      // Log immediate response for debugging
+      if (this.config.getBoolean('API_DEBUG_DETAILED', false)) {
+        this.logger.debug('INITIAL RESPONSE FOR LONG-RUNNING REQUEST: ' + JSON.stringify(response.data, null, 2));
+      }
+      
+      // Store the original request details for retries
+      const originalUrl = response.config.url || '';
+      const originalMethod = (response.config.method || 'get').toLowerCase();
+      const originalData = response.config.data;
+      
+      this.logger.debug(`Original request URL: ${originalUrl}`);
+      
+      // Check if we need to poll for completion
+      if (pollOptions.successCondition(response)) {
+        this.logger.info(`Initial response is complete, no polling needed`);
+        return response;
+      }
+      
+      // Start polling for completion
+      this.logger.info(`Initial response incomplete, starting polling...`);
+      
+      // Create a new request config for polling
+      const axiosConfig: AxiosRequestConfig = {
+        ...response.config,
+        timeout: pollOptions.timeoutPerAttempt
+      };
+      
+      // Clear any potentially problematic properties
+      delete axiosConfig.transitional;
+      delete axiosConfig.transformRequest;
+      delete axiosConfig.transformResponse;
+      delete axiosConfig.paramsSerializer;
+      
+      // Extract the URL
+      const pollUrl = axiosConfig.url || originalUrl;
+      if (!pollUrl) {
+        throw new Error('Unable to determine URL for polling');
+      }
+      
+      for (let attempt = 1; attempt <= pollOptions.maxAttempts; attempt++) {
+        // Wait for the polling interval
+        this.logger.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
+        await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
+        
+        try {
+          // Make the polling request using a fresh config each time
+          const freshConfig = this.createRequestConfig({
+            headers: axiosConfig.headers as Record<string, string>,
+            timeout: pollOptions.timeoutPerAttempt,
+            pfxPath: this.pfxCertPath,
+            pfxPassphrase: this.pfxCertPassphrase,
+            useProxy: true
+          });
+          
+          freshConfig.url = pollUrl;
+          freshConfig.method = originalMethod as Method;
+          
+          // Log the polling request details
+          this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} to URL: ${pollUrl}`);
+          
+          // Make the request based on the original method
+          let pollResponse: AxiosResponse<T>;
+          if (originalMethod === 'post' || originalMethod === 'put' || originalMethod === 'patch') {
+            pollResponse = await axios.request<T>({
+              ...freshConfig,
+              method: originalMethod as Method,
+              url: pollUrl,
+              data: originalData
+            });
+          } else {
+            pollResponse = await axios.request<T>({
+              ...freshConfig,
+              method: originalMethod as Method,
+              url: pollUrl
+            });
+          }
+          
+          // Update our response reference
+          response = pollResponse;
+          
+          // Log the polling response
+          if (this.config.getBoolean('API_DEBUG_DETAILED', false)) {
+            this.logger.debug(`POLLING RESPONSE (Attempt ${attempt}): ${JSON.stringify(response.data, null, 2)}`);
+          }
+          
+          // Check if the response is now complete
+          if (pollOptions.successCondition(response)) {
+            this.logger.info(`Polling successful after ${attempt} attempts`);
+            return response;
+          }
+          
+          this.logger.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
+        } catch (error: any) {
+          this.logger.warn(`Polling attempt ${attempt} failed: ${error.message}`);
+          
+          // Handle specific error types with additional diagnostics
+          if (error.response && error.response.status === 502) {
+            this.logger.debug('Received 502 Bad Gateway - likely DNS resolution issue');
+            
+            // Try to resolve the hostname for debugging
+            try {
+              if (pollUrl) {
+                const parsedUrl = new URL(pollUrl);
+                const dns = require('dns');
+                this.logger.debug(`Attempting DNS lookup for ${parsedUrl.hostname}...`);
+                
+                // Promisify dns.lookup for async/await
+                const dnsLookup = (hostname: string): Promise<string> => {
+                  return new Promise((resolve, reject) => {
+                    dns.lookup(hostname, (err: Error | null, address: string) => {
+                      if (err) reject(err);
+                      else resolve(address);
+                    });
+                  });
+                };
+                
+                try {
+                  const address = await dnsLookup(parsedUrl.hostname);
+                  this.logger.debug(`DNS lookup successful: ${parsedUrl.hostname} -> ${address}`);
+                } catch (dnsErr: any) {
+                  this.logger.debug(`DNS lookup failed: ${dnsErr.message}`);
+                }
+              }
+            } catch (urlErr: any) {
+              this.logger.debug(`Error parsing URL for DNS lookup: ${urlErr.message}`);
+            }
+          }
+        }
+      }
+      
+      // If we get here, we've exceeded the maximum polling attempts
+      throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
+    } catch (error: any) {
+      this.logger.error(`Long-running request failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Retry a request with backoff strategy
+   * @param requestFn - Function to retry
+   * @param options - Retry options
+   * @returns Promise<AxiosResponse> - API response
+   * @private
+   */
+  private async retryRequest<T = any>(
+    requestFn: () => Promise<AxiosResponse<T>>,
+    options?: {
+      maxAttempts?: number;
+      retryDelay?: number;
+      retryCondition?: (error: any) => boolean;
+    }
+  ): Promise<AxiosResponse<T>> {
+    const maxAttempts = options?.maxAttempts || this.defaultRetryOptions.maxAttempts;
+    const retryDelay = options?.retryDelay || this.defaultRetryOptions.retryDelay;
+    
+    // Default retry condition: retry on network errors or 5xx errors
+    const retryCondition = options?.retryCondition || ((error: any) => {
+      return (
+        error.code === 'ECONNRESET' ||
+        error.code === 'ECONNABORTED' ||
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ENOTFOUND' ||  // DNS resolution error
+        error.message.includes('getaddrinfo') ||  // Another common DNS error
+        (error.response && error.response.status >= 500 && error.response.status < 600)
+      );
+    });
+    
+    let lastError: any;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        this.logger.debug(`Request attempt ${attempt}/${maxAttempts}`);
+        return await requestFn();
+      } catch (error: any) {
+        lastError = error;
+        
+        // Log the error with attempt number
+        this.logger.debug(`Attempt ${attempt} failed: ${error.message}`);
+        
+        // Check if we should retry
+        if (attempt < maxAttempts && retryCondition(error)) {
+          // Calculate backoff delay with jitter to avoid thundering herd
+          const jitter = Math.random() * 0.3 + 0.85; // Random factor between 0.85 and 1.15
+          const delay = Math.floor(retryDelay * Math.pow(1.5, attempt - 1) * jitter);
+          
+          this.logger.info(`Retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          break;
         }
       }
     }
     
-    // If we get here, we've exceeded the maximum polling attempts
-    throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
-  } catch (error: any) {
-    this.logger.error(`Long-running request failed: ${error.message}`);
-    throw error;
+    throw lastError;
+  }
+
+  /**
+   * Attempt to resolve a hostname
+   * @param hostname - Hostname to resolve
+   * @returns Promise<string> - Resolved IP address
+   */
+  async resolveHostname(hostname: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const dns = require('dns');
+      dns.lookup(hostname, (err: Error | null, address: string) => {
+        if (err) {
+          this.logger.error(`Failed to resolve hostname ${hostname}: ${err.message}`);
+          reject(err);
+        } else {
+          this.logger.info(`Resolved ${hostname} to ${address}`);
+          resolve(address);
+        }
+      });
+    });
+  }
+
+  /**
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    this.logger.debug(`Asserting status code: ${expectedStatus}`);
+    expect(response.status).toBe(expectedStatus);
+  }
+
+  /**
+   * Assert API response contains specific data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting response data`);
+    expect(response.data).toMatchObject(expectedData);
+  }
+
+  /**
+   * Assert response has data
+   * Specifically useful for checking that a response contains data after a long-running request
+   * @param response - Axios response
+   */
+  assertHasData(response: AxiosResponse): void {
+    this.logger.debug(`Asserting response has data`);
+    expect(response.data).toBeDefined();
+    
+    if (Array.isArray(response.data)) {
+      expect(response.data.length).toBeGreaterThan(0);
+    } else if (typeof response.data === 'object') {
+      const dataObj = response.data as any;
+      
+      // Check for common patterns in response objects
+      if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
+        expect(dataObj.assetLayouts.length).toBeGreaterThan(0);
+      } else if (dataObj.items && Array.isArray(dataObj.items)) {
+        expect(dataObj.items.length).toBeGreaterThan(0);
+      } else if (dataObj.data && Array.isArray(dataObj.data)) {
+        expect(dataObj.data.length).toBeGreaterThan(0);
+      } else {
+        expect(Object.keys(dataObj).length).toBeGreaterThan(0);
+      }
+    } else {
+      expect(response.data).not.toBeNull();
+      expect(response.data).not.toEqual('');
+    }
+  }
+
+  /**
+   * Assert response header has a specific value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValue - Expected header value
+   */
+  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
+    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toBe(expectedValue);
+  }
+
+  /**
+   * Assert response time is within acceptable limits
+   * @param response - Axios response
+   * @param maxTime - Maximum acceptable response time in ms
+   */
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    const duration = (response as any)._duration;
+    if (duration !== undefined) {
+      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
+      expect(duration).toBeLessThanOrEqual(maxTime);
+    } else {
+      this.logger.warn('Response time metrics not available');
+    }
+  }
+
+  /**
+   * Get authentication token (to be implemented by derived classes)
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(): Promise<string> {
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
+
+  /**
+   * Create auth header with token
+   * @param token - Authentication token
+   * @returns Record<string, string> - Headers with authentication
+   */
+  createAuthHeader(token: string): Record<string, string> {
+    return { 'Authorization': `Bearer ${token}` };
+  }
+
+  /**
+   * Log response details
+   * @private
+   * @param response - Axios response
+   */
+  private logResponse(response: AxiosResponse): void {
+    this.logger.debug(`Response status: ${response.status}`);
+    
+    if (this.config.getBoolean('API_DEBUG_HEADERS', false)) {
+      this.logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
+    }
+    
+    // Log response body in a safe way (truncate if too large)
+    try {
+      const responseBody = JSON.stringify(response.data);
+      const maxBodyLength = this.config.getNumber('API_DEBUG_BODY_LENGTH', 1000);
+      
+      if (responseBody.length > maxBodyLength) {
+        this.logger.debug(`Response body (truncated): ${responseBody.substring(0, maxBodyLength)}...`);
+      } else {
+        this.logger.debug(`Response body: ${responseBody}`);
+      }
+    } catch (error: any) {
+      this.logger.debug('Response body: [Could not stringify response data]');
+    }
+  }
+
+  /**
+   * Log error details
+   * @private
+   * @param error - Axios error
+   */
+  private logError(error: any): void {
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+      this.logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+      
+      if (this.config.getBoolean('API_DEBUG_HEADERS', false)) {
+        this.logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      this.logger.error(`Request error (no response): ${error.message}`);
+      
+      if (error.code) {
+        this.logger.debug(`Error code: ${error.code}`);
+      }
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      this.logger.error(`Request configuration error: ${error.message}`);
+    }
+    
+    if (error.config) {
+      this.logger.debug(`Failed request URL: ${error.config.url}`);
+      this.logger.debug(`Failed request method: ${error.config.method}`);
+    }
   }
 }
