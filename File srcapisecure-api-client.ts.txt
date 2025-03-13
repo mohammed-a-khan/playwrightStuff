@@ -1049,3 +1049,529 @@ export class BaseApiClient {
 export * from './api/types';
 export * from './api/request-config';
 export * from './api/assertions';
+
+
+// src/api/assertions.ts
+import { AxiosResponse } from 'axios';
+import { expect } from '@playwright/test';
+import { Logger } from '../framework/utils/logger';
+
+/**
+ * API Assertions class containing utility methods for validating API responses
+ */
+export class ApiAssertions {
+  private logger: Logger;
+
+  constructor() {
+    this.logger = new Logger('ApiAssertions');
+  }
+
+  /**
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    this.logger.debug(`Asserting status code: ${expectedStatus}`);
+    expect(response.status).toBe(expectedStatus);
+  }
+
+  /**
+   * Assert API response contains specific data (partial match)
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting response data`);
+    expect(response.data).toMatchObject(expectedData);
+  }
+
+  /**
+   * Assert API response data exactly matches expected data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertExactResponseData(response: AxiosResponse, expectedData: any): void {
+    this.logger.debug(`Asserting exact response data`);
+    expect(response.data).toEqual(expectedData);
+  }
+
+  /**
+   * Assert response has data
+   * Specifically useful for checking that a response contains data after a long-running request
+   * @param response - Axios response
+   */
+  assertHasData(response: AxiosResponse): void {
+    this.logger.debug(`Asserting response has data`);
+    expect(response.data).toBeDefined();
+    
+    if (Array.isArray(response.data)) {
+      expect(response.data.length).toBeGreaterThan(0);
+    } else if (typeof response.data === 'object' && response.data !== null) {
+      const dataObj = response.data as any;
+      
+      // Check for common patterns in response objects
+      if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
+        expect(dataObj.assetLayouts.length).toBeGreaterThan(0);
+      } else if (dataObj.items && Array.isArray(dataObj.items)) {
+        expect(dataObj.items.length).toBeGreaterThan(0);
+      } else if (dataObj.data && Array.isArray(dataObj.data)) {
+        expect(dataObj.data.length).toBeGreaterThan(0);
+      } else {
+        expect(Object.keys(dataObj).length).toBeGreaterThan(0);
+      }
+    } else {
+      expect(response.data).not.toBeNull();
+      expect(response.data).not.toEqual('');
+    }
+  }
+
+  /**
+   * Assert response has no errors
+   * @param response - Axios response
+   */
+  assertNoErrors(response: AxiosResponse): void {
+    this.logger.debug(`Asserting response has no errors`);
+    
+    const data = response.data;
+    if (typeof data === 'object' && data !== null) {
+      // Check common error fields
+      if ('error' in data) {
+        expect(data.error).toBeNull();
+      }
+      
+      if ('errors' in data && Array.isArray(data.errors)) {
+        expect(data.errors.length).toBe(0);
+      }
+      
+      if ('systemError' in data) {
+        expect(data.systemError).toBeNull();
+      }
+      
+      if ('errorMessage' in data) {
+        expect(data.errorMessage).toBeNull();
+      }
+      
+      if ('validationErrorMessage' in data) {
+        expect(data.validationErrorMessage).toBeNull();
+      }
+    }
+  }
+
+  /**
+   * Assert response header has a specific value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValue - Expected header value
+   */
+  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
+    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toBe(expectedValue);
+  }
+
+  /**
+   * Assert response contains a header
+   * @param response - Axios response
+   * @param headerName - Header name
+   */
+  assertHeaderExists(response: AxiosResponse, headerName: string): void {
+    this.logger.debug(`Asserting header ${headerName} exists`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toBeDefined();
+  }
+
+  /**
+   * Assert response header contains a value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValueSubstring - Substring to check for in header value
+   */
+  assertHeaderContains(response: AxiosResponse, headerName: string, expectedValueSubstring: string): void {
+    this.logger.debug(`Asserting header ${headerName} contains ${expectedValueSubstring}`);
+    const headerValue = response.headers[headerName.toLowerCase()];
+    expect(headerValue).toContain(expectedValueSubstring);
+  }
+
+  /**
+   * Assert response time is within acceptable limits
+   * @param response - Axios response
+   * @param maxTime - Maximum acceptable response time in ms
+   */
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    const duration = (response as any)._duration;
+    if (duration !== undefined) {
+      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
+      expect(duration).toBeLessThanOrEqual(maxTime);
+    } else {
+      this.logger.warn('Response time metrics not available');
+    }
+  }
+
+  /**
+   * Assert that a value in the response data is of a certain type
+   * @param response - Axios response
+   * @param path - Path to the property (dot notation for nested props, e.g., 'data.user.id')
+   * @param expectedType - Expected type ('string', 'number', 'boolean', 'object', 'array')
+   */
+  assertPropertyType(response: AxiosResponse, path: string, expectedType: string): void {
+    this.logger.debug(`Asserting property ${path} is of type ${expectedType}`);
+    
+    const value = this.getPropertyByPath(response.data, path);
+    expect(value).toBeDefined();
+    
+    switch(expectedType.toLowerCase()) {
+      case 'string':
+        expect(typeof value).toBe('string');
+        break;
+      case 'number':
+        expect(typeof value).toBe('number');
+        break;
+      case 'boolean':
+        expect(typeof value).toBe('boolean');
+        break;
+      case 'object':
+        expect(typeof value).toBe('object');
+        expect(value).not.toBeNull();
+        expect(Array.isArray(value)).toBe(false);
+        break;
+      case 'array':
+        expect(Array.isArray(value)).toBe(true);
+        break;
+      default:
+        throw new Error(`Unsupported type for assertion: ${expectedType}`);
+    }
+  }
+
+  /**
+   * Assert that a property exists in the response
+   * @param response - Axios response
+   * @param path - Path to the property (dot notation for nested props)
+   */
+  assertPropertyExists(response: AxiosResponse, path: string): void {
+    this.logger.debug(`Asserting property exists: ${path}`);
+    const value = this.getPropertyByPath(response.data, path);
+    expect(value).toBeDefined();
+  }
+
+  /**
+   * Assert that an array property has a specific length
+   * @param response - Axios response
+   * @param path - Path to the array property
+   * @param expectedLength - Expected array length
+   */
+  assertArrayLength(response: AxiosResponse, path: string, expectedLength: number): void {
+    this.logger.debug(`Asserting array ${path} has length ${expectedLength}`);
+    const value = this.getPropertyByPath(response.data, path);
+    expect(Array.isArray(value)).toBe(true);
+    expect(value.length).toBe(expectedLength);
+  }
+
+  /**
+   * Assert that an array property has at least a certain length
+   * @param response - Axios response
+   * @param path - Path to the array property
+   * @param minLength - Minimum expected array length
+   */
+  assertArrayMinLength(response: AxiosResponse, path: string, minLength: number): void {
+    this.logger.debug(`Asserting array ${path} has at least ${minLength} items`);
+    const value = this.getPropertyByPath(response.data, path);
+    expect(Array.isArray(value)).toBe(true);
+    expect(value.length).toBeGreaterThanOrEqual(minLength);
+  }
+
+  /**
+   * Verify JSON schema of the response
+   * @param response - Axios response
+   * @param schemaValidator - Function to validate schema
+   */
+  assertSchema(response: AxiosResponse, schemaValidator: (data: any) => boolean): void {
+    this.logger.debug('Asserting response matches schema');
+    expect(schemaValidator(response.data)).toBe(true);
+  }
+
+  /**
+   * Helper method to access nested properties using dot notation path
+   * @param obj - Object to get property from
+   * @param path - Path to property using dot notation
+   * @returns The property value or undefined
+   * @private
+   */
+  private getPropertyByPath(obj: any, path: string): any {
+    return path.split('.').reduce((current, part) => current && current[part], obj);
+  }
+}
+
+export default new ApiAssertions();
+
+// src/framework/base-api-client.ts
+import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
+import { ConfigManager } from './utils/config-manager';
+import { Logger } from './utils/logger';
+import { RetryHandler } from './retry-handler';
+import { RequestExecutor } from './request-executor';
+import { PollingHandler } from './polling-handler';
+import { createRequestConfig } from './request-config';
+import { ApiRequestOptions } from './types';
+
+/**
+ * Base API client for all API interactions
+ * Enhanced with long-running request support, certificate handling, and robust error handling
+ */
+export class BaseApiClient {
+  readonly apiBaseUrl: string;
+  readonly defaultTimeout: number;
+  readonly logger: Logger;
+  readonly defaultHeaders: Record<string, string>;
+  readonly config: ConfigManager;
+  
+  private retryHandler: RetryHandler;
+  private requestExecutor: RequestExecutor;
+  private pollingHandler: PollingHandler;
+
+  /**
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
+   */
+  constructor(
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
+  ) {
+    this.config = ConfigManager.getInstance();
+    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
+    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
+    this.logger = new Logger(this.constructor.name);
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
+    };
+    
+    // Initialize handlers
+    this.retryHandler = new RetryHandler(this.logger, this.config);
+    this.requestExecutor = new RequestExecutor(this.logger, this.config);
+    this.pollingHandler = new PollingHandler(this.logger, this.config, this.requestExecutor);
+    
+    // Set up request/response interceptors for debugging
+    this.setupInterceptors();
+  }
+
+  /**
+   * Set up axios interceptors for debugging request/response
+   * @private
+   */
+  private setupInterceptors(): void {
+    // Request interceptor
+    axios.interceptors.request.use(
+      (config) => {
+        if (this.config.getBoolean('API_DEBUG', false)) {
+          this.logger.debug(`Request: ${config.method?.toUpperCase()} ${config.url}`);
+          if (this.config.getBoolean('API_DEBUG_DETAILED', false)) {
+            this.logger.debug(`Request details: ${JSON.stringify({
+              headers: config.headers,
+              params: config.params,
+              data: config.data
+            }, null, 2)}`);
+          }
+        }
+        return config;
+      },
+      (error) => {
+        this.logger.error(`Request interceptor error: ${error.message}`);
+        return Promise.reject(error);
+      }
+    );
+    
+    // Response interceptor
+    axios.interceptors.response.use(
+      (response) => {
+        return response;
+      },
+      (error) => {
+        if (error.response) {
+          this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
+        } else if (error.request) {
+          this.logger.error(`No response received: ${error.message}`);
+        } else {
+          this.logger.error(`Request configuration error: ${error.message}`);
+        }
+        return Promise.reject(error);
+      }
+    );
+  }
+
+  /**
+   * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
+   * @param endpoint - API endpoint
+   * @returns Full URL string
+   */
+  protected normalizeUrl(endpoint: string): string {
+    // Ensure baseUrl has a protocol
+    const baseUrl = this.apiBaseUrl.startsWith('http') 
+      ? this.apiBaseUrl 
+      : `https://${this.apiBaseUrl}`;
+      
+    // Ensure endpoint starts with a slash if not empty and doesn't already have one
+    if (endpoint && !endpoint.startsWith('/')) {
+      endpoint = '/' + endpoint;
+    }
+    
+    try {
+      return new URL(endpoint, baseUrl).toString();
+    } catch (error: any) {
+      this.logger.error(`Error creating URL from ${baseUrl} and ${endpoint}: ${error.message}`);
+      throw new Error(`Invalid URL: Cannot combine ${baseUrl} and ${endpoint}`);
+    }
+  }
+
+  /**
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making GET request to: ${url}`);
+    
+    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
+      return this.pollingHandler.handleLongRunningRequest<T>(
+        () => this.requestExecutor.executeRequest('get', url, undefined, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryHandler.retryRequest<T>(
+      () => this.requestExecutor.executeRequest('get', url, undefined, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making POST request to: ${url}`);
+    
+    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
+      return this.pollingHandler.handleLongRunningRequest<T>(
+        () => this.requestExecutor.executeRequest('post', url, data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryHandler.retryRequest<T>(
+      () => this.requestExecutor.executeRequest('post', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
+      return this.pollingHandler.handleLongRunningRequest<T>(
+        () => this.requestExecutor.executeRequest('put', url, data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryHandler.retryRequest<T>(
+      () => this.requestExecutor.executeRequest('put', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
+      return this.pollingHandler.handleLongRunningRequest<T>(
+        () => this.requestExecutor.executeRequest('patch', url, data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryHandler.retryRequest<T>(
+      () => this.requestExecutor.executeRequest('patch', url, data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Make a DELETE request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
+   */
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    const url = this.normalizeUrl(endpoint);
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
+      return this.pollingHandler.handleLongRunningRequest<T>(
+        () => this.requestExecutor.executeRequest('delete', url, options?.data, requestConfig),
+        options?.pollingOptions
+      );
+    }
+    
+    return this.retryHandler.retryRequest<T>(
+      () => this.requestExecutor.executeRequest('delete', url, options?.data, requestConfig),
+      options?.retryOptions
+    );
+  }
+
+  /**
+   * Get authentication token (to be implemented by derived classes)
+   * @returns Promise<string> - Authentication token
+   */
+  async getAuthToken(): Promise<string> {
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
+
+  /**
+   * Create auth header with token
+   * @param token - Authentication token
+   * @returns Record<string, string> - Headers with authentication
+   */
+  createAuthHeader(token: string): Record<string, string> {
+    return { 'Authorization': `Bearer ${token}` };
+  }
+}
