@@ -2222,21 +2222,43 @@ import fs from 'fs';
 import path from 'path';
 import { URL } from 'url';
 import axios, { AxiosRequestConfig, AxiosInstance } from 'axios';
-import { LoggerService } from './logger-service';
-import { ConfigService } from './config-service';
+import { Logger } from '../utils/logger';
+
+// Basic config implementation since config-service is not available
+class Config {
+  private configMap: Map<string, any> = new Map();
+  
+  constructor(initialConfig?: Record<string, any>) {
+    if (initialConfig) {
+      Object.entries(initialConfig).forEach(([key, value]) => {
+        this.configMap.set(key, value);
+      });
+    }
+  }
+  
+  get<T>(key: string): T | undefined {
+    return this.configMap.get(key) as T;
+  }
+  
+  set(key: string, value: any): void {
+    this.configMap.set(key, value);
+  }
+}
 import { ProxyConfig, ProxyRoute, ProxyCredentials, CertificateConfig } from '../types/proxy-types';
 
 export class ProxyManager {
-  private logger: LoggerService;
-  private config: ConfigService;
+  private logger: Logger;
+  private config: Config;
   private proxyConfigs: Map<string, ProxyConfig> = new Map();
   private axiosInstances: Map<string, AxiosInstance> = new Map();
   private defaultProxyId: string | null = null;
 
   constructor(
-    logger: LoggerService,
-    config: ConfigService
+    logger?: Logger,
+    config?: Config
   ) {
+    this.logger = logger || new Logger('ProxyManager');
+    this.config = config || new Config();
     this.logger = logger;
     this.config = config;
     this.initialize();
