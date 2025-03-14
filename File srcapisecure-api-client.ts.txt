@@ -2217,14 +2217,12 @@ async function factoryExample() {
  */
 
 import https from 'https';
-import http from 'http';
 import fs from 'fs';
-import path from 'path';
 import { URL } from 'url';
 import axios, { AxiosRequestConfig, AxiosInstance } from 'axios';
 import { Logger } from '../utils/logger';
 
-// Basic config implementation since config-service is not available
+// Basic config implementation
 class Config {
   private configMap: Map<string, any> = new Map();
   
@@ -2244,7 +2242,44 @@ class Config {
     this.configMap.set(key, value);
   }
 }
-import { ProxyConfig, ProxyRoute, ProxyCredentials, CertificateConfig } from '../types/proxy-types';
+
+// Type definitions
+export interface ProxyConfig {
+  id: string;
+  baseUrl: string;
+  isDefault?: boolean;
+  timeout?: number;
+  defaultHeaders?: Record<string, string>;
+  routes?: ProxyRoute[];
+  useProxy?: boolean;
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyAuth?: ProxyCredentials;
+  useSsl?: boolean;
+  certificates?: CertificateConfig;
+  healthCheckEndpoint?: string;
+  healthCheckTimeout?: number;
+}
+
+export interface ProxyRoute {
+  pathPrefix?: string;
+  pathPattern?: string;
+  hostname?: string;
+}
+
+export interface ProxyCredentials {
+  username: string;
+  password: string;
+}
+
+export interface CertificateConfig {
+  pfxCertPath?: string;
+  pfxPassphrase?: string;
+  caCertPath?: string;
+  certPath?: string;
+  keyPath?: string;
+  verifySSL?: boolean;
+}
 
 export class ProxyManager {
   private logger: Logger;
@@ -2253,14 +2288,9 @@ export class ProxyManager {
   private axiosInstances: Map<string, AxiosInstance> = new Map();
   private defaultProxyId: string | null = null;
 
-  constructor(
-    logger?: Logger,
-    config?: Config
-  ) {
-    this.logger = logger || new Logger('ProxyManager');
-    this.config = config || new Config();
+  constructor(logger: Logger) {
     this.logger = logger;
-    this.config = config;
+    this.config = new Config();
     this.initialize();
   }
 
@@ -2279,7 +2309,7 @@ export class ProxyManager {
       // Load all proxy configurations
       proxyConfigs.forEach(proxyConfig => {
         if (!proxyConfig.id) {
-          this.logger.warn('Skipping proxy config without ID', { proxyConfig });
+          this.logger.warn('Skipping proxy config without ID');
           return;
         }
         
@@ -2303,7 +2333,7 @@ export class ProxyManager {
         this.logger.info(`No default proxy set, using first proxy as default: ${this.defaultProxyId}`);
       }
     } catch (error) {
-      this.logger.error('Failed to initialize proxy manager', { error });
+      this.logger.error('Failed to initialize proxy manager');
       throw new Error('Failed to initialize proxy manager');
     }
   }
@@ -2316,19 +2346,23 @@ export class ProxyManager {
       const axiosConfig: AxiosRequestConfig = {
         baseURL: proxyConfig.baseUrl,
         timeout: proxyConfig.timeout || 30000,
-        headers: proxyConfig.defaultHeaders || {},
-        proxy: proxyConfig.useProxy ? {
-          host: proxyConfig.proxyHost!,
-          port: proxyConfig.proxyPort!,
+        headers: proxyConfig.defaultHeaders || {}
+      };
+
+      // Configure proxy if needed
+      if (proxyConfig.useProxy && proxyConfig.proxyHost && proxyConfig.proxyPort) {
+        axiosConfig.proxy = {
+          host: proxyConfig.proxyHost,
+          port: proxyConfig.proxyPort,
           auth: proxyConfig.proxyAuth ? {
             username: proxyConfig.proxyAuth.username,
             password: proxyConfig.proxyAuth.password
           } : undefined
-        } : false
-      };
+        };
+      }
 
       // Configure SSL/TLS if needed
-      if (proxyConfig.useSsl) {
+      if (proxyConfig.useSsl && proxyConfig.certificates) {
         const httpsAgent = this.createHttpsAgent(proxyConfig.certificates);
         if (httpsAgent) {
           axiosConfig.httpsAgent = httpsAgent;
@@ -2340,15 +2374,11 @@ export class ProxyManager {
       // Add request interceptor for logging
       instance.interceptors.request.use(
         (config) => {
-          this.logger.debug(`Proxying request via ${proxyConfig.id}`, {
-            method: config.method,
-            url: config.url,
-            headers: this.sanitizeHeaders(config.headers || {})
-          });
+          this.logger.debug(`Proxying request via ${proxyConfig.id}`);
           return config;
         },
         (error) => {
-          this.logger.error(`Request error in proxy ${proxyConfig.id}`, { error });
+          this.logger.error(`Request error in proxy ${proxyConfig.id}`);
           return Promise.reject(error);
         }
       );
@@ -2356,28 +2386,18 @@ export class ProxyManager {
       // Add response interceptor for logging
       instance.interceptors.response.use(
         (response) => {
-          this.logger.debug(`Received response via ${proxyConfig.id}`, {
-            status: response.status,
-            statusText: response.statusText,
-            headers: this.sanitizeHeaders(response.headers)
-          });
+          this.logger.debug(`Received response via ${proxyConfig.id}`);
           return response;
         },
         (error) => {
-          this.logger.error(`Response error in proxy ${proxyConfig.id}`, {
-            error: {
-              message: error.message,
-              status: error.response?.status,
-              statusText: error.response?.statusText
-            }
-          });
+          this.logger.error(`Response error in proxy ${proxyConfig.id}`);
           return Promise.reject(error);
         }
       );
 
       this.axiosInstances.set(proxyConfig.id, instance);
     } catch (error) {
-      this.logger.error(`Failed to create axios instance for proxy ${proxyConfig.id}`, { error });
+      this.logger.error(`Failed to create axios instance for proxy ${proxyConfig.id}`);
       throw new Error(`Failed to create axios instance for proxy ${proxyConfig.id}`);
     }
   }
@@ -2385,11 +2405,7 @@ export class ProxyManager {
   /**
    * Create an HTTPS agent with the appropriate certificate configuration
    */
-  private createHttpsAgent(certConfig?: CertificateConfig): https.Agent | undefined {
-    if (!certConfig) {
-      return undefined;
-    }
-
+  private createHttpsAgent(certConfig: CertificateConfig): https.Agent | undefined {
     try {
       const agentOptions: https.AgentOptions = {
         rejectUnauthorized: certConfig.verifySSL !== false
@@ -2433,7 +2449,7 @@ export class ProxyManager {
 
       return new https.Agent(agentOptions);
     } catch (error) {
-      this.logger.error('Failed to create HTTPS agent with certificates', { error });
+      this.logger.error('Failed to create HTTPS agent with certificates');
       throw new Error('Failed to create HTTPS agent with certificates');
     }
   }
@@ -2517,7 +2533,7 @@ export class ProxyManager {
       
       return false;
     } catch (error) {
-      this.logger.error('Error matching route to URL', { error, route, url });
+      this.logger.error('Error matching route to URL');
       return false;
     }
   }
@@ -2666,7 +2682,7 @@ export class ProxyManager {
       
       return response.status >= 200 && response.status < 300;
     } catch (error) {
-      this.logger.warn(`Health check failed for proxy ${proxyId}`, { error });
+      this.logger.warn(`Health check failed for proxy ${proxyId}`);
       return false;
     }
   }
@@ -2689,7 +2705,7 @@ export class ProxyManager {
       const proxy = this.getProxyForRequest(url, { proxyId: options.proxyId });
       
       const requestConfig: AxiosRequestConfig = {
-        method,
+        method: method as any,
         url,
         data: options.data,
         headers: options.headers,
@@ -2699,46 +2715,8 @@ export class ProxyManager {
       
       return await proxy.request(requestConfig);
     } catch (error) {
-      this.logger.error('Proxy request failed', { method, url, error });
+      this.logger.error('Proxy request failed');
       throw error;
     }
   }
-}
-
-// Example type definitions that would be in ../types/proxy-types.ts
-export interface ProxyConfig {
-  id: string;
-  baseUrl: string;
-  isDefault?: boolean;
-  timeout?: number;
-  defaultHeaders?: Record<string, string>;
-  routes?: ProxyRoute[];
-  useProxy?: boolean;
-  proxyHost?: string;
-  proxyPort?: number;
-  proxyAuth?: ProxyCredentials;
-  useSsl?: boolean;
-  certificates?: CertificateConfig;
-  healthCheckEndpoint?: string;
-  healthCheckTimeout?: number;
-}
-
-export interface ProxyRoute {
-  pathPrefix?: string;
-  pathPattern?: string;
-  hostname?: string;
-}
-
-export interface ProxyCredentials {
-  username: string;
-  password: string;
-}
-
-export interface CertificateConfig {
-  pfxCertPath?: string;
-  pfxPassphrase?: string;
-  caCertPath?: string;
-  certPath?: string;
-  keyPath?: string;
-  verifySSL?: boolean;
 }
