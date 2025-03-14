@@ -1,83 +1,55 @@
-// src/framework/base-api-client.ts
-import { AxiosResponse } from 'axios';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
-import { CertificateManager } from './utils/certificate-manager';
-import { ProxyManager } from './utils/proxy-manager';
-import {
-  ApiRequestOptions,
-  DefaultRetryOptions,
-  DefaultPollingOptions,
-  ApiClientConfig
-} from './api/types';
-import { createRequestConfig, normalizeUrl } from './api/request-config';
-import { executeRequest } from './api/request-executor';
-import { retryRequest } from './api/retry-handler';
-import { handleLongRunningRequest } from './api/polling-handler';
-import {
-  assertStatusCode,
-  assertResponseData,
-  assertHasData,
-  assertHeader,
-  assertResponseTime
-} from './api/assertions';
+// src/framework/utils/proxy-manager.ts
+import { URL } from 'url';
+import { ConfigManager } from './config-manager';
+import { Logger } from './logger';
 
 /**
- * Base API client for all API interactions
- * Enhanced with asynchronous initialization, certificate handling, and retry logic
+ * Proxy configuration interface for axios
  */
-export class BaseApiClient {
-  readonly logger: Logger;
-  readonly config: ConfigManager;
-  readonly certManager: CertificateManager;
-  readonly proxyManager: ProxyManager;
-  
-  // Configuration properties
-  private apiBaseUrl: string = '';
-  private defaultTimeout: number = 30000;
-  private defaultHeaders: Record<string, string> = {};
-  private serviceName: string = 'default';
-  private defaultRetryOptions: DefaultRetryOptions = { maxAttempts: 3, retryDelay: 1000 };
-  private defaultPollingOptions: DefaultPollingOptions = {
-    enabled: false,
-    maxAttempts: 10,
-    interval: 2000,
-    timeoutPerAttempt: 10000
+export interface ProxyConfig {
+  host: string;
+  port: number;
+  protocol: 'http' | 'https';
+  auth?: {
+    username: string;
+    password: string;
   };
-  
-  // Initialization state
+}
+
+/**
+ * Proxy Manager for handling HTTP/HTTPS proxies
+ * Centralizes proxy configuration and management for API clients
+ */
+export class ProxyManager {
+  private static instance: ProxyManager;
+  private logger: Logger;
+  private config: ConfigManager;
+  private proxyConfigs: Map<string, ProxyConfig> = new Map();
   private initialized: boolean = false;
   private initPromise: Promise<void> | null = null;
 
   /**
-   * Constructor for the BaseApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   * @param defaultHeaders - Default headers to include in all requests
+   * Private constructor for singleton pattern
    */
-  constructor(
-    apiBaseUrl?: string,
-    defaultHeaders: Record<string, string> = {}
-  ) {
-    this.logger = new Logger(this.constructor.name);
+  private constructor() {
+    this.logger = new Logger('ProxyManager');
     this.config = ConfigManager.getInstance();
-    this.certManager = CertificateManager.getInstance();
-    this.proxyManager = ProxyManager.getInstance();
-    
-    // Store initial values (will be overridden during initialization)
-    if (apiBaseUrl) {
-      this.apiBaseUrl = apiBaseUrl;
-    }
-    
-    this.defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...defaultHeaders
-    };
   }
 
   /**
-   * Initialize the client asynchronously
-   * Loads configurations, certificates, and proxy settings
+   * Get singleton instance
+   * @returns ProxyManager instance
+   */
+  public static getInstance(): ProxyManager {
+    if (!ProxyManager.instance) {
+      ProxyManager.instance = new ProxyManager();
+    }
+    return ProxyManager.instance;
+  }
+
+  /**
+   * Initialize the proxy manager
+   * Loads proxy configurations from environment/config
    */
   public async init(): Promise<void> {
     if (this.initialized) {
@@ -88,55 +60,88 @@ export class BaseApiClient {
       return this.initPromise;
     }
 
-    this.initPromise = this.initializeClient();
+    this.initPromise = this.loadProxyConfigurations();
     await this.initPromise;
     this.initialized = true;
   }
 
   /**
-   * Initialize client with configuration, certificates, and proxy settings
+   * Load proxy configurations from configuration
    * @private
    */
-  private async initializeClient(): Promise<void> {
+  private async loadProxyConfigurations(): Promise<void> {
     try {
-      // Initialize config manager
+      // Ensure config is initialized
       await this.config.init();
-      
-      // Get API configuration from config manager
-      this.apiBaseUrl = await this.config.getString('API_BASE_URL', this.apiBaseUrl);
-      this.defaultTimeout = await this.config.getNumber('DEFAULT_TIMEOUT', this.defaultTimeout);
-      this.serviceName = await this.config.getString('SERVICE_NAME', this.serviceName);
-      
-      // Initialize retry options
-      this.defaultRetryOptions = {
-        maxAttempts: await this.config.getNumber('API_RETRY_ATTEMPTS', this.defaultRetryOptions.maxAttempts),
-        retryDelay: await this.config.getNumber('API_RETRY_DELAY', this.defaultRetryOptions.retryDelay)
-      };
-      
-      // Initialize polling options
-      this.defaultPollingOptions = {
-        enabled: await this.config.getBoolean('API_ENABLE_POLLING', this.defaultPollingOptions.enabled),
-        maxAttempts: await this.config.getNumber('API_POLLING_MAX_ATTEMPTS', this.defaultPollingOptions.maxAttempts),
-        interval: await this.config.getNumber('API_POLLING_INTERVAL', this.defaultPollingOptions.interval),
-        timeoutPerAttempt: await this.config.getNumber('API_POLLING_TIMEOUT_PER_ATTEMPT', this.defaultPollingOptions.timeoutPerAttempt)
-      };
-      
-      // Initialize certificate manager
-      await this.certManager.init();
-      
-      // Initialize proxy manager
-      await this.proxyManager.init();
-      
-      this.logger.info(`API client initialized for service: ${this.serviceName}`);
-      this.logger.debug(`Base URL: ${this.apiBaseUrl}`);
+
+      // Load default proxy if configured
+      const defaultProxyUrl = await this.config.getString('PROXY_URL', '');
+      if (defaultProxyUrl) {
+        try {
+          const proxyConfig = this.parseProxyUrl(defaultProxyUrl);
+          this.proxyConfigs.set('default', proxyConfig);
+          this.logger.info(`Loaded default proxy configuration: ${defaultProxyUrl}`);
+        } catch (error: any) {
+          this.logger.error(`Failed to parse default proxy URL: ${error.message}`);
+        }
+      }
+
+      // Check for service-specific proxies
+      // Format is SERVICE_PROXY_URL, e.g., ASSET_PROXY_URL, AUTH_PROXY_URL
+      const allConfig = await this.config.getAll();
+      for (const [key, value] of Object.entries(allConfig)) {
+        if (typeof value === 'string' && key.endsWith('_PROXY_URL') && value) {
+          const serviceName = key.replace('_PROXY_URL', '').toLowerCase();
+          try {
+            const proxyConfig = this.parseProxyUrl(value);
+            this.proxyConfigs.set(serviceName, proxyConfig);
+            this.logger.info(`Loaded ${serviceName} proxy configuration: ${value}`);
+          } catch (error: any) {
+            this.logger.error(`Failed to parse ${serviceName} proxy URL: ${error.message}`);
+          }
+        }
+      }
     } catch (error: any) {
-      this.logger.error(`Error initializing API client: ${error.message}`);
-      throw error;
+      this.logger.error(`Error initializing proxy manager: ${error.message}`);
     }
   }
 
   /**
-   * Ensure client is initialized before making requests
+   * Parse a proxy URL into a ProxyConfig object
+   * @param proxyUrl - URL string for proxy (e.g., "http://username:password@proxy.example.com:8080")
+   * @returns ProxyConfig object for axios
+   */
+  private parseProxyUrl(proxyUrl: string): ProxyConfig {
+    try {
+      // Ensure the URL has a protocol
+      const formattedProxyUrl = proxyUrl.startsWith('http') 
+        ? proxyUrl 
+        : `http://${proxyUrl}`;
+      
+      const parsedUrl = new URL(formattedProxyUrl);
+      
+      const proxyConfig: ProxyConfig = {
+        host: parsedUrl.hostname,
+        port: parseInt(parsedUrl.port || '80'),
+        protocol: (parsedUrl.protocol.replace(':', '') as 'http' | 'https')
+      };
+      
+      // Add authentication if present
+      if (parsedUrl.username && parsedUrl.password) {
+        proxyConfig.auth = {
+          username: parsedUrl.username,
+          password: parsedUrl.password
+        };
+      }
+      
+      return proxyConfig;
+    } catch (error: any) {
+      throw new Error(`Invalid proxy URL (${proxyUrl}): ${error.message}`);
+    }
+  }
+
+  /**
+   * Ensure proxy manager is initialized
    * @private
    */
   private async ensureInitialized(): Promise<void> {
@@ -146,324 +151,220 @@ export class BaseApiClient {
   }
 
   /**
-   * Make a GET request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Get proxy configuration for a specific service
+   * @param serviceName - Service name for service-specific proxy, or 'default' for default proxy
+   * @returns ProxyConfig object or null if not found
    */
-  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+  public async getProxyConfig(serviceName: string = 'default'): Promise<ProxyConfig | null> {
     await this.ensureInitialized();
     
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making GET request to: ${url}`);
+    const normalizedName = serviceName.toLowerCase();
     
-    const requestConfig = await createRequestConfig(
-      options,
-      this.defaultHeaders,
-      this.defaultTimeout,
-      this.serviceName,
-      this.logger
-    );
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('get', url, undefined, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
+    // Check if we already have this proxy configuration loaded
+    if (this.proxyConfigs.has(normalizedName)) {
+      return this.proxyConfigs.get(normalizedName) || null;
     }
     
-    return retryRequest<T>(
-      () => executeRequest('get', url, undefined, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
+    // If not found for the specific service, try loading it from config
+    const proxyUrl = await this.config.getString(`${normalizedName.toUpperCase()}_PROXY_URL`, '');
+    if (proxyUrl) {
+      try {
+        const proxyConfig = this.parseProxyUrl(proxyUrl);
+        this.proxyConfigs.set(normalizedName, proxyConfig);
+        this.logger.info(`Loaded ${normalizedName} proxy configuration from config: ${proxyUrl}`);
+        return proxyConfig;
+      } catch (error: any) {
+        this.logger.error(`Failed to parse ${normalizedName} proxy URL: ${error.message}`);
+      }
+    }
+    
+    // Try to fall back to default if a service-specific proxy wasn't found
+    if (normalizedName !== 'default' && this.proxyConfigs.has('default')) {
+      this.logger.warn(`No proxy found for ${normalizedName}, falling back to default proxy`);
+      return this.proxyConfigs.get('default') || null;
+    }
+    
+    return null;
   }
 
   /**
-   * Make a POST request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Check if a proxy should be used for a specific host
+   * @param host - Hostname to check
+   * @returns Whether the proxy should be used
    */
-  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+  public async shouldUseProxy(host: string): Promise<boolean> {
     await this.ensureInitialized();
     
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making POST request to: ${url}`);
+    // Get proxy exceptions (NO_PROXY environment variable)
+    const noProxyList = process.env.NO_PROXY || process.env.no_proxy || '';
+    const exceptions = noProxyList.split(',').map(item => item.trim());
     
-    const requestConfig = await createRequestConfig(
-      options,
-      this.defaultHeaders,
-      this.defaultTimeout,
-      this.serviceName,
-      this.logger
-    );
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('post', url, data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
+    // Don't use proxy for local addresses
+    if (
+      host === 'localhost' || 
+      host === '127.0.0.1' || 
+      host.startsWith('192.168.') ||
+      host.startsWith('10.') ||
+      host.startsWith('172.16.')
+    ) {
+      return false;
     }
     
-    return retryRequest<T>(
-      () => executeRequest('post', url, data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
+    // Check if the host matches any exception
+    for (const exception of exceptions) {
+      if (!exception) continue;
+      
+      // Check for wildcard match (e.g., *.example.com)
+      if (exception.startsWith('*.') && host.endsWith(exception.substring(1))) {
+        return false;
+      }
+      
+      // Check for exact match
+      if (exception === host) {
+        return false;
+      }
+      
+      // Check for domain match (e.g., example.com matches subdomain.example.com)
+      if (host.endsWith(`.${exception}`)) {
+        return false;
+      }
+    }
+    
+    // If we have any proxy configured, we should use it for this host
+    return this.proxyConfigs.size > 0;
   }
 
   /**
-   * Make a PUT request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Get the appropriate proxy configuration for a URL
+   * @param url - URL to get proxy for
+   * @param serviceName - Optional service name to use specific proxy
+   * @returns ProxyConfig object or null if proxy should not be used
    */
-  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+  public async getProxyForUrl(url: string, serviceName?: string): Promise<ProxyConfig | null> {
+    try {
+      const parsedUrl = new URL(url);
+      const host = parsedUrl.hostname;
+      
+      // Check if we should use a proxy for this host
+      const shouldUseProxy = await this.shouldUseProxy(host);
+      if (!shouldUseProxy) {
+        return null;
+      }
+      
+      // Get the appropriate proxy configuration
+      return await this.getProxyConfig(serviceName);
+    } catch (error: any) {
+      this.logger.error(`Error determining proxy for URL ${url}: ${error.message}`);
+      
+      // If URL parsing fails, fall back to default proxy
+      return serviceName 
+        ? await this.getProxyConfig(serviceName) 
+        : await this.getProxyConfig();
+    }
+  }
+
+  /**
+   * Add a new proxy configuration
+   * @param serviceName - Service name for the proxy
+   * @param proxyUrl - URL string for the proxy
+   * @returns Whether the proxy was added successfully
+   */
+  public async addProxy(serviceName: string, proxyUrl: string): Promise<boolean> {
+    try {
+      await this.ensureInitialized();
+      
+      const normalizedName = serviceName.toLowerCase();
+      const proxyConfig = this.parseProxyUrl(proxyUrl);
+      
+      this.proxyConfigs.set(normalizedName, proxyConfig);
+      this.logger.info(`Added proxy for ${normalizedName}: ${proxyUrl}`);
+      
+      return true;
+    } catch (error: any) {
+      this.logger.error(`Failed to add proxy for ${serviceName}: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Remove a proxy configuration
+   * @param serviceName - Service name for the proxy
+   * @returns Whether the proxy was removed
+   */
+  public async removeProxy(serviceName: string): Promise<boolean> {
     await this.ensureInitialized();
     
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making PUT request to: ${url}`);
+    const normalizedName = serviceName.toLowerCase();
     
-    const requestConfig = await createRequestConfig(
-      options,
-      this.defaultHeaders,
-      this.defaultTimeout,
-      this.serviceName,
-      this.logger
-    );
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('put', url, data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
+    if (this.proxyConfigs.has(normalizedName)) {
+      this.proxyConfigs.delete(normalizedName);
+      this.logger.info(`Removed proxy for ${normalizedName}`);
+      return true;
     }
     
-    return retryRequest<T>(
-      () => executeRequest('put', url, data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
+    return false;
   }
 
   /**
-   * Make a PATCH request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Check if there are any proxy configurations loaded
+   * @returns Whether there are any proxies configured
    */
-  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+  public async hasProxies(): Promise<boolean> {
     await this.ensureInitialized();
-    
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making PATCH request to: ${url}`);
-    
-    const requestConfig = await createRequestConfig(
-      options,
-      this.defaultHeaders,
-      this.defaultTimeout,
-      this.serviceName,
-      this.logger
-    );
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('patch', url, data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
-    }
-    
-    return retryRequest<T>(
-      () => executeRequest('patch', url, data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
+    return this.proxyConfigs.size > 0;
   }
 
   /**
-   * Make a DELETE request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Get all available proxy services
+   * @returns Array of service names
    */
-  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+  public async getAvailableProxyServices(): Promise<string[]> {
     await this.ensureInitialized();
-    
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making DELETE request to: ${url}`);
-    
-    const requestConfig = await createRequestConfig(
-      options,
-      this.defaultHeaders,
-      this.defaultTimeout,
-      this.serviceName,
-      this.logger
-    );
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('delete', url, options?.data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
-    }
-    
-    return retryRequest<T>(
-      () => executeRequest('delete', url, options?.data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
+    return Array.from(this.proxyConfigs.keys());
   }
 
   /**
-   * Assert API response status code
-   * @param response - Axios response
-   * @param expectedStatus - Expected status code
+   * Test if a proxy is working
+   * @param serviceName - Service name for the proxy
+   * @returns Whether the proxy is working
    */
-  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
-    assertStatusCode(response, expectedStatus, this.logger);
-  }
-
-  /**
-   * Assert API response contains specific data
-   * @param response - Axios response
-   * @param expectedData - Data to check for
-   */
-  assertResponseData(response: AxiosResponse, expectedData: any): void {
-    assertResponseData(response, expectedData, this.logger);
-  }
-
-  /**
-   * Assert response has data
-   * @param response - Axios response
-   */
-  assertHasData(response: AxiosResponse): void {
-    assertHasData(response, this.logger);
-  }
-
-  /**
-   * Assert response header has a specific value
-   * @param response - Axios response
-   * @param headerName - Header name
-   * @param expectedValue - Expected header value
-   */
-  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
-    assertHeader(response, headerName, expectedValue, this.logger);
-  }
-
-  /**
-   * Assert response time is within acceptable limits
-   * @param response - Axios response
-   * @param maxTime - Maximum acceptable response time in ms
-   */
-  assertResponseTime(response: AxiosResponse, maxTime: number): void {
-    assertResponseTime(response, maxTime, this.logger);
-  }
-
-  /**
-   * Get authentication token (to be implemented by derived classes)
-   * @returns Promise<string> - Authentication token
-   */
-  async getAuthToken(): Promise<string> {
-    throw new Error('getAuthToken() method must be implemented by derived API client classes');
-  }
-
-  /**
-   * Create auth header with token
-   * @param token - Authentication token
-   * @returns Record<string, string> - Headers with authentication
-   */
-  createAuthHeader(token: string): Record<string, string> {
-    return { 'Authorization': `Bearer ${token}` };
-  }
-
-  /**
-   * Attempt to resolve a hostname
-   * @param hostname - Hostname to resolve
-   * @returns Promise<string> - Resolved IP address
-   */
-  async resolveHostname(hostname: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const dns = require('dns');
-      dns.lookup(hostname, (err: Error | null, address: string) => {
-        if (err) {
-          this.logger.error(`Failed to resolve hostname ${hostname}: ${err.message}`);
-          reject(err);
-        } else {
-          this.logger.info(`Resolved ${hostname} to ${address}`);
-          resolve(address);
-        }
+  public async testProxy(serviceName: string = 'default'): Promise<boolean> {
+    try {
+      const axios = require('axios');
+      
+      const proxyConfig = await this.getProxyConfig(serviceName);
+      if (!proxyConfig) {
+        this.logger.error(`No proxy configuration found for ${serviceName}`);
+        return false;
+      }
+      
+      const testUrl = 'https://httpbin.org/ip';
+      
+      const response = await axios.get(testUrl, {
+        proxy: {
+          host: proxyConfig.host,
+          port: proxyConfig.port,
+          protocol: proxyConfig.protocol,
+          auth: proxyConfig.auth
+        },
+        timeout: 5000
       });
-    });
+      
+      this.logger.info(`Proxy test for ${serviceName} successful`);
+      return response.status === 200;
+    } catch (error: any) {
+      this.logger.error(`Proxy test for ${serviceName} failed: ${error.message}`);
+      return false;
+    }
   }
 
   /**
-   * Update default headers
-   * @param headers - Headers to update
+   * Reset all proxy configurations
+   * Useful for testing
    */
-  updateDefaultHeaders(headers: Record<string, string>): void {
-    this.defaultHeaders = {
-      ...this.defaultHeaders,
-      ...headers
-    };
-    this.logger.debug(`Updated default headers: ${JSON.stringify(this.defaultHeaders)}`);
-  }
-
-  /**
-   * Set a specific default header
-   * @param name - Header name
-   * @param value - Header value
-   */
-  setDefaultHeader(name: string, value: string): void {
-    this.defaultHeaders[name] = value;
-    this.logger.debug(`Set default header ${name}: ${value}`);
-  }
-
-  /**
-   * Get client configuration
-   * @returns ApiClientConfig - Current client configuration
-   */
-  getConfig(): ApiClientConfig {
-    return {
-      baseUrl: this.apiBaseUrl,
-      timeout: this.defaultTimeout,
-      headers: { ...this.defaultHeaders },
-      serviceName: this.serviceName,
-      retryOptions: { ...this.defaultRetryOptions },
-      pollingOptions: { ...this.defaultPollingOptions }
-    };
+  public async reset(): Promise<void> {
+    this.proxyConfigs.clear();
+    this.initialized = false;
+    this.initPromise = null;
   }
 }
-
-// Re-export all types and utilities for easier importing
-export * from './api/types';
-export * from './api/request-config';
-export * from './api/assertions';
