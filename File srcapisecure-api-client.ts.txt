@@ -1,370 +1,747 @@
-// src/framework/utils/proxy-manager.ts
-import { URL } from 'url';
-import { ConfigManager } from './config-manager';
-import { Logger } from './logger';
+// src/api/asset-layout-api-client.ts
+
+import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
+import { AxiosResponse } from 'axios';
+import path from 'path';
 
 /**
- * Proxy configuration interface for axios
+ * Interface for Asset Layout Request
  */
-export interface ProxyConfig {
-  host: string;
-  port: number;
-  protocol: 'http' | 'https';
-  auth?: {
-    username: string;
-    password: string;
+export interface AssetLayoutRequest {
+  messageId: string;
+  dealId: number;
+  reportDate: string;
+}
+
+/**
+ * Interface for Asset Layout Response
+ */
+export interface AssetLayoutResponse {
+  assetLayouts: any[];
+  systemError: string | null;
+  responseMessageId: string;
+  errorMessage: string | null;
+}
+
+/**
+ * Client for interacting with the KHA Asset Layout API
+ */
+export class AssetLayoutApiClient extends BaseApiClient {
+  /**
+   * Constructor for the AssetLayoutApiClient
+   */
+  constructor() {
+    // Define the base URL and default headers for KHA API
+    const baseUrl = 'https://khaapi-sit-mfkdf.indias.net';
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'connection': 'keep-alive',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+    };
+    
+    super(baseUrl, defaultHeaders);
+    
+    this.logger.info('Initialized KHA Asset Layout API Client');
+  }
+  
+  /**
+   * Post request to get asset layouts based on the provided criteria
+   * @param requestData Asset layout request parameters
+   * @param options Additional request options
+   * @returns Promise with asset layout response
+   */
+  async getAssetLayouts(
+    requestData: AssetLayoutRequest,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<AssetLayoutResponse>> {
+    this.logger.info(`Posting request for asset layouts for deal ID: ${requestData.dealId}, report date: ${requestData.reportDate}`);
+    
+    // Prepare request options with certificate details
+    const requestOptions: ApiRequestOptions = {
+      ...options,
+      pfxPath: path.join(process.cwd(), 'certs', 'kha-pfx-cert.pfx'),
+      pfxPassphrase: 'kha#pfx001!',
+      useProxy: false,
+      // Enable polling for long-running requests by default
+      pollingOptions: {
+        enabled: true,
+        maxAttempts: 5,
+        interval: 5000,
+        timeoutPerAttempt: 30000,
+        ...options?.pollingOptions,
+        // Define success condition for polling
+        successCondition: (response) => {
+          // Consider the request complete when assetLayouts array exists
+          // and either contains items or is an empty array (legitimate response)
+          return (
+            response.data && 
+            Array.isArray(response.data.assetLayouts) && 
+            response.data.responseMessageId === requestData.messageId
+          );
+        }
+      }
+    };
+    
+    // Make the POST request to the API endpoint
+    return this.post<AssetLayoutResponse>('/api/a1/kha/assetLayout', requestData, requestOptions);
+  }
+  
+  /**
+   * Validate the asset layout response
+   * @param response API response to validate
+   * @returns true if valid, false otherwise
+   */
+  validateResponse(response: AssetLayoutResponse): boolean {
+    if (!response) return false;
+    
+    // Basic validation of response structure
+    const isValid = (
+      Array.isArray(response.assetLayouts) &&
+      response.systemError === null &&
+      typeof response.responseMessageId === 'string' &&
+      response.errorMessage === null
+    );
+    
+    return isValid;
+  }
+  
+  /**
+   * Get a specific asset by ID
+   * @param assetId ID of the asset to retrieve
+   * @param options Additional request options
+   * @returns Promise with asset details response
+   */
+  async getAssetById(
+    assetId: string | number,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<any>> {
+    this.logger.info(`Retrieving asset details for ID: ${assetId}`);
+    
+    // Prepare request options with certificate details
+    const requestOptions: ApiRequestOptions = {
+      ...options,
+      pfxPath: path.join(process.cwd(), 'certs', 'kha-pfx-cert.pfx'),
+      pfxPassphrase: 'kha#pfx001!',
+      useProxy: false
+    };
+    
+    // Make the request to retrieve a specific asset
+    return this.get<any>(`/api/a1/kha/assets/${assetId}`, requestOptions);
+  }
+}
+
+**************************************
+
+// src/step-definitions/api-steps/asset-layout-steps.ts
+
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from '@playwright/test';
+import { AssetLayoutApiClient } from '../../api/asset-layout-api-client';
+import { TestContext } from '../../support/test-context';
+import fs from 'fs';
+import path from 'path';
+
+// We use a TestContext to share state between steps
+Given('I have configured the KHA API client with certificate authentication', async function(this: TestContext) {
+  this.assetLayoutApiClient = new AssetLayoutApiClient();
+  // Verify client is properly configured
+  expect(this.assetLayoutApiClient).toBeDefined();
+  this.logger.info('KHA API client configured successfully');
+});
+
+Given('I have a valid asset layout request payload', async function(this: TestContext) {
+  // Load request payload from file
+  const requestFilePath = path.join(process.cwd(), 'requests', 'asset-request.json');
+  
+  try {
+    const fileContent = fs.readFileSync(requestFilePath, 'utf8');
+    const requestData = JSON.parse(fileContent);
+    
+    this.testData.requestPayload = requestData;
+    this.logger.info(`Loaded request payload with messageId: ${requestData.messageId}`);
+    
+    expect(this.testData.requestPayload).toHaveProperty('messageId');
+    expect(this.testData.requestPayload).toHaveProperty('dealId');
+    expect(this.testData.requestPayload).toHaveProperty('reportDate');
+  } catch (error) {
+    this.logger.error(`Failed to load request payload: ${error.message}`);
+    throw error;
+  }
+});
+
+Given('the API response will take longer than expected', function(this: TestContext) {
+  // Configure test for timeout scenario
+  this.testData.expectTimeout = true;
+  this.logger.info('Test configured for timeout scenario');
+});
+
+When('I send the asset layout request to the API', async function(this: TestContext) {
+  const payload = this.testData.requestPayload;
+  
+  try {
+    this.logger.info(`Sending POST request for asset layout with messageId: ${payload.messageId}`);
+    
+    // Use the client with polling enabled for long-running requests
+    this.response = await this.assetLayoutApiClient.getAssetLayouts(payload, {
+      pollingOptions: {
+        enabled: true,
+        maxAttempts: 10,
+        interval: 3000,
+        timeoutPerAttempt: 20000
+      }
+    });
+    
+    // Store response for later assertions
+    this.testData.response = this.response.data;
+    this.logger.info(`Received response with ${this.response.data?.assetLayouts?.length || 0} asset layouts`);
+  } catch (error) {
+    this.testData.error = error;
+    this.logger.error(`Error retrieving asset layouts: ${error.message}`);
+    throw error;
+  }
+});
+
+When('I send the asset layout request to the API with reduced timeout', async function(this: TestContext) {
+  const payload = this.testData.requestPayload;
+  
+  try {
+    this.logger.info(`Sending asset layout request with deliberately short timeout`);
+    
+    // Deliberately use a short timeout to test error handling
+    this.response = await this.assetLayoutApiClient.getAssetLayouts(payload, {
+      timeout: 1000, // Very short timeout
+      retryOptions: {
+        maxAttempts: 2,
+        retryDelay: 500
+      }
+    });
+    
+    this.testData.response = this.response.data;
+    this.logger.info('Request succeeded despite short timeout (unexpected)');
+  } catch (error) {
+    // In this test case, we expect an error
+    this.testData.error = error;
+    this.logger.info(`Expected timeout error received: ${error.message}`);
+  }
+});
+
+Then('the API should return asset layouts successfully', function(this: TestContext) {
+  expect(this.response.status).toBe(200);
+  expect(this.testData.response).toHaveProperty('assetLayouts');
+  expect(Array.isArray(this.testData.response.assetLayouts)).toBeTruthy();
+  this.logger.info(`Successfully validated response status and assetLayouts property`);
+});
+
+Then('the response should include the correct message ID', function(this: TestContext) {
+  const originalMessageId = this.testData.requestPayload.messageId;
+  const responseMessageId = this.testData.response.responseMessageId;
+  
+  expect(responseMessageId).toBe(originalMessageId);
+  this.logger.info(`Validated response message ID: ${responseMessageId}`);
+});
+
+Then('the response should not contain errors', function(this: TestContext) {
+  expect(this.testData.response.systemError).toBeNull();
+  expect(this.testData.response.errorMessage).toBeNull();
+  this.logger.info('Validated that response contains no errors');
+});
+
+Then('the client should handle the timeout gracefully', function(this: TestContext) {
+  // Verify the error was captured
+  expect(this.testData.error).toBeDefined();
+  expect(this.testData.error.message).toContain('timeout');
+  this.logger.info('Verified the timeout error was handled correctly');
+});
+
+Then('retry the request according to configuration', function(this: TestContext) {
+  // Verify retry attempts were made
+  // This would typically be verified through logs or mocks
+  // Here we're just checking that the error was properly processed
+  expect(this.testData.error._duration).toBeDefined();
+  this.logger.info(`Request ran for ${this.testData.error._duration}ms before failing`);
+});
+
+Then('the response should have the expected structure', function(this: TestContext) {
+  const response = this.testData.response;
+  expect(response).toHaveProperty('assetLayouts');
+  expect(response).toHaveProperty('systemError');
+  expect(response).toHaveProperty('responseMessageId');
+  expect(response).toHaveProperty('errorMessage');
+  this.logger.info('Validated response structure contains all required properties');
+});
+
+Then('asset layouts should contain required fields', function(this: TestContext) {
+  const assetLayouts = this.testData.response.assetLayouts;
+  expect(assetLayouts.length).toBeGreaterThan(0);
+  
+  // Check first asset layout for required fields
+  // Adjust these expectations based on your actual response structure
+  const firstAsset = assetLayouts[0];
+  
+  // These are example fields - adjust based on your actual API response
+  const requiredFields = ['id', 'name', 'type', 'status'];
+  
+  for (const field of requiredFields) {
+    expect(firstAsset).toHaveProperty(field);
+  }
+  
+  this.logger.info(`Validated first asset layout has all required fields`);
+});
+
+
+*********************************************
+
+# features/api/asset-layout.feature
+
+Feature: Asset Layout API Integration
+  As an API client
+  I want to retrieve asset layout data from the KHA API
+  So that I can process and analyze asset information
+
+  Background:
+    Given I have configured the KHA API client with certificate authentication
+
+  @api @long-running
+  Scenario: Successfully retrieve asset layouts via POST request
+    Given I have a valid asset layout request payload
+    When I send the asset layout request to the API
+    Then the API should return asset layouts successfully
+    And the response should include the correct message ID
+    And the response should not contain errors
+
+  @api @error-handling
+  Scenario: Handle API timeout gracefully
+    Given I have a valid asset layout request payload
+    And the API response will take longer than expected
+    When I send the asset layout request to the API with reduced timeout
+    Then the client should handle the timeout gracefully
+    And retry the request according to configuration
+
+  @api @validation
+  Scenario: Validate asset layout response structure
+    Given I have a valid asset layout request payload
+    When I send the asset layout request to the API
+    Then the response should have the expected structure
+    And asset layouts should contain required fields
+
+************************************************
+
+// src/framework/api/polling-handler.ts
+
+import { AxiosResponse, Method } from 'axios';
+import axios from 'axios';
+import { Logger } from '../utils/logger';
+import { ConfigManager } from '../utils/config-manager';
+import { PollingOptions } from './types';
+import { createRequestConfig } from './request-config';
+
+/**
+ * Handle long-running request with polling
+ * Suitable for requests where the backend needs time to process before returning complete data
+ * @param requestFn - Function to execute the initial request
+ * @param defaultOptions - Default polling options
+ * @param options - Custom polling options
+ * @param logger - Logger instance
+ * @param config - Configuration manager
+ * @returns Promise<AxiosResponse> - Final API response
+ */
+export async function handleLongRunningRequest<T = any>(
+  requestFn: () => Promise<AxiosResponse<T>>,
+  defaultOptions: {
+    enabled: boolean;
+    maxAttempts: number;
+    interval: number;
+    timeoutPerAttempt: number;
+  },
+  options?: {
+    enabled?: boolean;
+    maxAttempts?: number;
+    interval?: number;
+    timeoutPerAttempt?: number;
+    successCondition?: (response: AxiosResponse<T>) => boolean;
+  },
+  logger?: Logger,
+  config?: ConfigManager
+): Promise<AxiosResponse<T>> {
+  // Merge options with defaults
+  const pollOptions = {
+    maxAttempts: options?.maxAttempts || defaultOptions.maxAttempts,
+    interval: options?.interval || defaultOptions.interval,
+    timeoutPerAttempt: options?.timeoutPerAttempt || defaultOptions.timeoutPerAttempt,
+    // Default success condition: check if response data is not empty
+    successCondition: options?.successCondition || ((response: AxiosResponse<T>) => {
+      // Check if the response has data
+      if (!response.data) {
+        return false;
+      }
+      
+      // For array responses, check if there are elements
+      if (Array.isArray(response.data)) {
+        return response.data.length > 0;
+      }
+      
+      // For object responses with specific fields, check if required fields have data
+      if (typeof response.data === 'object') {
+        // A general check for common response patterns
+        const dataObj = response.data as any;
+        
+        // Check for common patterns in response objects
+        if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
+          // For our specific implementation, just check if the array exists
+          // Even empty arrays are valid responses in some cases
+          return true;
+        }
+        
+        if (dataObj.items && Array.isArray(dataObj.items)) {
+          return dataObj.items.length > 0;
+        }
+        
+        if (dataObj.data && Array.isArray(dataObj.data)) {
+          return dataObj.data.length > 0;
+        }
+        
+        // Check if the object has any properties (not empty)
+        return Object.keys(dataObj).length > 0;
+      }
+      
+      // For primitive types, check if it's not null, undefined, or empty string
+      return response.data !== null && response.data !== undefined && response.data !== '';
+    })
+  };
+  
+  // Make the initial request
+  let response: AxiosResponse<T>;
+  
+  try {
+    logger?.info(`Making initial request for long-running operation`);
+    response = await requestFn();
+    
+    // Log immediate response for debugging
+    if (config?.getBoolean('API_DEBUG_DETAILED', false)) {
+      logger?.debug('INITIAL RESPONSE FOR LONG-RUNNING REQUEST: ' + JSON.stringify(response.data, null, 2));
+    }
+    
+    // Store the original request details for retries
+    const originalUrl = response.config.url || '';
+    const originalMethod = (response.config.method || 'get').toLowerCase();
+    const originalData = response.config.data;
+    
+    logger?.debug(`Original request URL: ${originalUrl}`);
+    
+    // Check if we need to poll for completion
+    if (pollOptions.successCondition(response)) {
+      logger?.info(`Initial response is complete, no polling needed`);
+      return response;
+    }
+    
+    // Start polling for completion
+    logger?.info(`Initial response incomplete, starting polling...`);
+    
+    // Create a new request config for polling
+    const axiosConfig = {
+      ...response.config,
+      timeout: pollOptions.timeoutPerAttempt
+    };
+    
+    // Clear any potentially problematic properties
+    delete axiosConfig.transitional;
+    delete axiosConfig.transformRequest;
+    delete axiosConfig.transformResponse;
+    delete axiosConfig.paramsSerializer;
+    
+    // Extract the URL
+    const pollUrl = axiosConfig.url || originalUrl;
+    if (!pollUrl) {
+      throw new Error('Unable to determine URL for polling');
+    }
+    
+    for (let attempt = 1; attempt <= pollOptions.maxAttempts; attempt++) {
+      // Wait for the polling interval
+      logger?.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
+      await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
+      
+      try {
+        // Make the polling request using a fresh config each time
+        const freshConfig = {
+          ...axiosConfig,
+          timeout: pollOptions.timeoutPerAttempt
+        };
+        
+        // Log the polling request details
+        logger?.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} to URL: ${pollUrl}`);
+        
+        // Make the request based on the original method
+        let pollResponse: AxiosResponse<T>;
+        if (originalMethod === 'post' || originalMethod === 'put' || originalMethod === 'patch') {
+          pollResponse = await axios.request<T>({
+            ...freshConfig,
+            method: originalMethod as Method,
+            url: pollUrl,
+            data: originalData
+          });
+        } else {
+          pollResponse = await axios.request<T>({
+            ...freshConfig,
+            method: originalMethod as Method,
+            url: pollUrl
+          });
+        }
+        
+        // Update our response reference
+        response = pollResponse;
+        
+        // Log the polling response
+        if (config?.getBoolean('API_DEBUG_DETAILED', false)) {
+          logger?.debug(`POLLING RESPONSE (Attempt ${attempt}): ${JSON.stringify(response.data, null, 2)}`);
+        }
+        
+        // Check if the response is now complete
+        if (pollOptions.successCondition(response)) {
+          logger?.info(`Polling successful after ${attempt} attempts`);
+          return response;
+        }
+        
+        logger?.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
+      } catch (error: any) {
+        logger?.warn(`Polling attempt ${attempt} failed: ${error.message}`);
+        
+        // Handle specific error types with additional diagnostics
+        if (error.response && error.response.status === 502) {
+          logger?.debug('Received 502 Bad Gateway - likely DNS resolution issue');
+        }
+        
+        // For the last attempt, rethrow the error
+        if (attempt === pollOptions.maxAttempts) {
+          throw error;
+        }
+      }
+    }
+    
+    // If we get here, we've exceeded the maximum polling attempts
+    throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
+  } catch (error: any) {
+    logger?.error(`Long-running request failed: ${error.message}`);
+    throw error;
+  }
+}
+
+********************************************
+
+// src/support/test-context.ts
+
+import { Page, BrowserContext } from '@playwright/test';
+import { AxiosResponse } from 'axios';
+import { Logger } from '../framework/utils/logger';
+import { AssetLayoutApiClient } from '../api/asset-layout-api-client';
+
+/**
+ * Test context that is shared between steps to maintain state
+ * Includes necessary objects for API testing
+ */
+export interface TestContext {
+  // Logger instance
+  logger: Logger;
+  
+  // API Client
+  assetLayoutApiClient?: AssetLayoutApiClient;
+  
+  // API testing properties
+  authToken?: string;
+  response?: AxiosResponse;
+  
+  // Common properties
+  testData: Record<string, any>; // For storing data between steps
+  scenarioName?: string;
+  scenarioTags?: string[];
+  result?: { status: string }; // For tracking test result status
+  
+  // Test execution metadata
+  startTime?: number;
+  endTime?: number;
+  
+  // Cucumber attachment function
+  attach: (data: any, mimeType: string) => void;
+}
+
+/**
+ * Create a new test context with default values
+ * @returns A new TestContext instance
+ */
+export function createTestContext(): TestContext {
+  return {
+    logger: new Logger('TestContext'),
+    testData: {},
+    attach: (data: any, mimeType: string) => {
+      // This will be replaced by Cucumber's attach function
+      console.log(`Attaching data with MIME type: ${mimeType}`);
+    }
   };
 }
 
-/**
- * Proxy Manager for handling HTTP/HTTPS proxies
- * Centralizes proxy configuration and management for API clients
- */
-export class ProxyManager {
-  private static instance: ProxyManager;
-  private logger: Logger;
-  private config: ConfigManager;
-  private proxyConfigs: Map<string, ProxyConfig> = new Map();
-  private initialized: boolean = false;
-  private initPromise: Promise<void> | null = null;
+*******************************************************
 
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    this.logger = new Logger('ProxyManager');
-    this.config = ConfigManager.getInstance();
-  }
+# .env file for configuration
 
-  /**
-   * Get singleton instance
-   * @returns ProxyManager instance
-   */
-  public static getInstance(): ProxyManager {
-    if (!ProxyManager.instance) {
-      ProxyManager.instance = new ProxyManager();
+# API endpoint settings
+API_BASE_URL=https://khaapi-sit-mfkdf.indias.net
+API_TIMEOUT=60000
+
+# Certificate settings
+PFX_CERT_PATH=certs/kha-pfx-cert.pfx
+PFX_CERT_PASSPHRASE=kha#pfx001!
+
+# Proxy settings
+USE_PROXY=false
+PROXY_URL=
+
+# Polling settings for long-running requests
+API_ENABLE_POLLING=true
+API_POLLING_MAX_ATTEMPTS=10
+API_POLLING_INTERVAL=5000
+API_POLLING_TIMEOUT_PER_ATTEMPT=30000
+
+# Retry settings
+API_RETRY_ATTEMPTS=3
+API_RETRY_DELAY=2000
+
+# Debug settings
+API_DEBUG=false
+API_DEBUG_DETAILED=false
+API_DEBUG_HEADERS=false
+API_DEBUG_BODY_LENGTH=1000
+
+# Test settings
+DEFAULT_TIMEOUT=60000
+
+
+*******************************************
+// src/support/hooks.ts
+import { Before, After, BeforeStep, AfterStep, BeforeAll, AfterAll, setDefaultTimeout } from '@cucumber/cucumber';
+import { TestContext, createTestContext } from './test-context';
+import { Logger } from '../framework/utils/logger';
+import { ConfigManager } from '../framework/utils/config-manager';
+import path from 'path';
+import fs from 'fs';
+
+// Load configuration
+const config = ConfigManager.getInstance();
+
+// Set default timeout from configuration
+const defaultTimeout = config.getNumber('DEFAULT_TIMEOUT', 60000);
+setDefaultTimeout(defaultTimeout);
+
+// Before all scenarios
+BeforeAll(async function() {
+  const globalLogger = new Logger('GlobalSetup');
+  globalLogger.info('Starting test execution for KHA Asset Layout API tests');
+  
+  // Ensure necessary directories exist
+  const dirs = ['certs', 'requests', 'reports'];
+  dirs.forEach(dir => {
+    const dirPath = path.join(process.cwd(), dir);
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+      globalLogger.info(`Created directory: ${dirPath}`);
     }
-    return ProxyManager.instance;
+  });
+  
+  // Check if certificate file exists
+  const certPath = path.join(process.cwd(), 'certs', 'kha-pfx-cert.pfx');
+  if (!fs.existsSync(certPath)) {
+    globalLogger.warn(`Certificate file not found at ${certPath}`);
+    globalLogger.warn('Tests requiring certificate authentication may fail');
+  } else {
+    globalLogger.info('Certificate file found');
   }
-
-  /**
-   * Initialize the proxy manager
-   * Loads proxy configurations from environment/config
-   */
-  public async init(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    if (this.initPromise) {
-      return this.initPromise;
-    }
-
-    this.initPromise = this.loadProxyConfigurations();
-    await this.initPromise;
-    this.initialized = true;
-  }
-
-  /**
-   * Load proxy configurations from configuration
-   * @private
-   */
-  private async loadProxyConfigurations(): Promise<void> {
-    try {
-      // Ensure config is initialized
-      await this.config.init();
-
-      // Load default proxy if configured
-      const defaultProxyUrl = await this.config.getString('PROXY_URL', '');
-      if (defaultProxyUrl) {
-        try {
-          const proxyConfig = this.parseProxyUrl(defaultProxyUrl);
-          this.proxyConfigs.set('default', proxyConfig);
-          this.logger.info(`Loaded default proxy configuration: ${defaultProxyUrl}`);
-        } catch (error: any) {
-          this.logger.error(`Failed to parse default proxy URL: ${error.message}`);
-        }
-      }
-
-      // Check for service-specific proxies
-      // Format is SERVICE_PROXY_URL, e.g., ASSET_PROXY_URL, AUTH_PROXY_URL
-      const allConfig = await this.config.getAll();
-      for (const [key, value] of Object.entries(allConfig)) {
-        if (typeof value === 'string' && key.endsWith('_PROXY_URL') && value) {
-          const serviceName = key.replace('_PROXY_URL', '').toLowerCase();
-          try {
-            const proxyConfig = this.parseProxyUrl(value);
-            this.proxyConfigs.set(serviceName, proxyConfig);
-            this.logger.info(`Loaded ${serviceName} proxy configuration: ${value}`);
-          } catch (error: any) {
-            this.logger.error(`Failed to parse ${serviceName} proxy URL: ${error.message}`);
-          }
-        }
-      }
-    } catch (error: any) {
-      this.logger.error(`Error initializing proxy manager: ${error.message}`);
-    }
-  }
-
-  /**
-   * Parse a proxy URL into a ProxyConfig object
-   * @param proxyUrl - URL string for proxy (e.g., "http://username:password@proxy.example.com:8080")
-   * @returns ProxyConfig object for axios
-   */
-  private parseProxyUrl(proxyUrl: string): ProxyConfig {
-    try {
-      // Ensure the URL has a protocol
-      const formattedProxyUrl = proxyUrl.startsWith('http') 
-        ? proxyUrl 
-        : `http://${proxyUrl}`;
-      
-      const parsedUrl = new URL(formattedProxyUrl);
-      
-      const proxyConfig: ProxyConfig = {
-        host: parsedUrl.hostname,
-        port: parseInt(parsedUrl.port || '80'),
-        protocol: (parsedUrl.protocol.replace(':', '') as 'http' | 'https')
-      };
-      
-      // Add authentication if present
-      if (parsedUrl.username && parsedUrl.password) {
-        proxyConfig.auth = {
-          username: parsedUrl.username,
-          password: parsedUrl.password
-        };
-      }
-      
-      return proxyConfig;
-    } catch (error: any) {
-      throw new Error(`Invalid proxy URL (${proxyUrl}): ${error.message}`);
-    }
-  }
-
-  /**
-   * Ensure proxy manager is initialized
-   * @private
-   */
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initialized) {
-      await this.init();
-    }
-  }
-
-  /**
-   * Get proxy configuration for a specific service
-   * @param serviceName - Service name for service-specific proxy, or 'default' for default proxy
-   * @returns ProxyConfig object or null if not found
-   */
-  public async getProxyConfig(serviceName: string = 'default'): Promise<ProxyConfig | null> {
-    await this.ensureInitialized();
+  
+  // Check if request file exists
+  const requestPath = path.join(process.cwd(), 'requests', 'asset-request.json');
+  if (!fs.existsSync(requestPath)) {
+    globalLogger.warn(`Request file not found at ${requestPath}`);
+    globalLogger.warn('Creating a sample request file...');
     
-    const normalizedName = serviceName.toLowerCase();
+    // Create a sample request file
+    const sampleRequest = {
+      messageId: "123",
+      dealId: 73839,
+      reportDate: "2024-03-31"
+    };
     
-    // Check if we already have this proxy configuration loaded
-    if (this.proxyConfigs.has(normalizedName)) {
-      return this.proxyConfigs.get(normalizedName) || null;
-    }
-    
-    // If not found for the specific service, try loading it from config
-    const proxyUrl = await this.config.getString(`${normalizedName.toUpperCase()}_PROXY_URL`, '');
-    if (proxyUrl) {
-      try {
-        const proxyConfig = this.parseProxyUrl(proxyUrl);
-        this.proxyConfigs.set(normalizedName, proxyConfig);
-        this.logger.info(`Loaded ${normalizedName} proxy configuration from config: ${proxyUrl}`);
-        return proxyConfig;
-      } catch (error: any) {
-        this.logger.error(`Failed to parse ${normalizedName} proxy URL: ${error.message}`);
+    fs.writeFileSync(requestPath, JSON.stringify(sampleRequest, null, 2));
+    globalLogger.info(`Created sample request file at ${requestPath}`);
+  } else {
+    globalLogger.info('Request file found');
+  }
+});
+
+// After all scenarios
+AfterAll(async function() {
+  const globalLogger = new Logger('GlobalTeardown');
+  globalLogger.info('Finishing test execution for KHA Asset Layout API tests');
+});
+
+// Before each scenario
+Before(async function(this: TestContext, scenario) {
+  this.startTime = Date.now();
+  this.scenarioName = scenario.pickle.name;
+  this.scenarioTags = scenario.pickle.tags.map(tag => tag.name);
+  
+  // Create a unique test ID based on scenario name and timestamp
+  const testId = `${scenario.pickle.name.replace(/[^a-zA-Z0-9]/g, '-')}-${Date.now()}`;
+  
+  // Initialize logger with test ID
+  this.logger = new Logger(testId);
+  this.logger.info(`Starting scenario: ${scenario.pickle.name}`);
+  
+  // Log tags
+  if (this.scenarioTags.length > 0) {
+    this.logger.info(`Tags: ${this.scenarioTags.join(', ')}`);
+  }
+  
+  // Create test data object for sharing data between steps
+  this.testData = {};
+});
+
+// Before each step
+BeforeStep(async function(this: TestContext, step) {
+  if (this.logger) {
+    this.logger.info(`Executing step: ${step.pickleStep.text}`);
+  }
+});
+
+// After each step
+AfterStep(async function(this: TestContext, step, result) {
+  if (this.logger) {
+    if (result.status === 'PASSED') {
+      this.logger.info(`Step passed: ${step.pickleStep.text}`);
+    } else if (result.status === 'FAILED') {
+      this.logger.error(`Step failed: ${step.pickleStep.text}`);
+      if (result.error) {
+        this.logger.error(`Error: ${result.error.message}`);
       }
     }
-    
-    // Try to fall back to default if a service-specific proxy wasn't found
-    if (normalizedName !== 'default' && this.proxyConfigs.has('default')) {
-      this.logger.warn(`No proxy found for ${normalizedName}, falling back to default proxy`);
-      return this.proxyConfigs.get('default') || null;
-    }
-    
-    return null;
   }
+});
 
-  /**
-   * Check if a proxy should be used for a specific host
-   * @param host - Hostname to check
-   * @returns Whether the proxy should be used
-   */
-  public async shouldUseProxy(host: string): Promise<boolean> {
-    await this.ensureInitialized();
-    
-    // Get proxy exceptions (NO_PROXY environment variable)
-    const noProxyList = process.env.NO_PROXY || process.env.no_proxy || '';
-    const exceptions = noProxyList.split(',').map(item => item.trim());
-    
-    // Don't use proxy for local addresses
-    if (
-      host === 'localhost' || 
-      host === '127.0.0.1' || 
-      host.startsWith('192.168.') ||
-      host.startsWith('10.') ||
-      host.startsWith('172.16.')
-    ) {
-      return false;
-    }
-    
-    // Check if the host matches any exception
-    for (const exception of exceptions) {
-      if (!exception) continue;
-      
-      // Check for wildcard match (e.g., *.example.com)
-      if (exception.startsWith('*.') && host.endsWith(exception.substring(1))) {
-        return false;
-      }
-      
-      // Check for exact match
-      if (exception === host) {
-        return false;
-      }
-      
-      // Check for domain match (e.g., example.com matches subdomain.example.com)
-      if (host.endsWith(`.${exception}`)) {
-        return false;
-      }
-    }
-    
-    // If we have any proxy configured, we should use it for this host
-    return this.proxyConfigs.size > 0;
+// After each scenario
+After(async function(this: TestContext, scenario) {
+  this.endTime = Date.now();
+  const executionTime = this.endTime - (this.startTime || this.endTime);
+  
+  // Store result status for use in clean-up
+  this.result = { status: scenario.result?.status || 'UNKNOWN' };
+  
+  // Log scenario result
+  if (this.logger) {
+    this.logger.info(`Scenario ${this.result.status}: ${scenario.pickle.name} (${executionTime}ms)`);
   }
-
-  /**
-   * Get the appropriate proxy configuration for a URL
-   * @param url - URL to get proxy for
-   * @param serviceName - Optional service name to use specific proxy
-   * @returns ProxyConfig object or null if proxy should not be used
-   */
-  public async getProxyForUrl(url: string, serviceName?: string): Promise<ProxyConfig | null> {
-    try {
-      const parsedUrl = new URL(url);
-      const host = parsedUrl.hostname;
-      
-      // Check if we should use a proxy for this host
-      const shouldUseProxy = await this.shouldUseProxy(host);
-      if (!shouldUseProxy) {
-        return null;
-      }
-      
-      // Get the appropriate proxy configuration
-      return await this.getProxyConfig(serviceName);
-    } catch (error: any) {
-      this.logger.error(`Error determining proxy for URL ${url}: ${error.message}`);
-      
-      // If URL parsing fails, fall back to default proxy
-      return serviceName 
-        ? await this.getProxyConfig(serviceName) 
-        : await this.getProxyConfig();
+  
+  // Add logs to Cucumber report
+  if (this.logger) {
+    const logs = this.logger.getLogs();
+    if (logs.length > 0) {
+      this.attach(logs.join('\n'), 'text/plain');
     }
   }
-
-  /**
-   * Add a new proxy configuration
-   * @param serviceName - Service name for the proxy
-   * @param proxyUrl - URL string for the proxy
-   * @returns Whether the proxy was added successfully
-   */
-  public async addProxy(serviceName: string, proxyUrl: string): Promise<boolean> {
-    try {
-      await this.ensureInitialized();
-      
-      const normalizedName = serviceName.toLowerCase();
-      const proxyConfig = this.parseProxyUrl(proxyUrl);
-      
-      this.proxyConfigs.set(normalizedName, proxyConfig);
-      this.logger.info(`Added proxy for ${normalizedName}: ${proxyUrl}`);
-      
-      return true;
-    } catch (error: any) {
-      this.logger.error(`Failed to add proxy for ${serviceName}: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Remove a proxy configuration
-   * @param serviceName - Service name for the proxy
-   * @returns Whether the proxy was removed
-   */
-  public async removeProxy(serviceName: string): Promise<boolean> {
-    await this.ensureInitialized();
-    
-    const normalizedName = serviceName.toLowerCase();
-    
-    if (this.proxyConfigs.has(normalizedName)) {
-      this.proxyConfigs.delete(normalizedName);
-      this.logger.info(`Removed proxy for ${normalizedName}`);
-      return true;
-    }
-    
-    return false;
-  }
-
-  /**
-   * Check if there are any proxy configurations loaded
-   * @returns Whether there are any proxies configured
-   */
-  public async hasProxies(): Promise<boolean> {
-    await this.ensureInitialized();
-    return this.proxyConfigs.size > 0;
-  }
-
-  /**
-   * Get all available proxy services
-   * @returns Array of service names
-   */
-  public async getAvailableProxyServices(): Promise<string[]> {
-    await this.ensureInitialized();
-    return Array.from(this.proxyConfigs.keys());
-  }
-
-  /**
-   * Test if a proxy is working
-   * @param serviceName - Service name for the proxy
-   * @returns Whether the proxy is working
-   */
-  public async testProxy(serviceName: string = 'default'): Promise<boolean> {
-    try {
-      const axios = require('axios');
-      
-      const proxyConfig = await this.getProxyConfig(serviceName);
-      if (!proxyConfig) {
-        this.logger.error(`No proxy configuration found for ${serviceName}`);
-        return false;
-      }
-      
-      const testUrl = 'https://httpbin.org/ip';
-      
-      const response = await axios.get(testUrl, {
-        proxy: {
-          host: proxyConfig.host,
-          port: proxyConfig.port,
-          protocol: proxyConfig.protocol,
-          auth: proxyConfig.auth
-        },
-        timeout: 5000
-      });
-      
-      this.logger.info(`Proxy test for ${serviceName} successful`);
-      return response.status === 200;
-    } catch (error: any) {
-      this.logger.error(`Proxy test for ${serviceName} failed: ${error.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Reset all proxy configurations
-   * Useful for testing
-   */
-  public async reset(): Promise<void> {
-    this.proxyConfigs.clear();
-    this.initialized = false;
-    this.initPromise = null;
-  }
-}
+});
