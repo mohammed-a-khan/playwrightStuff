@@ -1,5 +1,872 @@
+// src/framework/utils/config-manager.ts
+import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs/promises';
+import { existsSync } from 'fs';
+
+/**
+ * Enhanced Configuration Manager with async initialization
+ * Implements singleton pattern to ensure configuration is loaded only once
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private config: Record<string, any> = {};
+  private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
+  private configSources: string[] = [];
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    // Initialization is deferred to init() method
+  }
+
+  /**
+   * Get singleton instance
+   * @returns ConfigManager instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
+    }
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Initialize configuration asynchronously
+   * @returns Promise that resolves when configuration is loaded
+   */
+  public async init(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.loadConfiguration();
+    await this.initPromise;
+    this.initialized = true;
+  }
+
+  /**
+   * Load configuration from all sources asynchronously
+   * @private
+   */
+  private async loadConfiguration(): Promise<void> {
+    try {
+      // Start with an empty configuration
+      this.config = {};
+      
+      // 1. Load base .env file first (if exists)
+      await this.loadEnvFile('.env');
+
+      // 2. Load environment-specific .env file if specified
+      const env = process.env.NODE_ENV || 'development';
+      await this.loadEnvFile(`.env.${env}`);
+
+      // 3. Load JSON configuration files if they exist
+      await this.loadJsonConfig('default.json');
+      await this.loadJsonConfig(`${env}.json`);
+      
+      // 4. Override with any CI-specific configuration
+      if (process.env.CI === 'true') {
+        await this.loadJsonConfig('ci.json');
+        await this.loadEnvFile('.env.ci');
+      }
+
+      // 5. Override with environment variables (highest priority)
+      this.mergeEnvironmentVariables();
+
+      console.log(`Configuration loaded from: ${this.configSources.join(', ')}`);
+    } catch (error: any) {
+      console.error(`Error loading configuration: ${error.message}`);
+      // Even if there's an error, we'll continue with whatever configuration we managed to load
+    }
+  }
+
+  /**
+   * Load configuration from a .env file
+   * @param filename - Name of the .env file
+   * @private
+   */
+  private async loadEnvFile(filename: string): Promise<void> {
+    const envPath = path.resolve(process.cwd(), filename);
+    
+    if (existsSync(envPath)) {
+      dotenv.config({ path: envPath, override: true });
+      this.configSources.push(filename);
+    }
+  }
+
+  /**
+   * Load configuration from a JSON file
+   * @param filename - Name of the JSON file
+   * @private
+   */
+  private async loadJsonConfig(filename: string): Promise<void> {
+    const configPath = path.join(process.cwd(), 'config', filename);
+    
+    if (existsSync(configPath)) {
+      try {
+        const fileContent = await fs.readFile(configPath, 'utf8');
+        const fileConfig = JSON.parse(fileContent);
+        this.mergeConfig(fileConfig);
+        this.configSources.push(`config/${filename}`);
+      } catch (error: any) {
+        console.error(`Error loading JSON config ${filename}: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Merge configuration objects
+   * @param config - Configuration object to merge
+   * @private
+   */
+  private mergeConfig(config: Record<string, any>): void {
+    this.config = this.deepMerge(this.config, config);
+  }
+
+  /**
+   * Deep merge two objects
+   * @param target - Target object
+   * @param source - Source object
+   * @returns Merged object
+   * @private
+   */
+  private deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
+    const result = { ...target };
+    
+    for (const key in source) {
+      if (source[key] instanceof Object && key in target && target[key] instanceof Object) {
+        result[key] = this.deepMerge(target[key], source[key]);
+      } else {
+        result[key] = source[key];
+      }
+    }
+    
+    return result;
+  }
+
+  /**
+   * Override configuration with environment variables
+   * @private
+   */
+  private mergeEnvironmentVariables(): void {
+    // First add all environment variables to config
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        this.config[key] = value;
+      }
+    }
+
+    // Then handle special prefixed environment variables for nested configuration
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.startsWith('CONFIG_') && value !== undefined) {
+        // Convert CONFIG_DB_HOST to db.host
+        const configKey = key
+          .replace('CONFIG_', '')
+          .toLowerCase()
+          .replace(/_([a-z])/g, (_, c) => `.${c.toLowerCase()}`);
+        
+        this.set(configKey, value);
+      }
+    }
+  }
+
+  /**
+   * Ensure configuration is initialized before accessing
+   * @private
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.init();
+    }
+  }
+
+  /**
+   * Get configuration value with type conversion
+   * This method returns a promise now to ensure config is loaded
+   * @param key - Configuration key (supports dot notation)
+   * @param defaultValue - Default value if configuration not found
+   * @returns Promise<T> - Configuration value with appropriate type
+   */
+  public async get<T>(key: string, defaultValue?: T): Promise<T> {
+    await this.ensureInitialized();
+    
+    // Parse dot notation
+    const keys = key.split('.');
+    let value: any = this.config;
+    
+    // Check environment variables first (highest priority)
+    const envKey = keys.join('_').toUpperCase();
+    if (process.env[envKey] !== undefined) {
+      return this.convertValue(process.env[envKey], defaultValue);
+    }
+    
+    // Then check nested config
+    for (const k of keys) {
+      value = value && value[k] !== undefined ? value[k] : undefined;
+    }
+    
+    if (value === undefined) {
+      return defaultValue as T;
+    }
+    
+    return this.convertValue(value, defaultValue);
+  }
+
+  /**
+   * Get configuration value synchronously (use with caution, may return stale data)
+   * Only use this for non-critical config access or after ensuring init() is complete
+   * @param key - Configuration key (supports dot notation)
+   * @param defaultValue - Default value if configuration not found
+   * @returns T - Configuration value with appropriate type
+   */
+  public getSync<T>(key: string, defaultValue?: T): T {
+    if (!this.initialized) {
+      console.warn(`Warning: Accessing config key "${key}" before initialization is complete. Use async get() method instead.`);
+    }
+    
+    // Parse dot notation
+    const keys = key.split('.');
+    let value: any = this.config;
+    
+    // Check environment variables first (highest priority)
+    const envKey = keys.join('_').toUpperCase();
+    if (process.env[envKey] !== undefined) {
+      return this.convertValue(process.env[envKey], defaultValue);
+    }
+    
+    // Then check nested config
+    for (const k of keys) {
+      value = value && value[k] !== undefined ? value[k] : undefined;
+    }
+    
+    if (value === undefined) {
+      return defaultValue as T;
+    }
+    
+    return this.convertValue(value, defaultValue);
+  }
+
+  /**
+   * Convert value to appropriate type based on defaultValue
+   * @param value - Value to convert
+   * @param defaultValue - Default value with type
+   * @returns Converted value
+   * @private
+   */
+  private convertValue<T>(value: any, defaultValue?: T): T {
+    // If value is already the right type, return it
+    if (typeof value === typeof defaultValue) {
+      return value as T;
+    }
+    
+    // If no default value is provided, return as is
+    if (defaultValue === undefined) {
+      return value as unknown as T;
+    }
+    
+    // Convert based on the type of defaultValue
+    const defaultType = typeof defaultValue;
+    
+    if (defaultType === 'number') {
+      const numberValue = Number(value);
+      return (isNaN(numberValue) ? defaultValue : numberValue) as unknown as T;
+    } 
+    else if (defaultType === 'boolean') {
+      if (typeof value === 'string') {
+        const lowerValue = value.toLowerCase();
+        if (lowerValue === 'true' || lowerValue === '1' || lowerValue === 'yes') return true as unknown as T;
+        if (lowerValue === 'false' || lowerValue === '0' || lowerValue === 'no') return false as unknown as T;
+      }
+      return defaultValue;
+    } 
+    else if (defaultType === 'object') {
+      if (Array.isArray(defaultValue)) {
+        if (typeof value === 'string') {
+          if (value.startsWith('[') && value.endsWith(']')) {
+            try {
+              return JSON.parse(value) as T;
+            } catch {
+              // Fall back to comma-separated interpretation
+              return value.split(',').map(item => item.trim()) as unknown as T;
+            }
+          }
+          // If it doesn't look like JSON, split by comma
+          return value.split(',').map(item => item.trim()) as unknown as T;
+        }
+      } else {
+        // Object - try to parse JSON
+        if (typeof value === 'string') {
+          try {
+            return JSON.parse(value) as T;
+          } catch {
+            return defaultValue;
+          }
+        }
+      }
+    }
+    
+    // If no conversion applied, return as is
+    return value as unknown as T;
+  }
+
+  /**
+   * Set configuration value
+   * @param key - Configuration key (supports dot notation)
+   * @param value - Configuration value
+   */
+  public set<T>(key: string, value: T): void {
+    const keys = key.split('.');
+    let current = this.config;
+    
+    // Navigate to the right level in the config object
+    for (let i = 0; i < keys.length - 1; i++) {
+      const k = keys[i];
+      current[k] = current[k] || {};
+      current = current[k];
+    }
+    
+    // Set the value
+    current[keys[keys.length - 1]] = value;
+  }
+
+  /**
+   * Check if a configuration exists
+   * @param key - Configuration key
+   * @returns Whether the configuration exists
+   */
+  public async has(key: string): Promise<boolean> {
+    await this.ensureInitialized();
+    
+    const keys = key.split('.');
+    let value: any = this.config;
+    
+    for (const k of keys) {
+      value = value && value[k] !== undefined ? value[k] : undefined;
+    }
+    
+    return value !== undefined;
+  }
+
+  /**
+   * Get entire configuration object
+   * @returns Configuration object
+   */
+  public async getAll(): Promise<Record<string, any>> {
+    await this.ensureInitialized();
+    return { ...this.config };
+  }
+
+  /**
+   * Get boolean value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getBoolean(key: string, defaultValue: boolean = false): Promise<boolean> {
+    return this.get<boolean>(key, defaultValue);
+  }
+
+  /**
+   * Get number value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getNumber(key: string, defaultValue: number = 0): Promise<number> {
+    return this.get<number>(key, defaultValue);
+  }
+
+  /**
+   * Get string value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getString(key: string, defaultValue: string = ''): Promise<string> {
+    return this.get<string>(key, defaultValue);
+  }
+
+  /**
+   * Get array value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getArray<T>(key: string, defaultValue: T[] = []): Promise<T[]> {
+    return this.get<T[]>(key, defaultValue);
+  }
+
+  /**
+   * Get object value (convenience method)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public async getObject<T extends Record<string, any>>(key: string, defaultValue: T = {} as T): Promise<T> {
+    return this.get<T>(key, defaultValue);
+  }
+
+  /**
+   * Get boolean value synchronously (use with caution)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public getBooleanSync(key: string, defaultValue: boolean = false): boolean {
+    return this.getSync<boolean>(key, defaultValue);
+  }
+
+  /**
+   * Get number value synchronously (use with caution)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public getNumberSync(key: string, defaultValue: number = 0): number {
+    return this.getSync<number>(key, defaultValue);
+  }
+
+  /**
+   * Get string value synchronously (use with caution)
+   * @param key - Configuration key
+   * @param defaultValue - Default value if not found
+   */
+  public getStringSync(key: string, defaultValue: string = ''): string {
+    return this.getSync<string>(key, defaultValue);
+  }
+
+  /**
+   * Reset configuration (mainly for testing)
+   */
+  public async reset(): Promise<void> {
+    this.config = {};
+    this.initialized = false;
+    this.initPromise = null;
+    this.configSources = [];
+  }
+}
+
+// src/framework/utils/certificate-manager.ts
+import fs from 'fs/promises';
+import { existsSync } from 'fs';
+import https from 'https';
+import { ConfigManager } from './config-manager';
+import { Logger } from './logger';
+
+/**
+ * Certificate Manager for handling TLS/SSL certificates
+ * Centralizes certificate loading and management for API clients
+ */
+export class CertificateManager {
+  private static instance: CertificateManager;
+  private logger: Logger;
+  private config: ConfigManager;
+  private certificates: Map<string, Buffer> = new Map();
+  private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.logger = new Logger('CertificateManager');
+    this.config = ConfigManager.getInstance();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns CertificateManager instance
+   */
+  public static getInstance(): CertificateManager {
+    if (!CertificateManager.instance) {
+      CertificateManager.instance = new CertificateManager();
+    }
+    return CertificateManager.instance;
+  }
+
+  /**
+   * Initialize the certificate manager
+   * Preloads commonly used certificates based on configuration
+   */
+  public async init(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.loadCertificates();
+    await this.initPromise;
+    this.initialized = true;
+  }
+
+  /**
+   * Load certificates from filesystem based on configuration
+   * @private
+   */
+  private async loadCertificates(): Promise<void> {
+    try {
+      // Ensure config is initialized
+      await this.config.init();
+
+      // Load default PFX certificate if configured
+      const defaultPfxPath = await this.config.getString('PFX_CERT_PATH', '');
+      if (defaultPfxPath && existsSync(defaultPfxPath)) {
+        try {
+          const pfxData = await fs.readFile(defaultPfxPath);
+          this.certificates.set('default', pfxData);
+          this.logger.info(`Loaded default PFX certificate from: ${defaultPfxPath}`);
+        } catch (error: any) {
+          this.logger.error(`Failed to load default PFX certificate: ${error.message}`);
+        }
+      }
+
+      // Check for service-specific certificates
+      // Format is SERVICE_PFX_CERT_PATH, e.g., ASSET_PFX_CERT_PATH, AUTH_PFX_CERT_PATH
+      const allConfig = await this.config.getAll();
+      for (const [key, value] of Object.entries(allConfig)) {
+        if (typeof value === 'string' && key.endsWith('_PFX_CERT_PATH') && existsSync(value)) {
+          const serviceName = key.replace('_PFX_CERT_PATH', '').toLowerCase();
+          try {
+            const pfxData = await fs.readFile(value);
+            this.certificates.set(serviceName, pfxData);
+            this.logger.info(`Loaded ${serviceName} PFX certificate from: ${value}`);
+          } catch (error: any) {
+            this.logger.error(`Failed to load ${serviceName} PFX certificate: ${error.message}`);
+          }
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error initializing certificate manager: ${error.message}`);
+    }
+  }
+
+  /**
+   * Ensure certificate manager is initialized
+   * @private
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.init();
+    }
+  }
+
+  /**
+   * Get PFX certificate for a specific service
+   * @param serviceName - Service name for service-specific cert, or 'default' for default cert
+   * @returns PFX certificate buffer or null if not found
+   */
+  public async getPfxCertificate(serviceName: string = 'default'): Promise<Buffer | null> {
+    await this.ensureInitialized();
+    
+    const normalizedName = serviceName.toLowerCase();
+    
+    // Check if we already have this certificate loaded
+    if (this.certificates.has(normalizedName)) {
+      return this.certificates.get(normalizedName) || null;
+    }
+    
+    // If not found for the specific service, try loading it from config
+    const certPath = await this.config.getString(`${normalizedName.toUpperCase()}_PFX_CERT_PATH`, '');
+    if (certPath && existsSync(certPath)) {
+      try {
+        const pfxData = await fs.readFile(certPath);
+        this.certificates.set(normalizedName, pfxData);
+        this.logger.info(`Loaded ${normalizedName} PFX certificate from: ${certPath}`);
+        return pfxData;
+      } catch (error: any) {
+        this.logger.error(`Failed to load ${normalizedName} PFX certificate: ${error.message}`);
+      }
+    }
+    
+    // Try to fall back to default if a service-specific cert wasn't found
+    if (normalizedName !== 'default' && this.certificates.has('default')) {
+      this.logger.warn(`No certificate found for ${normalizedName}, falling back to default certificate`);
+      return this.certificates.get('default') || null;
+    }
+    
+    this.logger.warn(`No certificate found for ${normalizedName}`);
+    return null;
+  }
+
+  /**
+   * Get HTTPS Agent configured with a PFX certificate
+   * @param serviceName - Service name for service-specific agent
+   * @param passphrase - Passphrase for the PFX certificate
+   * @returns HTTPS.Agent with PFX certificate or null if certificate not found
+   */
+  public async getHttpsAgent(serviceName: string = 'default', passphrase?: string): Promise<https.Agent | null> {
+    await this.ensureInitialized();
+    
+    const pfx = await this.getPfxCertificate(serviceName);
+    if (!pfx) {
+      return null;
+    }
+    
+    // If passphrase wasn't provided, try to get it from config
+    if (!passphrase) {
+      passphrase = await this.config.getString(
+        `${serviceName.toUpperCase()}_PFX_CERT_PASSPHRASE`, 
+        await this.config.getString('PFX_CERT_PASSPHRASE', '')
+      );
+    }
+    
+    const rejectUnauthorized = await this.config.getBoolean('REJECT_UNAUTHORIZED', true);
+    
+    return new https.Agent({
+      pfx,
+      passphrase,
+      rejectUnauthorized
+    });
+  }
+
+  /**
+   * Load a specific certificate on demand
+   * @param path - Path to the certificate file
+   * @param alias - Alias to store the certificate under
+   * @returns Buffer containing the certificate data
+   */
+  public async loadCertificate(path: string, alias: string): Promise<Buffer> {
+    if (!existsSync(path)) {
+      throw new Error(`Certificate file not found: ${path}`);
+    }
+    
+    try {
+      const certData = await fs.readFile(path);
+      this.certificates.set(alias.toLowerCase(), certData);
+      this.logger.info(`Loaded certificate as ${alias} from: ${path}`);
+      return certData;
+    } catch (error: any) {
+      this.logger.error(`Failed to load certificate: ${error.message}`);
+      throw error;
+    }
+  }
+}
+
+// src/framework/utils/proxy-manager.ts
+import { URL } from 'url';
+import { ConfigManager } from './config-manager';
+import { Logger } from './logger';
+
+/**
+ * Proxy configuration interface for axios
+ */
+export interface ProxyConfig {
+  host: string;
+  port: number;
+  protocol: 'http' | 'https';
+  auth?: {
+    username: string;
+    password: string;
+  };
+}
+
+/**
+ * Proxy Manager for handling HTTP/HTTPS proxies
+ * Centralizes proxy configuration and management for API clients
+ */
+export class ProxyManager {
+  private static instance: ProxyManager;
+  private logger: Logger;
+  private config: ConfigManager;
+  private proxyConfigs: Map<string, ProxyConfig> = new Map();
+  private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
+
+  /**
+   * Private constructor for singleton pattern
+   */
+  private constructor() {
+    this.logger = new Logger('ProxyManager');
+    this.config = ConfigManager.getInstance();
+  }
+
+  /**
+   * Get singleton instance
+   * @returns ProxyManager instance
+   */
+  public static getInstance(): ProxyManager {
+    if (!ProxyManager.instance) {
+      ProxyManager.instance = new ProxyManager();
+    }
+    return ProxyManager.instance;
+  }
+
+  /**
+   * Initialize the proxy manager
+   * Loads proxy configurations from environment/config
+   */
+  public async init(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.loadProxyConfigurations();
+    await this.initPromise;
+    this.initialized = true;
+  }
+
+  /**
+   * Load proxy configurations from configuration
+   * @private
+   */
+  private async loadProxyConfigurations(): Promise<void> {
+    try {
+      // Ensure config is initialized
+      await this.config.init();
+
+      // Load default proxy if configured
+      const defaultProxyUrl = await this.config.getString('PROXY_URL', '');
+      if (defaultProxyUrl) {
+        try {
+          const proxyConfig = this.parseProxyUrl(defaultProxyUrl);
+          this.proxyConfigs.set('default', proxyConfig);
+          this.logger.info(`Loaded default proxy configuration: ${defaultProxyUrl}`);
+        } catch (error: any) {
+          this.logger.error(`Failed to parse default proxy URL: ${error.message}`);
+        }
+      }
+
+      // Check for service-specific proxies
+      // Format is SERVICE_PROXY_URL, e.g., ASSET_PROXY_URL, AUTH_PROXY_URL
+      const allConfig = await this.config.getAll();
+      for (const [key, value] of Object.entries(allConfig)) {
+        if (typeof value === 'string' && key.endsWith('_PROXY_URL') && value) {
+          const serviceName = key.replace('_PROXY_URL', '').toLowerCase();
+          try {
+            const proxyConfig = this.parseProxyUrl(value);
+            this.proxyConfigs.set(serviceName, proxyConfig);
+            this.logger.info(`Loaded ${serviceName} proxy configuration: ${value}`);
+          } catch (error: any) {
+            this.logger.error(`Failed to parse ${serviceName} proxy URL: ${error.message}`);
+          }
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`Error initializing proxy manager: ${error.message}`);
+    }
+  }
+
+  /**
+   * Parse a proxy URL into a ProxyConfig object
+   * @param proxyUrl - URL string for proxy (e.g., "http://username:password@proxy.example.com:8080")
+   * @returns ProxyConfig object for axios
+   */
+  private parseProxyUrl(proxyUrl: string): ProxyConfig {
+    try {
+      // Ensure the URL has a protocol
+      const formattedProxyUrl = proxyUrl.startsWith('http') 
+        ? proxyUrl 
+        : `http://${proxyUrl}`;
+      
+      const parsedUrl = new URL(formattedProxyUrl);
+      
+      const proxyConfig: ProxyConfig = {
+        host: parsedUrl.hostname,
+        port: parseInt(parsedUrl.port || '80'),
+        protocol: (parsedUrl.protocol.replace(':', '') as 'http' | 'https')
+      };
+      
+      // Add authentication if present
+      if (parsedUrl.username && parsedUrl.password) {
+        proxyConfig.auth = {
+          username: parsedUrl.username,
+          password: parsedUrl.password
+        };
+      }
+      
+      return proxyConfig;
+    } catch (error: any) {
+      throw new Error(`Invalid proxy URL (${proxyUrl}): ${error.message}`);
+    }
+  }
+
+  /**
+   * Ensure proxy manager is initialized
+   * @private
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.init();
+    }
+  }
+
+  /**
+   * Get proxy configuration for a specific service
+   * @param serviceName - Service name for service-specific proxy, or 'default' for default proxy
+   * @returns ProxyConfig object or null if not found
+   */
+  public async getProxyConfig(serviceName: string = 'default'): Promise<ProxyConfig | null> {
+    await this.ensureInitialized();
+    
+    const normalizedName = serviceName.toLowerCase();
+    
+    // Check if we already have this proxy configuration loaded
+    if (this.proxyConfigs.has(normalizedName)) {
+      return this.proxyConfigs.get(normalizedName) || null;
+    }
+    
+    // If not found for the specific service, try loading it from config
+    const proxyUrl = await this.config.getString(`${normalizedName.toUpperCase()}_PROXY_URL`, '');
+    if (proxyUrl) {
+      try {
+        const proxyConfig = this.parseProxyUrl(proxyUrl);
+        this.proxyConfigs.set(normalizedName, proxyConfig);
+        this.logger.info(`Loaded ${normalizedName} proxy configuration from config: ${proxyUrl}`);
+        return proxyConfig;
+      } catch (error: any) {
+        this.logger.error(`Failed to parse ${normalizedName} proxy URL: ${error.message}`);
+      }
+    }
+    
+    // Try to fall back to default if a service-specific proxy wasn't found
+    if (normalizedName !== 'default' && this.proxyConfigs.has('default')) {
+      this.logger.warn(`No proxy found for ${normalizedName}, falling back to default proxy`);
+      return this.proxyConfigs.get('default') || null;
+    }
+    
+    return null;
+  }
+
+  /**
+   * Check if a proxy should be used for a specific host
+   * @param host - Hostname to check
+   * @returns Whether the proxy should be used
+   */
+  public async shouldUseProxy(host: string): Promise<boolean> {
+    await this.ensureInitialized();
+    
+    // Get proxy exceptions (NO_PROXY environment variable)
+    const noProxyList = process.env.NO_PROXY || process.env.no_proxy || '';
+    const exceptions = noProxyList.split(',').map(item => item.trim());
+    
+    // Don't use proxy for local addresses
+    if (
+      host === 'localhost' || 
+      host === '127.0.0.1' || 
+      host.startsWith('192.168.') ||
+      host.startsWith('10.') ||
+      host.startsWith('172.16.')
+    ) {
+      return false;
+    }
+    
+    // Check if the host matches any exception
+    for (const exception of exceptions) {
+      if (!exception) continue;
+      
+      // Check for wildcard match (e.g., *.example.com)
+      if (exception.startsWith('*.') && host.endsWith(exception.substring(1))) {
+        return false;
+
 // src/framework/api/types.ts
-import { AxiosResponse } from 'axios';
+import { AxiosRequestConfig, AxiosResponse } from 'axios';
 
 /**
  * Interface for API request options
@@ -11,29 +878,20 @@ export interface ApiRequestOptions {
   timeout?: number;
   validateStatus?: boolean;
   withCredentials?: boolean;
-  pfxPath?: string;         // Path to PFX file
-  pfxPassphrase?: string;   // Passphrase for PFX file
-  useProxy?: boolean;       // Whether to use proxy settings
-  retryOptions?: {
-    maxAttempts?: number;
-    retryDelay?: number;
-    retryCondition?: (error: any) => boolean;
-  };
-  pollingOptions?: {        // Options for long-running requests with polling
-    enabled?: boolean;      // Whether to enable polling for this request
-    maxAttempts?: number;   // Maximum number of polling attempts
-    interval?: number;      // Interval between polling attempts in ms
-    timeoutPerAttempt?: number; // Timeout for each polling attempt
-    successCondition?: (response: AxiosResponse) => boolean; // Function to determine if response is complete
-  };
+  serviceName?: string;       // Service name for certificate and proxy selection
+  pfxPath?: string;           // Path to PFX file (overrides service default)
+  pfxPassphrase?: string;     // Passphrase for PFX file
+  useProxy?: boolean;         // Whether to use proxy settings
+  retryOptions?: RetryOptions;
+  pollingOptions?: PollingOptions;
 }
 
 /**
  * Interface for retry options
  */
 export interface RetryOptions {
-  maxAttempts: number;
-  retryDelay: number;
+  maxAttempts?: number;
+  retryDelay?: number;
   retryCondition?: (error: any) => boolean;
 }
 
@@ -41,17 +899,35 @@ export interface RetryOptions {
  * Interface for polling options for long-running requests
  */
 export interface PollingOptions {
+  enabled?: boolean;
+  maxAttempts?: number;
+  interval?: number;
+  timeoutPerAttempt?: number;
+  successCondition?: (response: AxiosResponse) => boolean;
+}
+
+/**
+ * Default retry options
+ */
+export interface DefaultRetryOptions {
+  maxAttempts: number;
+  retryDelay: number;
+}
+
+/**
+ * Default polling options
+ */
+export interface DefaultPollingOptions {
   enabled: boolean;
   maxAttempts: number;
   interval: number;
   timeoutPerAttempt: number;
-  successCondition?: (response: AxiosResponse) => boolean;
 }
 
 /**
  * Extended AxiosRequestConfig to include metadata
  */
-export interface ExtendedAxiosRequestConfig {
+export interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
   metadata?: {
     startTime?: number;
     endTime?: number;
@@ -59,34 +935,42 @@ export interface ExtendedAxiosRequestConfig {
   };
 }
 
+/**
+ * Base API client configuration
+ */
+export interface ApiClientConfig {
+  baseUrl: string;
+  timeout: number;
+  headers: Record<string, string>;
+  serviceName?: string;
+  retryOptions: DefaultRetryOptions;
+  pollingOptions: DefaultPollingOptions;
+}
+
 // src/framework/api/request-config.ts
 import { AxiosRequestConfig } from 'axios';
 import { ApiRequestOptions } from './types';
 import { Logger } from '../utils/logger';
-import fs from 'fs';
-import https from 'https';
+import { CertificateManager } from '../utils/certificate-manager';
+import { ProxyManager, ProxyConfig } from '../utils/proxy-manager';
 import { URL } from 'url';
 
 /**
  * Create request configuration with certificate and proxy settings
  * @param options - API request options
  * @param defaultHeaders - Default headers to include in all requests
- * @param pfxCertPath - Path to PFX certificate
- * @param pfxCertPassphrase - Passphrase for PFX certificate
- * @param proxyUrl - Proxy URL
  * @param defaultTimeout - Default request timeout
+ * @param serviceName - Default service name for certificate and proxy selection
  * @param logger - Logger instance
- * @returns Axios request configuration
+ * @returns Promise<AxiosRequestConfig> - Axios request configuration
  */
-export function createRequestConfig(
+export async function createRequestConfig(
   options: ApiRequestOptions | undefined,
   defaultHeaders: Record<string, string>,
-  pfxCertPath: string | undefined,
-  pfxCertPassphrase: string | undefined,
-  proxyUrl: string | undefined,
   defaultTimeout: number,
+  serviceName: string = 'default',
   logger: Logger
-): AxiosRequestConfig {
+): Promise<AxiosRequestConfig> {
   const config: AxiosRequestConfig = {
     headers: { ...defaultHeaders, ...options?.headers },
     params: options?.params || {},
@@ -95,49 +979,228 @@ export function createRequestConfig(
     withCredentials: options?.withCredentials
   };
   
-  // Add certificate if needed
-  const certPath = options?.pfxPath || pfxCertPath;
-  const passphrase = options?.pfxPassphrase || pfxCertPassphrase;
+  // Get the service name to use for certificate and proxy
+  const service = options?.serviceName || serviceName;
   
-  if (certPath && fs.existsSync(certPath)) {
-    try {
-      const pfx = fs.readFileSync(certPath);
-      config.httpsAgent = new https.Agent({
-        pfx,
-        passphrase,
-        rejectUnauthorized: true // Default to secure
-      });
-      logger.debug(`Using PFX certificate from: ${certPath}`);
-    } catch (error: any) {
-      logger.error(`Error loading PFX certificate: ${error.message}`);
-    }
-  }
+  // Add certificate if needed
+  await addCertificateToConfig(config, service, options?.pfxPath, options?.pfxPassphrase, logger);
   
   // Add proxy if needed
   const useProxy = options?.useProxy !== false; // Use proxy by default if available
-  
-  if (useProxy && proxyUrl) {
-    try {
-      // Ensure proxy URL has a protocol
-      const formattedProxyUrl = proxyUrl.startsWith('http') 
-        ? proxyUrl 
-        : `http://${proxyUrl}`;
-      
-      const parsedUrl = new URL(formattedProxyUrl);
-      
-      config.proxy = {
-        host: parsedUrl.hostname,
-        port: parseInt(parsedUrl.port || '80'),
-        protocol: parsedUrl.protocol.replace(':', '') as 'http' | 'https'
-      };
-      
-      logger.debug(`Using proxy: ${formattedProxyUrl}`);
-    } catch (error: any) {
-      logger.error(`Invalid proxy URL: ${proxyUrl}`);
-    }
+  if (useProxy) {
+    await addProxyToConfig(config, service, logger);
   }
   
   return config;
+}
+
+/**
+ * Add certificate to request configuration
+ * @param config - Axios request configuration
+ * @param serviceName - Service name for certificate selection
+ * @param pfxPath - Optional path to PFX file (overrides service default)
+ * @param pfxPassphrase - Optional passphrase for PFX file
+ * @param logger - Logger instance
+ * @private
+ */
+async function addCertificateToConfig(
+  config: AxiosRequestConfig,
+  serviceName: string,
+  pfxPath?: string,
+  pfxPassphrase?: string,
+  logger?: Logger
+): Promise<void> {
+  try {
+    // If a specific path is provided, load that certificate
+    if (pfxPath) {
+      const certManager = CertificateManager.getInstance();
+      try {
+        await certManager.loadCertificate(pfxPath, 'temp');
+        const agent = await certManager.getHttpsAgent('temp', pfxPassphrase);
+        if (agent) {
+          config.httpsAgent = agent;
+          logger?.debug(`Using PFX certificate from path: ${pfxPath}`);
+        }
+      } catch (error: any) {
+        logger?.error(`Failed to load PFX certificate from path: ${error.message}`);
+      }
+    } else {
+      // Otherwise, use the service certificate
+      const certManager = CertificateManager.getInstance();
+      const agent = await certManager.getHttpsAgent(serviceName, pfxPassphrase);
+      if (agent) {
+        config.httpsAgent = agent;
+        logger?.debug(`Using PFX certificate for service: ${serviceName}`);
+      }
+    }
+  } catch (error: any) {
+    logger?.error(`Error loading certificate: ${error.message}`);
+  }
+}
+
+/**
+ * Add proxy to request configuration
+ * @param config - Axios request configuration
+ * @param serviceName - Service name for proxy selection
+ * @param logger - Logger instance
+ * @private
+ */
+async function addProxyToConfig(
+  config: AxiosRequestConfig,
+  serviceName: string,
+  logger?: Logger
+): Promise<void> {
+  try {
+    const proxyManager = ProxyManager.getInstance();
+    const proxyConfig = await proxyManager.getProxyConfig(serviceName);
+    
+    if (proxyConfig) {
+      config.proxy = proxyConfig;
+      logger?.debug(`Using proxy for service ${serviceName}: ${proxyConfig.host}:${proxyConfig.port}`);
+    }
+  } catch (error: any) {
+    logger?.error(`Error configuring proxy: ${error.message}`);
+  }
+}
+
+/**
+ * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
+ * @param endpoint - API endpoint
+ * @param baseUrl - Base URL
+ * @returns Full URL string
+ */
+export function normalizeUrl(endpoint: string, baseUrl: string): string {
+  // Ensure baseUrl has a protocol
+  const normalizedBaseUrl = baseUrl.startsWith('http') 
+    ? baseUrl 
+    : `https://${baseUrl}`;
+    
+  // Ensure endpoint starts with a slash if not empty and doesn't already have one
+  const normalizedEndpoint = endpoint && !endpoint.startsWith('/') 
+    ? '/' + endpoint 
+    : endpoint;
+  
+  try {
+    return new URL(normalizedEndpoint, normalizedBaseUrl).toString();
+  } catch (error: any) {
+    throw new Error(`Invalid URL: Cannot combine ${normalizedBaseUrl} and ${normalizedEndpoint}`);
+  }
+}
+
+// src/framework/api/request-config.ts
+import { AxiosRequestConfig } from 'axios';
+import { ApiRequestOptions } from './types';
+import { Logger } from '../utils/logger';
+import { CertificateManager } from '../utils/certificate-manager';
+import { ProxyManager, ProxyConfig } from '../utils/proxy-manager';
+import { URL } from 'url';
+
+/**
+ * Create request configuration with certificate and proxy settings
+ * @param options - API request options
+ * @param defaultHeaders - Default headers to include in all requests
+ * @param defaultTimeout - Default request timeout
+ * @param serviceName - Default service name for certificate and proxy selection
+ * @param logger - Logger instance
+ * @returns Promise<AxiosRequestConfig> - Axios request configuration
+ */
+export async function createRequestConfig(
+  options: ApiRequestOptions | undefined,
+  defaultHeaders: Record<string, string>,
+  defaultTimeout: number,
+  serviceName: string = 'default',
+  logger: Logger
+): Promise<AxiosRequestConfig> {
+  const config: AxiosRequestConfig = {
+    headers: { ...defaultHeaders, ...options?.headers },
+    params: options?.params || {},
+    timeout: options?.timeout || defaultTimeout,
+    validateStatus: options?.validateStatus !== false ? undefined : () => true,
+    withCredentials: options?.withCredentials
+  };
+  
+  // Get the service name to use for certificate and proxy
+  const service = options?.serviceName || serviceName;
+  
+  // Add certificate if needed
+  await addCertificateToConfig(config, service, options?.pfxPath, options?.pfxPassphrase, logger);
+  
+  // Add proxy if needed
+  const useProxy = options?.useProxy !== false; // Use proxy by default if available
+  if (useProxy) {
+    await addProxyToConfig(config, service, logger);
+  }
+  
+  return config;
+}
+
+/**
+ * Add certificate to request configuration
+ * @param config - Axios request configuration
+ * @param serviceName - Service name for certificate selection
+ * @param pfxPath - Optional path to PFX file (overrides service default)
+ * @param pfxPassphrase - Optional passphrase for PFX file
+ * @param logger - Logger instance
+ * @private
+ */
+async function addCertificateToConfig(
+  config: AxiosRequestConfig,
+  serviceName: string,
+  pfxPath?: string,
+  pfxPassphrase?: string,
+  logger?: Logger
+): Promise<void> {
+  try {
+    // If a specific path is provided, load that certificate
+    if (pfxPath) {
+      const certManager = CertificateManager.getInstance();
+      try {
+        await certManager.loadCertificate(pfxPath, 'temp');
+        const agent = await certManager.getHttpsAgent('temp', pfxPassphrase);
+        if (agent) {
+          config.httpsAgent = agent;
+          logger?.debug(`Using PFX certificate from path: ${pfxPath}`);
+        }
+      } catch (error: any) {
+        logger?.error(`Failed to load PFX certificate from path: ${error.message}`);
+      }
+    } else {
+      // Otherwise, use the service certificate
+      const certManager = CertificateManager.getInstance();
+      const agent = await certManager.getHttpsAgent(serviceName, pfxPassphrase);
+      if (agent) {
+        config.httpsAgent = agent;
+        logger?.debug(`Using PFX certificate for service: ${serviceName}`);
+      }
+    }
+  } catch (error: any) {
+    logger?.error(`Error loading certificate: ${error.message}`);
+  }
+}
+
+/**
+ * Add proxy to request configuration
+ * @param config - Axios request configuration
+ * @param serviceName - Service name for proxy selection
+ * @param logger - Logger instance
+ * @private
+ */
+async function addProxyToConfig(
+  config: AxiosRequestConfig,
+  serviceName: string,
+  logger?: Logger
+): Promise<void> {
+  try {
+    const proxyManager = ProxyManager.getInstance();
+    const proxyConfig = await proxyManager.getProxyConfig(serviceName);
+    
+    if (proxyConfig) {
+      config.proxy = proxyConfig;
+      logger?.debug(`Using proxy for service ${serviceName}: ${proxyConfig.host}:${proxyConfig.port}`);
+    }
+  } catch (error: any) {
+    logger?.error(`Error configuring proxy: ${error.message}`);
+  }
 }
 
 /**
@@ -165,8 +1228,9 @@ export function normalizeUrl(endpoint: string, baseUrl: string): string {
 }
 
 // src/framework/api/request-executor.ts
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
 import { Logger } from '../utils/logger';
+import { ConfigManager } from '../utils/config-manager';
 
 /**
  * Execute a request with timing metrics
@@ -178,7 +1242,7 @@ import { Logger } from '../utils/logger';
  * @returns Promise<AxiosResponse> - API response
  */
 export async function executeRequest<T = any>(
-  method: 'get' | 'post' | 'put' | 'patch' | 'delete',
+  method: Method,
   url: string,
   data?: any,
   config?: AxiosRequestConfig,
@@ -187,31 +1251,31 @@ export async function executeRequest<T = any>(
   const startTime = Date.now();
   
   try {
-    let response: AxiosResponse<T>;
+    logger?.debug(`Executing ${method.toUpperCase()} request to: ${url}`);
     
-    switch (method) {
-      case 'get':
-        response = await axios.get<T>(url, config);
-        break;
-      case 'post':
-        response = await axios.post<T>(url, data, config);
-        break;
-      case 'put':
-        response = await axios.put<T>(url, data, config);
-        break;
-      case 'patch':
-        response = await axios.patch<T>(url, data, config);
-        break;
-      case 'delete':
-        response = await axios.delete<T>(url, config);
-        break;
-      default:
-        throw new Error(`Unsupported HTTP method: ${method}`);
+    // Configure axios request
+    const requestConfig: AxiosRequestConfig = {
+      ...config,
+      method,
+      url,
+      data: method !== 'get' && method !== 'delete' ? data : undefined,
+    };
+    
+    if (logger?.isDebugEnabled()) {
+      logger.debug(`Request config: ${JSON.stringify({
+        url,
+        method,
+        headers: requestConfig.headers,
+        params: requestConfig.params,
+        data: requestConfig.data
+      }, null, 2)}`);
     }
+    
+    const response = await axios(requestConfig);
     
     // Calculate and log duration
     const duration = Date.now() - startTime;
-    logger?.debug(`Response time: ${duration}ms`);
+    logger?.debug(`Response received in ${duration}ms`);
     
     // Store duration for assertion use
     (response as any)._duration = duration;
@@ -230,20 +1294,28 @@ export async function executeRequest<T = any>(
 
 /**
  * Log response details
- * @private
  * @param response - Axios response
  * @param logger - Logger instance
  */
-function logResponse(response: AxiosResponse, logger?: Logger): void {
+export function logResponse(response: AxiosResponse, logger?: Logger): void {
   if (!logger) return;
   
   logger.debug(`Response status: ${response.status}`);
   
+  // Check if we should log headers
+  const config = ConfigManager.getInstance();
+  const logHeaders = config.getBooleanSync('API_DEBUG_HEADERS', false);
+  if (logHeaders) {
+    logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
+  }
+  
   // Log response body in a safe way (truncate if too large)
   try {
     const responseBody = JSON.stringify(response.data);
-    if (responseBody.length > 1000) {
-      logger.debug(`Response body (truncated): ${responseBody.substring(0, 1000)}...`);
+    const maxBodyLength = config.getNumberSync('API_DEBUG_BODY_LENGTH', 1000);
+    
+    if (responseBody.length > maxBodyLength) {
+      logger.debug(`Response body (truncated): ${responseBody.substring(0, maxBodyLength)}...`);
     } else {
       logger.debug(`Response body: ${responseBody}`);
     }
@@ -254,18 +1326,34 @@ function logResponse(response: AxiosResponse, logger?: Logger): void {
 
 /**
  * Log error details
- * @private
  * @param error - Axios error
  * @param logger - Logger instance
  */
-function logError(error: any, logger?: Logger): void {
+export function logError(error: any, logger?: Logger): void {
   if (!logger) return;
   
   if (error.response) {
     // The request was made and the server responded with a status code
     // that falls out of the range of 2xx
     logger.error(`Response error: ${error.response.status} - ${error.message}`);
-    logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+    
+    // Log response data if available
+    try {
+      logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
+    } catch (jsonError) {
+      logger.debug(`Error response data: [Could not stringify response data]`);
+    }
+    
+    // Check if we should log headers
+    const config = ConfigManager.getInstance();
+    const logHeaders = config.getBooleanSync('API_DEBUG_HEADERS', false);
+    if (logHeaders) {
+      try {
+        logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
+      } catch (jsonError) {
+        logger.debug(`Error response headers: [Could not stringify headers]`);
+      }
+    }
   } else if (error.request) {
     // The request was made but no response was received
     logger.error(`Request error (no response): ${error.message}`);
@@ -278,16 +1366,36 @@ function logError(error: any, logger?: Logger): void {
     logger.error(`Request configuration error: ${error.message}`);
   }
   
+  // Log request details if available
   if (error.config) {
     logger.debug(`Failed request URL: ${error.config.url}`);
     logger.debug(`Failed request method: ${error.config.method}`);
+  }
+  
+  // If there's a stack trace, log it at debug level
+  if (error.stack) {
+    logger.debug(`Error stack trace: ${error.stack}`);
   }
 }
 
 // src/framework/api/retry-handler.ts
 import { AxiosResponse } from 'axios';
 import { Logger } from '../utils/logger';
-import { RetryOptions } from './types';
+import { RetryOptions, DefaultRetryOptions } from './types';
+
+/**
+ * Default retry condition: retry on network errors or 5xx errors
+ */
+export const defaultRetryCondition = (error: any): boolean => {
+  return (
+    error.code === 'ECONNRESET' ||
+    error.code === 'ECONNABORTED' ||
+    error.code === 'ETIMEDOUT' ||
+    error.code === 'ENOTFOUND' ||  // DNS resolution error
+    error.message.includes('getaddrinfo') ||  // Another common DNS error
+    (error.response && error.response.status >= 500 && error.response.status < 600)
+  );
+};
 
 /**
  * Retry a request with backoff strategy
@@ -299,28 +1407,13 @@ import { RetryOptions } from './types';
  */
 export async function retryRequest<T = any>(
   requestFn: () => Promise<AxiosResponse<T>>,
-  defaultOptions: { maxAttempts: number; retryDelay: number },
-  options?: {
-    maxAttempts?: number;
-    retryDelay?: number;
-    retryCondition?: (error: any) => boolean;
-  },
+  defaultOptions: DefaultRetryOptions,
+  options?: RetryOptions,
   logger?: Logger
 ): Promise<AxiosResponse<T>> {
   const maxAttempts = options?.maxAttempts || defaultOptions.maxAttempts;
   const retryDelay = options?.retryDelay || defaultOptions.retryDelay;
-  
-  // Default retry condition: retry on network errors or 5xx errors
-  const retryCondition = options?.retryCondition || ((error: any) => {
-    return (
-      error.code === 'ECONNRESET' ||
-      error.code === 'ECONNABORTED' ||
-      error.code === 'ETIMEDOUT' ||
-      error.code === 'ENOTFOUND' ||  // DNS resolution error
-      error.message.includes('getaddrinfo') ||  // Another common DNS error
-      (error.response && error.response.status >= 500 && error.response.status < 600)
-    );
-  });
+  const retryCondition = options?.retryCondition || defaultRetryCondition;
   
   let lastError: any;
   
@@ -355,35 +1448,69 @@ export async function retryRequest<T = any>(
 import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
 import { Logger } from '../utils/logger';
 import { ConfigManager } from '../utils/config-manager';
-import { PollingOptions } from './types';
-import { createRequestConfig } from './request-config';
+import { DefaultPollingOptions, PollingOptions } from './types';
+import { logResponse, logError } from './request-executor';
+
+/**
+ * Default success condition: check if response data is not empty
+ */
+export const defaultSuccessCondition = <T>(response: AxiosResponse<T>): boolean => {
+  // Check if the response has data
+  if (!response.data) {
+    return false;
+  }
+  
+  // For array responses, check if there are elements
+  if (Array.isArray(response.data)) {
+    return response.data.length > 0;
+  }
+  
+  // For object responses with specific fields, check if required fields have data
+  if (typeof response.data === 'object') {
+    // A general check for common response patterns
+    const dataObj = response.data as any;
+    
+    // Check for common patterns in response objects
+    if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
+      return dataObj.assetLayouts.length > 0;
+    }
+    
+    if (dataObj.items && Array.isArray(dataObj.items)) {
+      return dataObj.items.length > 0;
+    }
+    
+    if (dataObj.data && Array.isArray(dataObj.data)) {
+      return dataObj.data.length > 0;
+    }
+    
+    // Check for status fields that indicate completion
+    if (dataObj.status) {
+      const status = String(dataObj.status).toLowerCase();
+      return ['completed', 'success', 'done', 'ready'].includes(status);
+    }
+    
+    // Check if the object has any properties (not empty)
+    return Object.keys(dataObj).length > 0;
+  }
+  
+  // For primitive types, check if it's not null, undefined, or empty string
+  return response.data !== null && response.data !== undefined && response.data !== '';
+};
 
 /**
  * Handle long-running request with polling
  * Suitable for requests where the backend needs time to process before returning complete data
- *
  * @param requestFn - Function to execute the initial request
  * @param defaultOptions - Default polling options
- * @param options - Custom polling options
+ * @param options - Polling options
  * @param logger - Logger instance
- * @param config - ConfigManager instance
+ * @param config - Configuration manager
  * @returns Promise<AxiosResponse> - Final API response
  */
 export async function handleLongRunningRequest<T = any>(
   requestFn: () => Promise<AxiosResponse<T>>,
-  defaultOptions: {
-    enabled: boolean;
-    maxAttempts: number;
-    interval: number;
-    timeoutPerAttempt: number;
-  },
-  options?: {
-    enabled?: boolean;
-    maxAttempts?: number;
-    interval?: number;
-    timeoutPerAttempt?: number;
-    successCondition?: (response: AxiosResponse<T>) => boolean;
-  },
+  defaultOptions: DefaultPollingOptions,
+  options?: PollingOptions,
   logger?: Logger,
   config?: ConfigManager
 ): Promise<AxiosResponse<T>> {
@@ -392,76 +1519,37 @@ export async function handleLongRunningRequest<T = any>(
     maxAttempts: options?.maxAttempts || defaultOptions.maxAttempts,
     interval: options?.interval || defaultOptions.interval,
     timeoutPerAttempt: options?.timeoutPerAttempt || defaultOptions.timeoutPerAttempt,
-    // Default success condition: check if response data is not empty
-    successCondition: options?.successCondition || ((response: AxiosResponse<T>) => {
-      // Check if the response has data
-      if (!response.data) {
-        return false;
-      }
-      
-      // For array responses, check if there are elements
-      if (Array.isArray(response.data)) {
-        return response.data.length > 0;
-      }
-      
-      // For object responses with specific fields, check if required fields have data
-      if (typeof response.data === 'object') {
-        // A general check for common response patterns
-        const dataObj = response.data as any;
-        
-        // Check for common patterns in response objects
-        if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-          return dataObj.assetLayouts.length > 0;
-        }
-        
-        if (dataObj.items && Array.isArray(dataObj.items)) {
-          return dataObj.items.length > 0;
-        }
-        
-        if (dataObj.data && Array.isArray(dataObj.data)) {
-          return dataObj.data.length > 0;
-        }
-        
-        // Check if the object has any properties (not empty)
-        return Object.keys(dataObj).length > 0;
-      }
-      
-      // For primitive types, check if it's not null, undefined, or empty string
-      return response.data !== null && response.data !== undefined && response.data !== '';
-    })
+    successCondition: options?.successCondition || defaultSuccessCondition
   };
-  
-  // Use provided logger or create a default one
-  const log = logger || new Logger('PollingHandler');
-  const configManager = config || ConfigManager.getInstance();
   
   // Make the initial request
   let response: AxiosResponse<T>;
   
   try {
-    log.info('Making initial request for long-running operation');
+    logger?.info(`Making initial request for long-running operation`);
     response = await requestFn();
     
     // Log immediate response for debugging
-    if (configManager.getBoolean('API_DEBUG_DETAILED', false)) {
-      log.debug('INITIAL RESPONSE FOR LONG-RUNNING REQUEST: ' + JSON.stringify(response.data, null, 2));
+    const shouldLogDetailed = config?.getBooleanSync('API_DEBUG_DETAILED', false);
+    if (shouldLogDetailed) {
+      logger?.debug('INITIAL RESPONSE FOR LONG-RUNNING REQUEST: ' + JSON.stringify(response.data, null, 2));
     }
     
     // Store the original request details for retries
     const originalUrl = response.config.url || '';
-    const originalMethod = (response.config.method || 'get').toLowerCase();
+    const originalMethod = (response.config.method || 'get').toLowerCase() as Method;
     const originalData = response.config.data;
     
-    log.debug(`Original request URL: ${originalUrl}`);
+    logger?.debug(`Original request URL: ${originalUrl}`);
     
     // Check if we need to poll for completion
     if (pollOptions.successCondition(response)) {
-      log.info('Initial response is complete, no polling needed');
+      logger?.info(`Initial response is complete, no polling needed`);
       return response;
     }
     
     // Start polling for completion
-    log.info('Initial response incomplete, starting polling...');
+    logger?.info(`Initial response incomplete, starting polling...`);
     
     // Create a new request config for polling
     const axiosConfig: AxiosRequestConfig = {
@@ -483,88 +1571,66 @@ export async function handleLongRunningRequest<T = any>(
     
     for (let attempt = 1; attempt <= pollOptions.maxAttempts; attempt++) {
       // Wait for the polling interval
-      log.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
+      logger?.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
       await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
       
       try {
         // Make the polling request using a fresh config each time
-        const freshConfig = createRequestConfig({
-          headers: axiosConfig.headers as Record<string, string>,
+        const freshConfig: AxiosRequestConfig = {
+          ...axiosConfig,
           timeout: pollOptions.timeoutPerAttempt
-        }, configManager);
-        
-        freshConfig.url = pollUrl;
-        freshConfig.method = originalMethod as Method;
+        };
         
         // Log the polling request details
-        log.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} to URL: ${pollUrl}`);
+        logger?.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} to URL: ${pollUrl}`);
         
         // Make the request based on the original method
         let pollResponse: AxiosResponse<T>;
         if (originalMethod === 'post' || originalMethod === 'put' || originalMethod === 'patch') {
           pollResponse = await axios.request<T>({
             ...freshConfig,
-            method: originalMethod as Method,
+            method: originalMethod,
             url: pollUrl,
             data: originalData
           });
         } else {
           pollResponse = await axios.request<T>({
             ...freshConfig,
-            method: originalMethod as Method,
+            method: originalMethod,
             url: pollUrl
           });
         }
+        
+        // Calculate and log duration
+        const duration = Date.now() - (pollResponse.config as any).startTime || 0;
+        (pollResponse as any)._duration = duration;
+        logger?.debug(`Polling response time: ${duration}ms`);
         
         // Update our response reference
         response = pollResponse;
         
         // Log the polling response
-        if (configManager.getBoolean('API_DEBUG_DETAILED', false)) {
-          log.debug(`POLLING RESPONSE (Attempt ${attempt}): ${JSON.stringify(response.data, null, 2)}`);
+        const shouldLogDetailed = config?.getBooleanSync('API_DEBUG_DETAILED', false);
+        if (shouldLogDetailed) {
+          logger?.debug(`POLLING RESPONSE (Attempt ${attempt}): ${JSON.stringify(response.data, null, 2)}`);
+        } else {
+          logResponse(response, logger);
         }
         
         // Check if the response is now complete
         if (pollOptions.successCondition(response)) {
-          log.info(`Polling successful after ${attempt} attempts`);
+          logger?.info(`Polling successful after ${attempt} attempts`);
           return response;
         }
         
-        log.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
+        logger?.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
       } catch (error: any) {
-        log.warn(`Polling attempt ${attempt} failed: ${error.message}`);
+        logger?.warn(`Polling attempt ${attempt} failed: ${error.message}`);
+        logError(error, logger);
         
-        // Handle specific error types with additional diagnostics
-        if (error.response && error.response.status === 502) {
-          log.debug('Received 502 Bad Gateway - likely DNS resolution issue');
-          
-          // Try to resolve the hostname for debugging
-          try {
-            if (pollUrl) {
-              const parsedUrl = new URL(pollUrl);
-              const dns = require('dns');
-              log.debug(`Attempting DNS lookup for ${parsedUrl.hostname}...`);
-              
-              // Promisify dns.lookup for async/await
-              const dnsLookup = (hostname: string): Promise<string> => {
-                return new Promise((resolve, reject) => {
-                  dns.lookup(hostname, (err: Error | null, address: string) => {
-                    if (err) reject(err);
-                    else resolve(address);
-                  });
-                });
-              };
-              
-              try {
-                const address = await dnsLookup(parsedUrl.hostname);
-                log.debug(`DNS lookup successful: ${parsedUrl.hostname} -> ${address}`);
-              } catch (dnsErr: any) {
-                log.debug(`DNS lookup failed: ${dnsErr.message}`);
-              }
-            }
-          } catch (urlErr: any) {
-            log.debug(`Error parsing URL for DNS lookup: ${urlErr.message}`);
-          }
+        // If this is the last attempt, throw the error
+        if (attempt === pollOptions.maxAttempts) {
+          throw error;
         }
       }
     }
@@ -572,1006 +1638,571 @@ export async function handleLongRunningRequest<T = any>(
     // If we get here, we've exceeded the maximum polling attempts
     throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
   } catch (error: any) {
-    log.error(`Long-running request failed: ${error.message}`);
+    logger?.error(`Long-running request failed: ${error.message}`);
     throw error;
   }
 }
 
+// src/framework/api/assertions.ts
+import { AxiosResponse } from 'axios';
+import { expect } from '@playwright/test';
+import { Logger } from '../utils/logger';
+
 /**
- * Helper function to determine if a response is complete based on common patterns
- * 
- * @param response - The API response to check
- * @returns boolean - True if the response is considered complete
+ * Assert API response status code
+ * @param response - Axios response
+ * @param expectedStatus - Expected status code
+ * @param logger - Logger instance
  */
-export function isResponseComplete<T = any>(response: AxiosResponse<T>): boolean {
-  // Check if the response has data
-  if (!response.data) {
-    return false;
-  }
+export function assertStatusCode(
+  response: AxiosResponse,
+  expectedStatus: number,
+  logger?: Logger
+): void {
+  logger?.debug(`Asserting status code: ${expectedStatus}`);
+  expect(response.status).toBe(expectedStatus);
+}
+
+/**
+ * Assert API response contains specific data
+ * @param response - Axios response
+ * @param expectedData - Data to check for
+ * @param logger - Logger instance
+ */
+export function assertResponseData(
+  response: AxiosResponse,
+  expectedData: any,
+  logger?: Logger
+): void {
+  logger?.debug(`Asserting response data contains expected properties`);
+  expect(response.data).toMatchObject(expectedData);
+}
+
+/**
+ * Assert response has data
+ * Specifically useful for checking that a response contains data after a long-running request
+ * @param response - Axios response
+ * @param logger - Logger instance
+ */
+export function assertHasData(
+  response: AxiosResponse,
+  logger?: Logger
+): void {
+  logger?.debug(`Asserting response has data`);
+  expect(response.data).toBeDefined();
   
-  // For array responses, check if there are elements
   if (Array.isArray(response.data)) {
-    return response.data.length > 0;
-  }
-  
-  // For object responses with specific fields, check if required fields have data
-  if (typeof response.data === 'object') {
+    expect(response.data.length).toBeGreaterThan(0);
+  } else if (typeof response.data === 'object' && response.data !== null) {
     const dataObj = response.data as any;
     
     // Check for common patterns in response objects
     if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-      return dataObj.assetLayouts.length > 0;
+      expect(dataObj.assetLayouts.length).toBeGreaterThan(0);
+    } else if (dataObj.items && Array.isArray(dataObj.items)) {
+      expect(dataObj.items.length).toBeGreaterThan(0);
+    } else if (dataObj.data && Array.isArray(dataObj.data)) {
+      expect(dataObj.data.length).toBeGreaterThan(0);
+    } else {
+      expect(Object.keys(dataObj).length).toBeGreaterThan(0);
     }
-    
-    if (dataObj.items && Array.isArray(dataObj.items)) {
-      return dataObj.items.length > 0;
-    }
-    
-    if (dataObj.data && Array.isArray(dataObj.data)) {
-      return dataObj.data.length > 0;
-    }
-    
-    // Check if the object has any properties (not empty)
-    return Object.keys(dataObj).length > 0;
+  } else {
+    expect(response.data).not.toBeNull();
+    expect(response.data).not.toEqual('');
   }
-  
-  // For primitive types, check if it's not null, undefined, or empty string
-  return response.data !== null && response.data !== undefined && response.data !== '';
 }
 
 /**
- * Create a custom success condition function for polling
- * 
- * @param propertyPath - Dot-notation path to the property to check (e.g., 'data.items')
- * @param requiredLength - Minimum length required (for arrays)
- * @returns A function that can be used as a success condition
+ * Assert response header has a specific value
+ * @param response - Axios response
+ * @param headerName - Header name
+ * @param expectedValue - Expected header value
+ * @param logger - Logger instance
  */
-export function createSuccessCondition<T = any>(
-  propertyPath?: string, 
-  requiredLength: number = 1
-): (response: AxiosResponse<T>) => boolean {
-  return (response: AxiosResponse<T>) => {
-    // If no property path, use the default check
-    if (!propertyPath) {
-      return isResponseComplete(response);
-    }
-    
-    // Check if response exists
-    if (!response || !response.data) {
-      return false;
-    }
-    
-    // Navigate to the specified property
-    const parts = propertyPath.split('.');
-    let current: any = response.data;
-    
-    for (const part of parts) {
-      if (current === undefined || current === null) {
-        return false;
-      }
-      current = current[part];
-    }
-    
-    // Check if the property exists
-    if (current === undefined || current === null) {
-      return false;
-    }
-    
-    // Check if it's an array with required length
-    if (Array.isArray(current)) {
-      return current.length >= requiredLength;
-    }
-    
-    // For objects, check if it has properties
-    if (typeof current === 'object') {
-      return Object.keys(current).length > 0;
-    }
-    
-    // For primitives, check if it's not empty
-    return current !== '';
-  };
+export function assertHeader(
+  response: AxiosResponse,
+  headerName: string,
+  expectedValue: string,
+  logger?: Logger
+): void {
+  logger?.debug(`Asserting header ${headerName} has value ${expectedValue}`);
+  const headerValue = response.headers[headerName.toLowerCase()];
+  expect(headerValue).toBe(expectedValue);
 }
 
-// src/framework/base-api-client.ts
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
-import { 
-  ApiRequestOptions, 
-  createRequestConfig, 
-  normalizeUrl 
-} from './api/request-config';
-import { executeRequest } from './api/request-executor';
-import { retryRequest } from './api/retry-handler';
-import { handleLongRunningRequest } from './api/polling-handler';
-import { 
-  assertStatusCode, 
-  assertResponseData, 
-  assertHasData, 
-  assertHeader, 
-  assertResponseTime 
-} from './api/assertions';
+/**
+ * Assert response time is within acceptable limits
+ * @param response - Axios response
+ * @param maxTime - Maximum acceptable response time in ms
+ * @param logger - Logger instance
+ */
+export function assertResponseTime(
+  response: AxiosResponse,
+  maxTime: number,
+  logger?: Logger
+): void {
+  const duration = (response as any)._duration;
+  if (duration !== undefined) {
+    logger?.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
+    expect(duration).toBeLessThanOrEqual(maxTime);
+  } else {
+    logger?.warn('Response time metrics not available');
+  }
+}
+
+// src/framework/api/api-client-factory.ts
+import { BaseApiClient } from '../base-api-client';
+import { ConfigManager } from '../utils/config-manager';
+import { Logger } from '../utils/logger';
 
 /**
- * Base API client for all API interactions
- * Enhanced with long-running request support, certificate handling, and robust error handling
+ * Factory class for creating API clients
+ * Manages client instances and ensures proper initialization
  */
-export class BaseApiClient {
-  readonly apiBaseUrl: string;
-  readonly defaultTimeout: number;
-  readonly logger: Logger;
-  readonly defaultHeaders: Record<string, string>;
-  readonly config: ConfigManager;
-  
-  // Certificate and proxy settings
-  readonly pfxCertPath?: string;
-  readonly pfxCertPassphrase?: string;
-  readonly proxyUrl?: string;
-  readonly defaultRetryOptions: { maxAttempts: number; retryDelay: number };
-  readonly defaultPollingOptions: {
-    enabled: boolean;
-    maxAttempts: number;
-    interval: number;
-    timeoutPerAttempt: number;
-  };
+export class ApiClientFactory {
+  private static instance: ApiClientFactory;
+  private logger: Logger;
+  private config: ConfigManager;
+  private clients: Map<string, BaseApiClient> = new Map();
 
   /**
-   * Constructor for the BaseApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   * @param defaultHeaders - Default headers to include in all requests
+   * Private constructor for singleton pattern
    */
-  constructor(
-    apiBaseUrl?: string,
-    defaultHeaders: Record<string, string> = {}
-  ) {
+  private constructor() {
+    this.logger = new Logger('ApiClientFactory');
     this.config = ConfigManager.getInstance();
-    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
-    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
-    this.logger = new Logger(this.constructor.name);
-    this.defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...defaultHeaders
-    };
-    
-    // Initialize certificate settings from config
-    this.pfxCertPath = this.config.getString('PFX_CERT_PATH', '');
-    this.pfxCertPassphrase = this.config.getString('PFX_CERT_PASSPHRASE', '');
-    this.proxyUrl = this.config.getString('PROXY_URL', '');
-    
-    this.defaultRetryOptions = {
-      maxAttempts: this.config.getNumber('API_RETRY_ATTEMPTS', 3),
-      retryDelay: this.config.getNumber('API_RETRY_DELAY', 1000)
-    };
-    
-    // Initialize polling options for long-running requests
-    this.defaultPollingOptions = {
-      enabled: this.config.getBoolean('API_ENABLE_POLLING', false),
-      maxAttempts: this.config.getNumber('API_POLLING_MAX_ATTEMPTS', 10),
-      interval: this.config.getNumber('API_POLLING_INTERVAL', 2000),
-      timeoutPerAttempt: this.config.getNumber('API_POLLING_TIMEOUT_PER_ATTEMPT', 10000)
-    };
-    
-    // Set up the interceptors from the imported module
-    this.setupInterceptors();
   }
 
   /**
-   * Set up axios interceptors for debugging request/response
-   * @private
+   * Get singleton instance
+   * @returns ApiClientFactory instance
    */
-  private setupInterceptors(): void {
-    // Request interceptor
-    axios.interceptors.request.use(
-      (config) => {
-        if (this.config.getBoolean('API_DEBUG', false)) {
-          this.logger.debug(`Full request config: ${JSON.stringify({
-            url: config.url,
-            method: config.method,
-            headers: config.headers,
-            params: config.params,
-            data: config.data
-          }, null, 2)}`);
-        }
-        return config;
-      },
-      (error) => {
-        this.logger.error(`Request interceptor error: ${error.message}`);
-        return Promise.reject(error);
-      }
-    );
-    
-    // Response interceptor
-    axios.interceptors.response.use(
-      (response) => {
-        return response;
-      },
-      (error) => {
-        if (error.response) {
-          this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
-        } else if (error.request) {
-          this.logger.error(`No response received: ${error.message}`);
-        } else {
-          this.logger.error(`Request configuration error: ${error.message}`);
-        }
-        return Promise.reject(error);
-      }
-    );
+  public static getInstance(): ApiClientFactory {
+    if (!ApiClientFactory.instance) {
+      ApiClientFactory.instance = new ApiClientFactory();
+    }
+    return ApiClientFactory.instance;
   }
 
   /**
-   * Make a GET request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Initialize the factory
+   * @returns Promise<void>
    */
-  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making GET request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.pfxCertPath, 
-      this.pfxCertPassphrase, this.proxyUrl, this.defaultTimeout, this.logger);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('get', url, undefined, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
+  public async init(): Promise<void> {
+    await this.config.init();
+    this.logger.info('API Client Factory initialized');
+  }
+
+  /**
+   * Get or create a client instance
+   * @param clientType - Client constructor
+   * @param clientName - Unique name for the client
+   * @param args - Arguments to pass to the constructor
+   * @returns Promise<T> - Initialized client instance
+   */
+  public async getClient<T extends BaseApiClient>(
+    clientType: new (...args: any[]) => T,
+    clientName: string,
+    ...args: any[]
+  ): Promise<T> {
+    // Check if we already have an instance
+    const existingClient = this.clients.get(clientName) as T;
+    if (existingClient) {
+      return existingClient;
     }
     
-    return retryRequest<T>(
-      () => executeRequest('get', url, undefined, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
+    // Create a new instance
+    this.logger.info(`Creating new API client: ${clientName}`);
+    const client = new clientType(...args);
+    
+    // Initialize the client
+    await client.init();
+    
+    // Store the instance
+    this.clients.set(clientName, client);
+    
+    return client;
   }
 
   /**
-   * Make a POST request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * Check if a client exists
+   * @param clientName - Client name
+   * @returns boolean - Whether the client exists
    */
-  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making POST request to: ${url}`);
+  public hasClient(clientName: string): boolean {
+    return this.clients.has(clientName);
+  }
+
+  /**
+   * Remove a client instance
+   * @param clientName - Client name
+   */
+  public removeClient(clientName: string): void {
+    if (this.clients.has(clientName)) {
+      this.clients.delete(clientName);
+      this.logger.info(`Removed API client: ${clientName}`);
+    }
+  }
+
+  /**
+   * Clear all client instances
+   */
+  public clearClients(): void {
+    this.clients.clear();
+    this.logger.info('Cleared all API clients');
+  }
+}
+
+// src/api/user-api-client.ts
+import { AxiosResponse } from 'axios';
+import { BaseApiClient } from '../framework/base-api-client';
+import { ApiRequestOptions } from '../framework/api/types';
+
+/**
+ * User object interface
+ */
+interface User {
+  id: string;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * User creation request interface
+ */
+interface CreateUserRequest {
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  password: string;
+  role?: string;
+}
+
+/**
+ * User API client implementation
+ */
+export class UserApiClient extends BaseApiClient {
+  /**
+   * Constructor for UserApiClient
+   * @param apiBaseUrl - Optional base URL override
+   */
+  constructor(apiBaseUrl?: string) {
+    super(apiBaseUrl);
     
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.pfxCertPath, 
-      this.pfxCertPassphrase, this.proxyUrl, this.defaultTimeout, this.logger);
+    // Set service-specific defaults
+    this.setDefaultHeader('X-Service', 'user-service');
+  }
+
+  /**
+   * Get all users
+   * @param options - Query parameters and request options
+   * @returns Promise<AxiosResponse<User[]>> - API response with users
+   */
+  async getUsers(options?: { 
+    limit?: number; 
+    offset?: number;
+    apiOptions?: ApiRequestOptions
+  }): Promise<AxiosResponse<User[]>> {
+    const params: Record<string, any> = {};
     
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('post', url, data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
+    if (options?.limit !== undefined) {
+      params.limit = options.limit;
     }
     
-    return retryRequest<T>(
-      () => executeRequest('post', url, data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
-  }
-
-  /**
-   * Make a PUT request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making PUT request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.pfxCertPath, 
-      this.pfxCertPassphrase, this.proxyUrl, this.defaultTimeout, this.logger);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('put', url, data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
+    if (options?.offset !== undefined) {
+      params.offset = options.offset;
     }
     
-    return retryRequest<T>(
-      () => executeRequest('put', url, data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
-  }
-
-  /**
-   * Make a PATCH request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making PATCH request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.pfxCertPath, 
-      this.pfxCertPassphrase, this.proxyUrl, this.defaultTimeout, this.logger);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('patch', url, data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
-    }
-    
-    return retryRequest<T>(
-      () => executeRequest('patch', url, data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
-  }
-
-  /**
-   * Make a DELETE request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = normalizeUrl(endpoint, this.apiBaseUrl);
-    this.logger.info(`Making DELETE request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.pfxCertPath, 
-      this.pfxCertPassphrase, this.proxyUrl, this.defaultTimeout, this.logger);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
-      return handleLongRunningRequest<T>(
-        () => executeRequest('delete', url, options?.data, requestConfig, this.logger),
-        this.defaultPollingOptions,
-        options?.pollingOptions,
-        this.logger,
-        this.config
-      );
-    }
-    
-    return retryRequest<T>(
-      () => executeRequest('delete', url, options?.data, requestConfig, this.logger),
-      this.defaultRetryOptions,
-      options?.retryOptions,
-      this.logger
-    );
-  }
-
-  /**
-   * Assert API response status code
-   * @param response - Axios response
-   * @param expectedStatus - Expected status code
-   */
-  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
-    assertStatusCode(response, expectedStatus, this.logger);
-  }
-
-  /**
-   * Assert API response contains specific data
-   * @param response - Axios response
-   * @param expectedData - Data to check for
-   */
-  assertResponseData(response: AxiosResponse, expectedData: any): void {
-    assertResponseData(response, expectedData, this.logger);
-  }
-
-  /**
-   * Assert response has data
-   * @param response - Axios response
-   */
-  assertHasData(response: AxiosResponse): void {
-    assertHasData(response, this.logger);
-  }
-
-  /**
-   * Assert response header has a specific value
-   * @param response - Axios response
-   * @param headerName - Header name
-   * @param expectedValue - Expected header value
-   */
-  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
-    assertHeader(response, headerName, expectedValue, this.logger);
-  }
-
-  /**
-   * Assert response time is within acceptable limits
-   * @param response - Axios response
-   * @param maxTime - Maximum acceptable response time in ms
-   */
-  assertResponseTime(response: AxiosResponse, maxTime: number): void {
-    assertResponseTime(response, maxTime, this.logger);
-  }
-
-  /**
-   * Get authentication token (to be implemented by derived classes)
-   * @returns Promise<string> - Authentication token
-   */
-  async getAuthToken(): Promise<string> {
-    throw new Error('getAuthToken() method must be implemented by derived API client classes');
-  }
-
-  /**
-   * Create auth header with token
-   * @param token - Authentication token
-   * @returns Record<string, string> - Headers with authentication
-   */
-  createAuthHeader(token: string): Record<string, string> {
-    return { 'Authorization': `Bearer ${token}` };
-  }
-
-  /**
-   * Attempt to resolve a hostname
-   * @param hostname - Hostname to resolve
-   * @returns Promise<string> - Resolved IP address
-   */
-  async resolveHostname(hostname: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const dns = require('dns');
-      dns.lookup(hostname, (err: Error | null, address: string) => {
-        if (err) {
-          this.logger.error(`Failed to resolve hostname ${hostname}: ${err.message}`);
-          reject(err);
-        } else {
-          this.logger.info(`Resolved ${hostname} to ${address}`);
-          resolve(address);
-        }
-      });
+    return this.get<User[]>('/users', {
+      params,
+      ...options?.apiOptions
     });
   }
-}
 
-// Re-export all types and utilities for easier importing
-export * from './api/types';
-export * from './api/request-config';
-export * from './api/assertions';
-
-
-// src/api/assertions.ts
-import { AxiosResponse } from 'axios';
-import { expect } from '@playwright/test';
-import { Logger } from '../framework/utils/logger';
-
-/**
- * API Assertions class containing utility methods for validating API responses
- */
-export class ApiAssertions {
-  private logger: Logger;
-
-  constructor() {
-    this.logger = new Logger('ApiAssertions');
+  /**
+   * Get user by ID
+   * @param id - User ID
+   * @param options - Request options
+   * @returns Promise<AxiosResponse<User>> - API response with user
+   */
+  async getUserById(
+    id: string, 
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<User>> {
+    return this.get<User>(`/users/${id}`, options);
   }
 
   /**
-   * Assert API response status code
-   * @param response - Axios response
-   * @param expectedStatus - Expected status code
+   * Create a new user
+   * @param userData - User data
+   * @param token - Optional authentication token
+   * @param options - Request options
+   * @returns Promise<AxiosResponse<User>> - API response with created user
    */
-  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
-    this.logger.debug(`Asserting status code: ${expectedStatus}`);
-    expect(response.status).toBe(expectedStatus);
-  }
-
-  /**
-   * Assert API response contains specific data (partial match)
-   * @param response - Axios response
-   * @param expectedData - Data to check for
-   */
-  assertResponseData(response: AxiosResponse, expectedData: any): void {
-    this.logger.debug(`Asserting response data`);
-    expect(response.data).toMatchObject(expectedData);
-  }
-
-  /**
-   * Assert API response data exactly matches expected data
-   * @param response - Axios response
-   * @param expectedData - Data to check for
-   */
-  assertExactResponseData(response: AxiosResponse, expectedData: any): void {
-    this.logger.debug(`Asserting exact response data`);
-    expect(response.data).toEqual(expectedData);
-  }
-
-  /**
-   * Assert response has data
-   * Specifically useful for checking that a response contains data after a long-running request
-   * @param response - Axios response
-   */
-  assertHasData(response: AxiosResponse): void {
-    this.logger.debug(`Asserting response has data`);
-    expect(response.data).toBeDefined();
-    
-    if (Array.isArray(response.data)) {
-      expect(response.data.length).toBeGreaterThan(0);
-    } else if (typeof response.data === 'object' && response.data !== null) {
-      const dataObj = response.data as any;
-      
-      // Check for common patterns in response objects
-      if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-        expect(dataObj.assetLayouts.length).toBeGreaterThan(0);
-      } else if (dataObj.items && Array.isArray(dataObj.items)) {
-        expect(dataObj.items.length).toBeGreaterThan(0);
-      } else if (dataObj.data && Array.isArray(dataObj.data)) {
-        expect(dataObj.data.length).toBeGreaterThan(0);
-      } else {
-        expect(Object.keys(dataObj).length).toBeGreaterThan(0);
-      }
-    } else {
-      expect(response.data).not.toBeNull();
-      expect(response.data).not.toEqual('');
-    }
-  }
-
-  /**
-   * Assert response has no errors
-   * @param response - Axios response
-   */
-  assertNoErrors(response: AxiosResponse): void {
-    this.logger.debug(`Asserting response has no errors`);
-    
-    const data = response.data;
-    if (typeof data === 'object' && data !== null) {
-      // Check common error fields
-      if ('error' in data) {
-        expect(data.error).toBeNull();
-      }
-      
-      if ('errors' in data && Array.isArray(data.errors)) {
-        expect(data.errors.length).toBe(0);
-      }
-      
-      if ('systemError' in data) {
-        expect(data.systemError).toBeNull();
-      }
-      
-      if ('errorMessage' in data) {
-        expect(data.errorMessage).toBeNull();
-      }
-      
-      if ('validationErrorMessage' in data) {
-        expect(data.validationErrorMessage).toBeNull();
-      }
-    }
-  }
-
-  /**
-   * Assert response header has a specific value
-   * @param response - Axios response
-   * @param headerName - Header name
-   * @param expectedValue - Expected header value
-   */
-  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
-    this.logger.debug(`Asserting header ${headerName} has value ${expectedValue}`);
-    const headerValue = response.headers[headerName.toLowerCase()];
-    expect(headerValue).toBe(expectedValue);
-  }
-
-  /**
-   * Assert response contains a header
-   * @param response - Axios response
-   * @param headerName - Header name
-   */
-  assertHeaderExists(response: AxiosResponse, headerName: string): void {
-    this.logger.debug(`Asserting header ${headerName} exists`);
-    const headerValue = response.headers[headerName.toLowerCase()];
-    expect(headerValue).toBeDefined();
-  }
-
-  /**
-   * Assert response header contains a value
-   * @param response - Axios response
-   * @param headerName - Header name
-   * @param expectedValueSubstring - Substring to check for in header value
-   */
-  assertHeaderContains(response: AxiosResponse, headerName: string, expectedValueSubstring: string): void {
-    this.logger.debug(`Asserting header ${headerName} contains ${expectedValueSubstring}`);
-    const headerValue = response.headers[headerName.toLowerCase()];
-    expect(headerValue).toContain(expectedValueSubstring);
-  }
-
-  /**
-   * Assert response time is within acceptable limits
-   * @param response - Axios response
-   * @param maxTime - Maximum acceptable response time in ms
-   */
-  assertResponseTime(response: AxiosResponse, maxTime: number): void {
-    const duration = (response as any)._duration;
-    if (duration !== undefined) {
-      this.logger.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
-      expect(duration).toBeLessThanOrEqual(maxTime);
-    } else {
-      this.logger.warn('Response time metrics not available');
-    }
-  }
-
-  /**
-   * Assert that a value in the response data is of a certain type
-   * @param response - Axios response
-   * @param path - Path to the property (dot notation for nested props, e.g., 'data.user.id')
-   * @param expectedType - Expected type ('string', 'number', 'boolean', 'object', 'array')
-   */
-  assertPropertyType(response: AxiosResponse, path: string, expectedType: string): void {
-    this.logger.debug(`Asserting property ${path} is of type ${expectedType}`);
-    
-    const value = this.getPropertyByPath(response.data, path);
-    expect(value).toBeDefined();
-    
-    switch(expectedType.toLowerCase()) {
-      case 'string':
-        expect(typeof value).toBe('string');
-        break;
-      case 'number':
-        expect(typeof value).toBe('number');
-        break;
-      case 'boolean':
-        expect(typeof value).toBe('boolean');
-        break;
-      case 'object':
-        expect(typeof value).toBe('object');
-        expect(value).not.toBeNull();
-        expect(Array.isArray(value)).toBe(false);
-        break;
-      case 'array':
-        expect(Array.isArray(value)).toBe(true);
-        break;
-      default:
-        throw new Error(`Unsupported type for assertion: ${expectedType}`);
-    }
-  }
-
-  /**
-   * Assert that a property exists in the response
-   * @param response - Axios response
-   * @param path - Path to the property (dot notation for nested props)
-   */
-  assertPropertyExists(response: AxiosResponse, path: string): void {
-    this.logger.debug(`Asserting property exists: ${path}`);
-    const value = this.getPropertyByPath(response.data, path);
-    expect(value).toBeDefined();
-  }
-
-  /**
-   * Assert that an array property has a specific length
-   * @param response - Axios response
-   * @param path - Path to the array property
-   * @param expectedLength - Expected array length
-   */
-  assertArrayLength(response: AxiosResponse, path: string, expectedLength: number): void {
-    this.logger.debug(`Asserting array ${path} has length ${expectedLength}`);
-    const value = this.getPropertyByPath(response.data, path);
-    expect(Array.isArray(value)).toBe(true);
-    expect(value.length).toBe(expectedLength);
-  }
-
-  /**
-   * Assert that an array property has at least a certain length
-   * @param response - Axios response
-   * @param path - Path to the array property
-   * @param minLength - Minimum expected array length
-   */
-  assertArrayMinLength(response: AxiosResponse, path: string, minLength: number): void {
-    this.logger.debug(`Asserting array ${path} has at least ${minLength} items`);
-    const value = this.getPropertyByPath(response.data, path);
-    expect(Array.isArray(value)).toBe(true);
-    expect(value.length).toBeGreaterThanOrEqual(minLength);
-  }
-
-  /**
-   * Verify JSON schema of the response
-   * @param response - Axios response
-   * @param schemaValidator - Function to validate schema
-   */
-  assertSchema(response: AxiosResponse, schemaValidator: (data: any) => boolean): void {
-    this.logger.debug('Asserting response matches schema');
-    expect(schemaValidator(response.data)).toBe(true);
-  }
-
-  /**
-   * Helper method to access nested properties using dot notation path
-   * @param obj - Object to get property from
-   * @param path - Path to property using dot notation
-   * @returns The property value or undefined
-   * @private
-   */
-  private getPropertyByPath(obj: any, path: string): any {
-    return path.split('.').reduce((current, part) => current && current[part], obj);
-  }
-}
-
-export default new ApiAssertions();
-
-// src/framework/base-api-client.ts
-import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
-import { ConfigManager } from './utils/config-manager';
-import { Logger } from './utils/logger';
-import { RetryHandler } from './retry-handler';
-import { RequestExecutor } from './request-executor';
-import { PollingHandler } from './polling-handler';
-import { createRequestConfig } from './request-config';
-import { ApiRequestOptions } from './types';
-
-/**
- * Base API client for all API interactions
- * Enhanced with long-running request support, certificate handling, and robust error handling
- */
-export class BaseApiClient {
-  readonly apiBaseUrl: string;
-  readonly defaultTimeout: number;
-  readonly logger: Logger;
-  readonly defaultHeaders: Record<string, string>;
-  readonly config: ConfigManager;
-  
-  private retryHandler: RetryHandler;
-  private requestExecutor: RequestExecutor;
-  private pollingHandler: PollingHandler;
-
-  /**
-   * Constructor for the BaseApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   * @param defaultHeaders - Default headers to include in all requests
-   */
-  constructor(
-    apiBaseUrl?: string,
-    defaultHeaders: Record<string, string> = {}
-  ) {
-    this.config = ConfigManager.getInstance();
-    this.apiBaseUrl = apiBaseUrl || this.config.getString('API_BASE_URL', 'https://api.example.com');
-    this.defaultTimeout = this.config.getNumber('DEFAULT_TIMEOUT', 30000);
-    this.logger = new Logger(this.constructor.name);
-    this.defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      ...defaultHeaders
+  async createUser(
+    userData: CreateUserRequest, 
+    token?: string,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<User>> {
+    const requestOptions: ApiRequestOptions = {
+      ...options
     };
     
-    // Initialize handlers
-    this.retryHandler = new RetryHandler(this.logger, this.config);
-    this.requestExecutor = new RequestExecutor(this.logger, this.config);
-    this.pollingHandler = new PollingHandler(this.logger, this.config, this.requestExecutor);
-    
-    // Set up request/response interceptors for debugging
-    this.setupInterceptors();
-  }
-
-  /**
-   * Set up axios interceptors for debugging request/response
-   * @private
-   */
-  private setupInterceptors(): void {
-    // Request interceptor
-    axios.interceptors.request.use(
-      (config) => {
-        if (this.config.getBoolean('API_DEBUG', false)) {
-          this.logger.debug(`Request: ${config.method?.toUpperCase()} ${config.url}`);
-          if (this.config.getBoolean('API_DEBUG_DETAILED', false)) {
-            this.logger.debug(`Request details: ${JSON.stringify({
-              headers: config.headers,
-              params: config.params,
-              data: config.data
-            }, null, 2)}`);
-          }
-        }
-        return config;
-      },
-      (error) => {
-        this.logger.error(`Request interceptor error: ${error.message}`);
-        return Promise.reject(error);
-      }
-    );
-    
-    // Response interceptor
-    axios.interceptors.response.use(
-      (response) => {
-        return response;
-      },
-      (error) => {
-        if (error.response) {
-          this.logger.error(`Response error: ${error.response.status} - ${error.message}`);
-        } else if (error.request) {
-          this.logger.error(`No response received: ${error.message}`);
-        } else {
-          this.logger.error(`Request configuration error: ${error.message}`);
-        }
-        return Promise.reject(error);
-      }
-    );
-  }
-
-  /**
-   * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
-   * @param endpoint - API endpoint
-   * @returns Full URL string
-   */
-  protected normalizeUrl(endpoint: string): string {
-    // Ensure baseUrl has a protocol
-    const baseUrl = this.apiBaseUrl.startsWith('http') 
-      ? this.apiBaseUrl 
-      : `https://${this.apiBaseUrl}`;
-      
-    // Ensure endpoint starts with a slash if not empty and doesn't already have one
-    if (endpoint && !endpoint.startsWith('/')) {
-      endpoint = '/' + endpoint;
+    if (token) {
+      requestOptions.headers = {
+        ...requestOptions.headers,
+        ...this.createAuthHeader(token)
+      };
     }
     
-    try {
-      return new URL(endpoint, baseUrl).toString();
-    } catch (error: any) {
-      this.logger.error(`Error creating URL from ${baseUrl} and ${endpoint}: ${error.message}`);
-      throw new Error(`Invalid URL: Cannot combine ${baseUrl} and ${endpoint}`);
-    }
+    return this.post<User>('/users', userData, requestOptions);
   }
 
   /**
-   * Make a GET request
-   * @param endpoint - API endpoint
+   * Update a user
+   * @param id - User ID
+   * @param userData - User data to update
+   * @param token - Optional authentication token
    * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * @returns Promise<AxiosResponse<User>> - API response with updated user
    */
-  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making GET request to: ${url}`);
+  async updateUser(
+    id: string, 
+    userData: Partial<User>, 
+    token?: string,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<User>> {
+    const requestOptions: ApiRequestOptions = {
+      ...options
+    };
     
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
-      return this.pollingHandler.handleLongRunningRequest<T>(
-        () => this.requestExecutor.executeRequest('get', url, undefined, requestConfig),
-        options?.pollingOptions
-      );
+    if (token) {
+      requestOptions.headers = {
+        ...requestOptions.headers,
+        ...this.createAuthHeader(token)
+      };
     }
     
-    return this.retryHandler.retryRequest<T>(
-      () => this.requestExecutor.executeRequest('get', url, undefined, requestConfig),
-      options?.retryOptions
-    );
+    return this.put<User>(`/users/${id}`, userData, requestOptions);
   }
 
   /**
-   * Make a POST request
-   * @param endpoint - API endpoint
-   * @param data - Request body
+   * Delete a user
+   * @param id - User ID
+   * @param token - Optional authentication token
    * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
+   * @returns Promise<AxiosResponse<void>> - API response
    */
-  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making POST request to: ${url}`);
+  async deleteUser(
+    id: string, 
+    token?: string,
+    options?: ApiRequestOptions
+  ): Promise<AxiosResponse<void>> {
+    const requestOptions: ApiRequestOptions = {
+      ...options
+    };
     
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
-      return this.pollingHandler.handleLongRunningRequest<T>(
-        () => this.requestExecutor.executeRequest('post', url, data, requestConfig),
-        options?.pollingOptions
-      );
+    if (token) {
+      requestOptions.headers = {
+        ...requestOptions.headers,
+        ...this.createAuthHeader(token)
+      };
     }
     
-    return this.retryHandler.retryRequest<T>(
-      () => this.requestExecutor.executeRequest('post', url, data, requestConfig),
-      options?.retryOptions
-    );
+    return this.delete<void>(`/users/${id}`, requestOptions);
   }
 
   /**
-   * Make a PUT request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making PUT request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
-      return this.pollingHandler.handleLongRunningRequest<T>(
-        () => this.requestExecutor.executeRequest('put', url, data, requestConfig),
-        options?.pollingOptions
-      );
-    }
-    
-    return this.retryHandler.retryRequest<T>(
-      () => this.requestExecutor.executeRequest('put', url, data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Make a PATCH request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making PATCH request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
-      return this.pollingHandler.handleLongRunningRequest<T>(
-        () => this.requestExecutor.executeRequest('patch', url, data, requestConfig),
-        options?.pollingOptions
-      );
-    }
-    
-    return this.retryHandler.retryRequest<T>(
-      () => this.requestExecutor.executeRequest('patch', url, data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Make a DELETE request
-   * @param endpoint - API endpoint
-   * @param options - Request options
-   * @returns Promise<AxiosResponse> - API response
-   */
-  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
-    const url = this.normalizeUrl(endpoint);
-    this.logger.info(`Making DELETE request to: ${url}`);
-    
-    const requestConfig = createRequestConfig(options, this.defaultHeaders, this.defaultTimeout, this.config);
-    
-    // Check if this is a long-running request that needs polling
-    if (options?.pollingOptions?.enabled || this.config.getBoolean('API_ENABLE_POLLING', false)) {
-      return this.pollingHandler.handleLongRunningRequest<T>(
-        () => this.requestExecutor.executeRequest('delete', url, options?.data, requestConfig),
-        options?.pollingOptions
-      );
-    }
-    
-    return this.retryHandler.retryRequest<T>(
-      () => this.requestExecutor.executeRequest('delete', url, options?.data, requestConfig),
-      options?.retryOptions
-    );
-  }
-
-  /**
-   * Get authentication token (to be implemented by derived classes)
+   * Get authentication token
+   * @param username - Username
+   * @param password - Password
    * @returns Promise<string> - Authentication token
    */
-  async getAuthToken(): Promise<string> {
-    throw new Error('getAuthToken() method must be implemented by derived API client classes');
-  }
-
-  /**
-   * Create auth header with token
-   * @param token - Authentication token
-   * @returns Record<string, string> - Headers with authentication
-   */
-  createAuthHeader(token: string): Record<string, string> {
-    return { 'Authorization': `Bearer ${token}` };
+  async getAuthToken(
+    username?: string, 
+    password?: string
+  ): Promise<string> {
+    // Get credentials from config if not provided
+    if (!username) {
+      username = await this.config.getString('AUTH_USERNAME', '');
+    }
+    
+    if (!password) {
+      password = await this.config.getString('AUTH_PASSWORD', '');
+    }
+    
+    if (!username || !password) {
+      throw new Error('Authentication credentials not provided');
+    }
+    
+    const response = await this.post('/auth/login', {
+      username,
+      password
+    });
+    
+    if (response.data && response.data.token) {
+      return response.data.token;
+    }
+    
+    throw new Error('Authentication failed: Token not found in response');
   }
 }
+
+// Example usage:
+async function exampleUsage() {
+  // Create and initialize client
+  const userClient = new UserApiClient();
+  await userClient.init();
+  
+  try {
+    // Get authentication token
+    const token = await userClient.getAuthToken();
+    
+    // Create a new user
+    const newUser = await userClient.createUser({
+      username: 'testuser',
+      email: 'test@example.com',
+      firstName: 'Test',
+      lastName: 'User',
+      password: 'Password123'
+    }, token);
+    
+    console.log('User created:', newUser.data);
+    
+    // Get user details
+    const userId = newUser.data.id;
+    const user = await userClient.getUserById(userId);
+    console.log('User details:', user.data);
+    
+    // Update user
+    const updatedUser = await userClient.updateUser(userId, {
+      firstName: 'Updated',
+      lastName: 'Name'
+    }, token);
+    console.log('User updated:', updatedUser.data);
+    
+    // Delete user
+    await userClient.deleteUser(userId, token);
+    console.log('User deleted');
+    
+  } catch (error: any) {
+    console.error('API Error:', error.message);
+  }
+}
+
+// API Client Framework Usage Guide
+
+/**
+ * This guide demonstrates how to use the modular API client framework.
+ * The framework provides a robust, type-safe, and feature-rich way to interact with APIs.
+ */
+
+// Step 1: Import the necessary classes
+import { BaseApiClient } from './framework/base-api-client';
+import { ApiClientFactory } from './framework/api/api-client-factory';
+import { ConfigManager } from './framework/utils/config-manager';
+import { ApiRequestOptions } from './framework/api/types';
+
+// Step 2: Define your API client by extending BaseApiClient
+class ProductApiClient extends BaseApiClient {
+  constructor() {
+    // Pass the service-specific base URL or use the one from config
+    super();
+    
+    // Set service-specific defaults
+    this.setDefaultHeader('X-Service', 'product-service');
+  }
+  
+  // Define service-specific methods
+  async getProducts(options?: ApiRequestOptions) {
+    return this.get('/products', options);
+  }
+  
+  async getProductById(id: string, options?: ApiRequestOptions) {
+    return this.get(`/products/${id}`, options);
+  }
+  
+  async createProduct(productData: any, token: string, options?: ApiRequestOptions) {
+    const requestOptions: ApiRequestOptions = {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...this.createAuthHeader(token)
+      }
+    };
+    
+    return this.post('/products', productData, requestOptions);
+  }
+  
+  // Implement getAuthToken if needed
+  async getAuthToken(): Promise<string> {
+    // Implementation specific to your auth flow
+    const response = await this.post('/auth/token', {
+      clientId: await this.config.getString('CLIENT_ID'),
+      clientSecret: await this.config.getString('CLIENT_SECRET')
+    });
+    
+    return response.data.access_token;
+  }
+}
+
+// Step 3: Using the API client with proper initialization
+
+// Option 1: Direct initialization
+async function directExample() {
+  // Create client instance
+  const productClient = new ProductApiClient();
+  
+  // Initialize the client (loads config, certificates, etc.)
+  await productClient.init();
+  
+  // Now you can use the client
+  try {
+    const products = await productClient.getProducts();
+    console.log(`Retrieved ${products.data.length} products`);
+    
+    // Using with authentication
+    const token = await productClient.getAuthToken();
+    const newProduct = await productClient.createProduct({
+      name: 'Test Product',
+      price: 99.99
+    }, token);
+    
+    console.log('Product created:', newProduct.data);
+    
+    // Using assertions
+    productClient.assertStatusCode(newProduct, 201);
+  } catch (error: any) {
+    console.error('API Error:', error.message);
+  }
+}
+
+// Option 2: Using the factory (recommended for larger applications)
+async function factoryExample() {
+  // Get the factory instance
+  const factory = ApiClientFactory.getInstance();
+  await factory.init();
+  
+  // Get a client instance (creates and initializes if needed)
+  const productClient = await factory.getClient(
+    ProductApiClient,
+    'products'
+  );
+  
+  // Use the client as before
+  const products = await productClient.getProducts();
+  
+  // The factory will reuse the same instance next time
+  const sameClient = await factory.getClient(
+    ProductApiClient,
+    'products'
+  );
+  
+  // Now they are the same instance
+  console.log(productClient ===
