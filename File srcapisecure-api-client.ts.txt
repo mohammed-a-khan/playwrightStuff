@@ -2206,3 +2206,517 @@ async function factoryExample() {
   
   // Now they are the same instance
   console.log(productClient ===
+
+
+/**
+ * ProxyManager.ts
+ * 
+ * A utility for managing API request proxying configurations and routing
+ * API requests through appropriate proxy servers based on environment
+ * conditions, target endpoints, and security requirements.
+ */
+
+import https from 'https';
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { URL } from 'url';
+import axios, { AxiosRequestConfig, AxiosInstance } from 'axios';
+import { LoggerService } from './logger-service';
+import { ConfigService } from './config-service';
+import { ProxyConfig, ProxyRoute, ProxyCredentials, CertificateConfig } from '../types/proxy-types';
+
+export class ProxyManager {
+  private logger: LoggerService;
+  private config: ConfigService;
+  private proxyConfigs: Map<string, ProxyConfig> = new Map();
+  private axiosInstances: Map<string, AxiosInstance> = new Map();
+  private defaultProxyId: string | null = null;
+
+  constructor(
+    logger: LoggerService,
+    config: ConfigService
+  ) {
+    this.logger = logger;
+    this.config = config;
+    this.initialize();
+  }
+
+  /**
+   * Initialize the proxy manager with configurations from the config service
+   */
+  private initialize(): void {
+    try {
+      const proxyConfigs = this.config.get<ProxyConfig[]>('proxies') || [];
+      
+      if (proxyConfigs.length === 0) {
+        this.logger.warn('No proxy configurations found');
+        return;
+      }
+
+      // Load all proxy configurations
+      proxyConfigs.forEach(proxyConfig => {
+        if (!proxyConfig.id) {
+          this.logger.warn('Skipping proxy config without ID', { proxyConfig });
+          return;
+        }
+        
+        this.proxyConfigs.set(proxyConfig.id, proxyConfig);
+        
+        // Create an axios instance for this proxy
+        this.createAxiosInstance(proxyConfig);
+        
+        this.logger.info(`Loaded proxy configuration: ${proxyConfig.id}`);
+        
+        // Set as default if marked as default
+        if (proxyConfig.isDefault) {
+          this.defaultProxyId = proxyConfig.id;
+          this.logger.info(`Set default proxy to: ${proxyConfig.id}`);
+        }
+      });
+      
+      if (!this.defaultProxyId && proxyConfigs.length > 0) {
+        // If no default was explicitly set but we have proxies, set the first as default
+        this.defaultProxyId = proxyConfigs[0].id;
+        this.logger.info(`No default proxy set, using first proxy as default: ${this.defaultProxyId}`);
+      }
+    } catch (error) {
+      this.logger.error('Failed to initialize proxy manager', { error });
+      throw new Error('Failed to initialize proxy manager');
+    }
+  }
+
+  /**
+   * Create an axios instance configured for a specific proxy
+   */
+  private createAxiosInstance(proxyConfig: ProxyConfig): void {
+    try {
+      const axiosConfig: AxiosRequestConfig = {
+        baseURL: proxyConfig.baseUrl,
+        timeout: proxyConfig.timeout || 30000,
+        headers: proxyConfig.defaultHeaders || {},
+        proxy: proxyConfig.useProxy ? {
+          host: proxyConfig.proxyHost!,
+          port: proxyConfig.proxyPort!,
+          auth: proxyConfig.proxyAuth ? {
+            username: proxyConfig.proxyAuth.username,
+            password: proxyConfig.proxyAuth.password
+          } : undefined
+        } : false
+      };
+
+      // Configure SSL/TLS if needed
+      if (proxyConfig.useSsl) {
+        const httpsAgent = this.createHttpsAgent(proxyConfig.certificates);
+        if (httpsAgent) {
+          axiosConfig.httpsAgent = httpsAgent;
+        }
+      }
+
+      const instance = axios.create(axiosConfig);
+      
+      // Add request interceptor for logging
+      instance.interceptors.request.use(
+        (config) => {
+          this.logger.debug(`Proxying request via ${proxyConfig.id}`, {
+            method: config.method,
+            url: config.url,
+            headers: this.sanitizeHeaders(config.headers || {})
+          });
+          return config;
+        },
+        (error) => {
+          this.logger.error(`Request error in proxy ${proxyConfig.id}`, { error });
+          return Promise.reject(error);
+        }
+      );
+
+      // Add response interceptor for logging
+      instance.interceptors.response.use(
+        (response) => {
+          this.logger.debug(`Received response via ${proxyConfig.id}`, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: this.sanitizeHeaders(response.headers)
+          });
+          return response;
+        },
+        (error) => {
+          this.logger.error(`Response error in proxy ${proxyConfig.id}`, {
+            error: {
+              message: error.message,
+              status: error.response?.status,
+              statusText: error.response?.statusText
+            }
+          });
+          return Promise.reject(error);
+        }
+      );
+
+      this.axiosInstances.set(proxyConfig.id, instance);
+    } catch (error) {
+      this.logger.error(`Failed to create axios instance for proxy ${proxyConfig.id}`, { error });
+      throw new Error(`Failed to create axios instance for proxy ${proxyConfig.id}`);
+    }
+  }
+
+  /**
+   * Create an HTTPS agent with the appropriate certificate configuration
+   */
+  private createHttpsAgent(certConfig?: CertificateConfig): https.Agent | undefined {
+    if (!certConfig) {
+      return undefined;
+    }
+
+    try {
+      const agentOptions: https.AgentOptions = {
+        rejectUnauthorized: certConfig.verifySSL !== false
+      };
+
+      // PFX certificate configuration
+      if (certConfig.pfxCertPath) {
+        if (!fs.existsSync(certConfig.pfxCertPath)) {
+          throw new Error(`PFX certificate file not found: ${certConfig.pfxCertPath}`);
+        }
+        
+        agentOptions.pfx = fs.readFileSync(certConfig.pfxCertPath);
+        
+        if (certConfig.pfxPassphrase) {
+          agentOptions.passphrase = certConfig.pfxPassphrase;
+        }
+      } 
+      // CA, cert, and key configuration
+      else if (certConfig.caCertPath || certConfig.certPath || certConfig.keyPath) {
+        if (certConfig.caCertPath) {
+          if (!fs.existsSync(certConfig.caCertPath)) {
+            throw new Error(`CA certificate file not found: ${certConfig.caCertPath}`);
+          }
+          agentOptions.ca = fs.readFileSync(certConfig.caCertPath);
+        }
+        
+        if (certConfig.certPath) {
+          if (!fs.existsSync(certConfig.certPath)) {
+            throw new Error(`Certificate file not found: ${certConfig.certPath}`);
+          }
+          agentOptions.cert = fs.readFileSync(certConfig.certPath);
+        }
+        
+        if (certConfig.keyPath) {
+          if (!fs.existsSync(certConfig.keyPath)) {
+            throw new Error(`Key file not found: ${certConfig.keyPath}`);
+          }
+          agentOptions.key = fs.readFileSync(certConfig.keyPath);
+        }
+      }
+
+      return new https.Agent(agentOptions);
+    } catch (error) {
+      this.logger.error('Failed to create HTTPS agent with certificates', { error });
+      throw new Error('Failed to create HTTPS agent with certificates');
+    }
+  }
+
+  /**
+   * Get the appropriate axios instance for a given request
+   */
+  public getProxyForRequest(url: string, options?: { proxyId?: string }): AxiosInstance {
+    const requestedProxyId = options?.proxyId;
+    
+    // If a specific proxy is requested and exists, use it
+    if (requestedProxyId && this.axiosInstances.has(requestedProxyId)) {
+      return this.axiosInstances.get(requestedProxyId)!;
+    }
+    
+    // Otherwise try to find a matching proxy based on route rules
+    const matchedProxyId = this.findMatchingProxyForUrl(url);
+    
+    if (matchedProxyId && this.axiosInstances.has(matchedProxyId)) {
+      return this.axiosInstances.get(matchedProxyId)!;
+    }
+    
+    // Fall back to default proxy
+    if (this.defaultProxyId && this.axiosInstances.has(this.defaultProxyId)) {
+      return this.axiosInstances.get(this.defaultProxyId)!;
+    }
+    
+    // If we get here, we don't have a valid proxy
+    throw new Error('No suitable proxy configuration found for the request');
+  }
+
+  /**
+   * Find a matching proxy based on route rules for a given URL
+   */
+  private findMatchingProxyForUrl(url: string): string | null {
+    for (const [proxyId, config] of this.proxyConfigs.entries()) {
+      if (!config.routes || config.routes.length === 0) {
+        continue;
+      }
+      
+      for (const route of config.routes) {
+        if (this.doesRouteMatchUrl(route, url)) {
+          this.logger.debug(`URL ${url} matched route in proxy ${proxyId}`);
+          return proxyId;
+        }
+      }
+    }
+    
+    return null;
+  }
+
+  /**
+   * Check if a route rule matches a given URL
+   */
+  private doesRouteMatchUrl(route: ProxyRoute, url: string): boolean {
+    try {
+      // Handle prefix matching
+      if (route.pathPrefix && url.startsWith(route.pathPrefix)) {
+        return true;
+      }
+      
+      // Handle regex pattern matching
+      if (route.pathPattern) {
+        const regex = new RegExp(route.pathPattern);
+        if (regex.test(url)) {
+          return true;
+        }
+      }
+      
+      // Handle hostname matching
+      if (route.hostname) {
+        try {
+          const parsedUrl = new URL(url);
+          if (parsedUrl.hostname === route.hostname) {
+            return true;
+          }
+        } catch (e) {
+          // Invalid URL, can't match hostname
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      this.logger.error('Error matching route to URL', { error, route, url });
+      return false;
+    }
+  }
+
+  /**
+   * Remove sensitive information from headers for logging
+   */
+  private sanitizeHeaders(headers: any): any {
+    const sanitized = { ...headers };
+    const sensitiveHeaders = ['authorization', 'cookie', 'x-api-key', 'proxy-authorization'];
+    
+    for (const header of Object.keys(sanitized)) {
+      if (sensitiveHeaders.includes(header.toLowerCase())) {
+        sanitized[header] = '[REDACTED]';
+      }
+    }
+    
+    return sanitized;
+  }
+
+  /**
+   * Add a new proxy configuration at runtime
+   */
+  public addProxyConfig(proxyConfig: ProxyConfig): void {
+    if (!proxyConfig.id) {
+      throw new Error('Proxy configuration must have an ID');
+    }
+    
+    this.proxyConfigs.set(proxyConfig.id, proxyConfig);
+    this.createAxiosInstance(proxyConfig);
+    
+    if (proxyConfig.isDefault) {
+      this.defaultProxyId = proxyConfig.id;
+    }
+    
+    this.logger.info(`Added new proxy configuration: ${proxyConfig.id}`);
+  }
+
+  /**
+   * Remove a proxy configuration
+   */
+  public removeProxyConfig(proxyId: string): boolean {
+    const exists = this.proxyConfigs.has(proxyId);
+    
+    if (exists) {
+      this.proxyConfigs.delete(proxyId);
+      this.axiosInstances.delete(proxyId);
+      
+      if (this.defaultProxyId === proxyId) {
+        // Reset default if we're removing it
+        this.defaultProxyId = null;
+        
+        // Try to set a new default
+        const firstProxy = this.proxyConfigs.keys().next().value;
+        if (firstProxy) {
+          this.defaultProxyId = firstProxy;
+        }
+      }
+      
+      this.logger.info(`Removed proxy configuration: ${proxyId}`);
+    }
+    
+    return exists;
+  }
+
+  /**
+   * Update an existing proxy configuration
+   */
+  public updateProxyConfig(proxyId: string, updatedConfig: Partial<ProxyConfig>): boolean {
+    if (!this.proxyConfigs.has(proxyId)) {
+      return false;
+    }
+    
+    const currentConfig = this.proxyConfigs.get(proxyId)!;
+    const newConfig = { ...currentConfig, ...updatedConfig, id: proxyId };
+    
+    this.proxyConfigs.set(proxyId, newConfig);
+    this.createAxiosInstance(newConfig);
+    
+    if (newConfig.isDefault) {
+      this.defaultProxyId = proxyId;
+    } else if (currentConfig.isDefault && !newConfig.isDefault && this.defaultProxyId === proxyId) {
+      // If this was the default but no longer is, reset default
+      this.defaultProxyId = null;
+    }
+    
+    this.logger.info(`Updated proxy configuration: ${proxyId}`);
+    return true;
+  }
+
+  /**
+   * Get the list of available proxy configurations
+   */
+  public getAvailableProxies(): string[] {
+    return Array.from(this.proxyConfigs.keys());
+  }
+
+  /**
+   * Get a proxy configuration by ID
+   */
+  public getProxyConfig(proxyId: string): ProxyConfig | undefined {
+    return this.proxyConfigs.get(proxyId);
+  }
+
+  /**
+   * Set the default proxy
+   */
+  public setDefaultProxy(proxyId: string): boolean {
+    if (!this.proxyConfigs.has(proxyId)) {
+      return false;
+    }
+    
+    // Update the previous default proxy
+    if (this.defaultProxyId && this.proxyConfigs.has(this.defaultProxyId)) {
+      const prevDefault = this.proxyConfigs.get(this.defaultProxyId)!;
+      this.proxyConfigs.set(this.defaultProxyId, { ...prevDefault, isDefault: false });
+    }
+    
+    // Set the new default proxy
+    const newDefault = this.proxyConfigs.get(proxyId)!;
+    this.proxyConfigs.set(proxyId, { ...newDefault, isDefault: true });
+    this.defaultProxyId = proxyId;
+    
+    this.logger.info(`Set default proxy to: ${proxyId}`);
+    return true;
+  }
+
+  /**
+   * Check if a specific proxy is available and functioning
+   */
+  public async checkProxyHealth(proxyId: string): Promise<boolean> {
+    if (!this.axiosInstances.has(proxyId)) {
+      return false;
+    }
+    
+    try {
+      const instance = this.axiosInstances.get(proxyId)!;
+      const config = this.proxyConfigs.get(proxyId)!;
+      
+      // Use health check endpoint if defined, otherwise make a simple request
+      const url = config.healthCheckEndpoint || '/';
+      
+      const response = await instance.get(url, { 
+        timeout: config.healthCheckTimeout || 5000 
+      });
+      
+      return response.status >= 200 && response.status < 300;
+    } catch (error) {
+      this.logger.warn(`Health check failed for proxy ${proxyId}`, { error });
+      return false;
+    }
+  }
+
+  /**
+   * Execute a proxy request through the appropriate proxy
+   */
+  public async executeRequest(
+    method: string,
+    url: string,
+    options: {
+      data?: any,
+      headers?: Record<string, string>,
+      params?: Record<string, any>,
+      timeout?: number,
+      proxyId?: string
+    } = {}
+  ) {
+    try {
+      const proxy = this.getProxyForRequest(url, { proxyId: options.proxyId });
+      
+      const requestConfig: AxiosRequestConfig = {
+        method,
+        url,
+        data: options.data,
+        headers: options.headers,
+        params: options.params,
+        timeout: options.timeout
+      };
+      
+      return await proxy.request(requestConfig);
+    } catch (error) {
+      this.logger.error('Proxy request failed', { method, url, error });
+      throw error;
+    }
+  }
+}
+
+// Example type definitions that would be in ../types/proxy-types.ts
+export interface ProxyConfig {
+  id: string;
+  baseUrl: string;
+  isDefault?: boolean;
+  timeout?: number;
+  defaultHeaders?: Record<string, string>;
+  routes?: ProxyRoute[];
+  useProxy?: boolean;
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyAuth?: ProxyCredentials;
+  useSsl?: boolean;
+  certificates?: CertificateConfig;
+  healthCheckEndpoint?: string;
+  healthCheckTimeout?: number;
+}
+
+export interface ProxyRoute {
+  pathPrefix?: string;
+  pathPattern?: string;
+  hostname?: string;
+}
+
+export interface ProxyCredentials {
+  username: string;
+  password: string;
+}
+
+export interface CertificateConfig {
+  pfxCertPath?: string;
+  pfxPassphrase?: string;
+  caCertPath?: string;
+  certPath?: string;
+  keyPath?: string;
+  verifySSL?: boolean;
+}
