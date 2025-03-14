@@ -1,492 +1,83 @@
-// src/framework/utils/config-manager.ts
-import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs/promises';
-import { existsSync } from 'fs';
+// src/framework/base-api-client.ts
+import { AxiosResponse } from 'axios';
+import { Logger } from './utils/logger';
+import { ConfigManager } from './utils/config-manager';
+import { CertificateManager } from './utils/certificate-manager';
+import { ProxyManager } from './utils/proxy-manager';
+import {
+  ApiRequestOptions,
+  DefaultRetryOptions,
+  DefaultPollingOptions,
+  ApiClientConfig
+} from './api/types';
+import { createRequestConfig, normalizeUrl } from './api/request-config';
+import { executeRequest } from './api/request-executor';
+import { retryRequest } from './api/retry-handler';
+import { handleLongRunningRequest } from './api/polling-handler';
+import {
+  assertStatusCode,
+  assertResponseData,
+  assertHasData,
+  assertHeader,
+  assertResponseTime
+} from './api/assertions';
 
 /**
- * Enhanced Configuration Manager with async initialization
- * Implements singleton pattern to ensure configuration is loaded only once
+ * Base API client for all API interactions
+ * Enhanced with asynchronous initialization, certificate handling, and retry logic
  */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private config: Record<string, any> = {};
-  private initialized: boolean = false;
-  private initPromise: Promise<void> | null = null;
-  private configSources: string[] = [];
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    // Initialization is deferred to init() method
-  }
-
-  /**
-   * Get singleton instance
-   * @returns ConfigManager instance
-   */
-  public static getInstance(): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
-    }
-    return ConfigManager.instance;
-  }
-
-  /**
-   * Initialize configuration asynchronously
-   * @returns Promise that resolves when configuration is loaded
-   */
-  public async init(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    if (this.initPromise) {
-      return this.initPromise;
-    }
-
-    this.initPromise = this.loadConfiguration();
-    await this.initPromise;
-    this.initialized = true;
-  }
-
-  /**
-   * Load configuration from all sources asynchronously
-   * @private
-   */
-  private async loadConfiguration(): Promise<void> {
-    try {
-      // Start with an empty configuration
-      this.config = {};
-      
-      // 1. Load base .env file first (if exists)
-      await this.loadEnvFile('.env');
-
-      // 2. Load environment-specific .env file if specified
-      const env = process.env.NODE_ENV || 'development';
-      await this.loadEnvFile(`.env.${env}`);
-
-      // 3. Load JSON configuration files if they exist
-      await this.loadJsonConfig('default.json');
-      await this.loadJsonConfig(`${env}.json`);
-      
-      // 4. Override with any CI-specific configuration
-      if (process.env.CI === 'true') {
-        await this.loadJsonConfig('ci.json');
-        await this.loadEnvFile('.env.ci');
-      }
-
-      // 5. Override with environment variables (highest priority)
-      this.mergeEnvironmentVariables();
-
-      console.log(`Configuration loaded from: ${this.configSources.join(', ')}`);
-    } catch (error: any) {
-      console.error(`Error loading configuration: ${error.message}`);
-      // Even if there's an error, we'll continue with whatever configuration we managed to load
-    }
-  }
-
-  /**
-   * Load configuration from a .env file
-   * @param filename - Name of the .env file
-   * @private
-   */
-  private async loadEnvFile(filename: string): Promise<void> {
-    const envPath = path.resolve(process.cwd(), filename);
-    
-    if (existsSync(envPath)) {
-      dotenv.config({ path: envPath, override: true });
-      this.configSources.push(filename);
-    }
-  }
-
-  /**
-   * Load configuration from a JSON file
-   * @param filename - Name of the JSON file
-   * @private
-   */
-  private async loadJsonConfig(filename: string): Promise<void> {
-    const configPath = path.join(process.cwd(), 'config', filename);
-    
-    if (existsSync(configPath)) {
-      try {
-        const fileContent = await fs.readFile(configPath, 'utf8');
-        const fileConfig = JSON.parse(fileContent);
-        this.mergeConfig(fileConfig);
-        this.configSources.push(`config/${filename}`);
-      } catch (error: any) {
-        console.error(`Error loading JSON config ${filename}: ${error.message}`);
-      }
-    }
-  }
-
-  /**
-   * Merge configuration objects
-   * @param config - Configuration object to merge
-   * @private
-   */
-  private mergeConfig(config: Record<string, any>): void {
-    this.config = this.deepMerge(this.config, config);
-  }
-
-  /**
-   * Deep merge two objects
-   * @param target - Target object
-   * @param source - Source object
-   * @returns Merged object
-   * @private
-   */
-  private deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
-    const result = { ...target };
-    
-    for (const key in source) {
-      if (source[key] instanceof Object && key in target && target[key] instanceof Object) {
-        result[key] = this.deepMerge(target[key], source[key]);
-      } else {
-        result[key] = source[key];
-      }
-    }
-    
-    return result;
-  }
-
-  /**
-   * Override configuration with environment variables
-   * @private
-   */
-  private mergeEnvironmentVariables(): void {
-    // First add all environment variables to config
-    for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined) {
-        this.config[key] = value;
-      }
-    }
-
-    // Then handle special prefixed environment variables for nested configuration
-    for (const [key, value] of Object.entries(process.env)) {
-      if (key.startsWith('CONFIG_') && value !== undefined) {
-        // Convert CONFIG_DB_HOST to db.host
-        const configKey = key
-          .replace('CONFIG_', '')
-          .toLowerCase()
-          .replace(/_([a-z])/g, (_, c) => `.${c.toLowerCase()}`);
-        
-        this.set(configKey, value);
-      }
-    }
-  }
-
-  /**
-   * Ensure configuration is initialized before accessing
-   * @private
-   */
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initialized) {
-      await this.init();
-    }
-  }
-
-  /**
-   * Get configuration value with type conversion
-   * This method returns a promise now to ensure config is loaded
-   * @param key - Configuration key (supports dot notation)
-   * @param defaultValue - Default value if configuration not found
-   * @returns Promise<T> - Configuration value with appropriate type
-   */
-  public async get<T>(key: string, defaultValue?: T): Promise<T> {
-    await this.ensureInitialized();
-    
-    // Parse dot notation
-    const keys = key.split('.');
-    let value: any = this.config;
-    
-    // Check environment variables first (highest priority)
-    const envKey = keys.join('_').toUpperCase();
-    if (process.env[envKey] !== undefined) {
-      return this.convertValue(process.env[envKey], defaultValue);
-    }
-    
-    // Then check nested config
-    for (const k of keys) {
-      value = value && value[k] !== undefined ? value[k] : undefined;
-    }
-    
-    if (value === undefined) {
-      return defaultValue as T;
-    }
-    
-    return this.convertValue(value, defaultValue);
-  }
-
-  /**
-   * Get configuration value synchronously (use with caution, may return stale data)
-   * Only use this for non-critical config access or after ensuring init() is complete
-   * @param key - Configuration key (supports dot notation)
-   * @param defaultValue - Default value if configuration not found
-   * @returns T - Configuration value with appropriate type
-   */
-  public getSync<T>(key: string, defaultValue?: T): T {
-    if (!this.initialized) {
-      console.warn(`Warning: Accessing config key "${key}" before initialization is complete. Use async get() method instead.`);
-    }
-    
-    // Parse dot notation
-    const keys = key.split('.');
-    let value: any = this.config;
-    
-    // Check environment variables first (highest priority)
-    const envKey = keys.join('_').toUpperCase();
-    if (process.env[envKey] !== undefined) {
-      return this.convertValue(process.env[envKey], defaultValue);
-    }
-    
-    // Then check nested config
-    for (const k of keys) {
-      value = value && value[k] !== undefined ? value[k] : undefined;
-    }
-    
-    if (value === undefined) {
-      return defaultValue as T;
-    }
-    
-    return this.convertValue(value, defaultValue);
-  }
-
-  /**
-   * Convert value to appropriate type based on defaultValue
-   * @param value - Value to convert
-   * @param defaultValue - Default value with type
-   * @returns Converted value
-   * @private
-   */
-  private convertValue<T>(value: any, defaultValue?: T): T {
-    // If value is already the right type, return it
-    if (typeof value === typeof defaultValue) {
-      return value as T;
-    }
-    
-    // If no default value is provided, return as is
-    if (defaultValue === undefined) {
-      return value as unknown as T;
-    }
-    
-    // Convert based on the type of defaultValue
-    const defaultType = typeof defaultValue;
-    
-    if (defaultType === 'number') {
-      const numberValue = Number(value);
-      return (isNaN(numberValue) ? defaultValue : numberValue) as unknown as T;
-    } 
-    else if (defaultType === 'boolean') {
-      if (typeof value === 'string') {
-        const lowerValue = value.toLowerCase();
-        if (lowerValue === 'true' || lowerValue === '1' || lowerValue === 'yes') return true as unknown as T;
-        if (lowerValue === 'false' || lowerValue === '0' || lowerValue === 'no') return false as unknown as T;
-      }
-      return defaultValue;
-    } 
-    else if (defaultType === 'object') {
-      if (Array.isArray(defaultValue)) {
-        if (typeof value === 'string') {
-          if (value.startsWith('[') && value.endsWith(']')) {
-            try {
-              return JSON.parse(value) as T;
-            } catch {
-              // Fall back to comma-separated interpretation
-              return value.split(',').map(item => item.trim()) as unknown as T;
-            }
-          }
-          // If it doesn't look like JSON, split by comma
-          return value.split(',').map(item => item.trim()) as unknown as T;
-        }
-      } else {
-        // Object - try to parse JSON
-        if (typeof value === 'string') {
-          try {
-            return JSON.parse(value) as T;
-          } catch {
-            return defaultValue;
-          }
-        }
-      }
-    }
-    
-    // If no conversion applied, return as is
-    return value as unknown as T;
-  }
-
-  /**
-   * Set configuration value
-   * @param key - Configuration key (supports dot notation)
-   * @param value - Configuration value
-   */
-  public set<T>(key: string, value: T): void {
-    const keys = key.split('.');
-    let current = this.config;
-    
-    // Navigate to the right level in the config object
-    for (let i = 0; i < keys.length - 1; i++) {
-      const k = keys[i];
-      current[k] = current[k] || {};
-      current = current[k];
-    }
-    
-    // Set the value
-    current[keys[keys.length - 1]] = value;
-  }
-
-  /**
-   * Check if a configuration exists
-   * @param key - Configuration key
-   * @returns Whether the configuration exists
-   */
-  public async has(key: string): Promise<boolean> {
-    await this.ensureInitialized();
-    
-    const keys = key.split('.');
-    let value: any = this.config;
-    
-    for (const k of keys) {
-      value = value && value[k] !== undefined ? value[k] : undefined;
-    }
-    
-    return value !== undefined;
-  }
-
-  /**
-   * Get entire configuration object
-   * @returns Configuration object
-   */
-  public async getAll(): Promise<Record<string, any>> {
-    await this.ensureInitialized();
-    return { ...this.config };
-  }
-
-  /**
-   * Get boolean value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getBoolean(key: string, defaultValue: boolean = false): Promise<boolean> {
-    return this.get<boolean>(key, defaultValue);
-  }
-
-  /**
-   * Get number value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getNumber(key: string, defaultValue: number = 0): Promise<number> {
-    return this.get<number>(key, defaultValue);
-  }
-
-  /**
-   * Get string value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getString(key: string, defaultValue: string = ''): Promise<string> {
-    return this.get<string>(key, defaultValue);
-  }
-
-  /**
-   * Get array value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getArray<T>(key: string, defaultValue: T[] = []): Promise<T[]> {
-    return this.get<T[]>(key, defaultValue);
-  }
-
-  /**
-   * Get object value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getObject<T extends Record<string, any>>(key: string, defaultValue: T = {} as T): Promise<T> {
-    return this.get<T>(key, defaultValue);
-  }
-
-  /**
-   * Get boolean value synchronously (use with caution)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getBooleanSync(key: string, defaultValue: boolean = false): boolean {
-    return this.getSync<boolean>(key, defaultValue);
-  }
-
-  /**
-   * Get number value synchronously (use with caution)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getNumberSync(key: string, defaultValue: number = 0): number {
-    return this.getSync<number>(key, defaultValue);
-  }
-
-  /**
-   * Get string value synchronously (use with caution)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public getStringSync(key: string, defaultValue: string = ''): string {
-    return this.getSync<string>(key, defaultValue);
-  }
-
-  /**
-   * Reset configuration (mainly for testing)
-   */
-  public async reset(): Promise<void> {
-    this.config = {};
-    this.initialized = false;
-    this.initPromise = null;
-    this.configSources = [];
-  }
-}
-
-// src/framework/utils/certificate-manager.ts
-import fs from 'fs/promises';
-import { existsSync } from 'fs';
-import https from 'https';
-import { ConfigManager } from './config-manager';
-import { Logger } from './logger';
-
-/**
- * Certificate Manager for handling TLS/SSL certificates
- * Centralizes certificate loading and management for API clients
- */
-export class CertificateManager {
-  private static instance: CertificateManager;
-  private logger: Logger;
-  private config: ConfigManager;
-  private certificates: Map<string, Buffer> = new Map();
+export class BaseApiClient {
+  readonly logger: Logger;
+  readonly config: ConfigManager;
+  readonly certManager: CertificateManager;
+  readonly proxyManager: ProxyManager;
+  
+  // Configuration properties
+  private apiBaseUrl: string = '';
+  private defaultTimeout: number = 30000;
+  private defaultHeaders: Record<string, string> = {};
+  private serviceName: string = 'default';
+  private defaultRetryOptions: DefaultRetryOptions = { maxAttempts: 3, retryDelay: 1000 };
+  private defaultPollingOptions: DefaultPollingOptions = {
+    enabled: false,
+    maxAttempts: 10,
+    interval: 2000,
+    timeoutPerAttempt: 10000
+  };
+  
+  // Initialization state
   private initialized: boolean = false;
   private initPromise: Promise<void> | null = null;
 
   /**
-   * Private constructor for singleton pattern
+   * Constructor for the BaseApiClient
+   * @param apiBaseUrl - Base URL for API requests
+   * @param defaultHeaders - Default headers to include in all requests
    */
-  private constructor() {
-    this.logger = new Logger('CertificateManager');
+  constructor(
+    apiBaseUrl?: string,
+    defaultHeaders: Record<string, string> = {}
+  ) {
+    this.logger = new Logger(this.constructor.name);
     this.config = ConfigManager.getInstance();
-  }
-
-  /**
-   * Get singleton instance
-   * @returns CertificateManager instance
-   */
-  public static getInstance(): CertificateManager {
-    if (!CertificateManager.instance) {
-      CertificateManager.instance = new CertificateManager();
+    this.certManager = CertificateManager.getInstance();
+    this.proxyManager = ProxyManager.getInstance();
+    
+    // Store initial values (will be overridden during initialization)
+    if (apiBaseUrl) {
+      this.apiBaseUrl = apiBaseUrl;
     }
-    return CertificateManager.instance;
+    
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...defaultHeaders
+    };
   }
 
   /**
-   * Initialize the certificate manager
-   * Preloads commonly used certificates based on configuration
+   * Initialize the client asynchronously
+   * Loads configurations, certificates, and proxy settings
    */
   public async init(): Promise<void> {
     if (this.initialized) {
@@ -497,298 +88,55 @@ export class CertificateManager {
       return this.initPromise;
     }
 
-    this.initPromise = this.loadCertificates();
+    this.initPromise = this.initializeClient();
     await this.initPromise;
     this.initialized = true;
   }
 
   /**
-   * Load certificates from filesystem based on configuration
+   * Initialize client with configuration, certificates, and proxy settings
    * @private
    */
-  private async loadCertificates(): Promise<void> {
+  private async initializeClient(): Promise<void> {
     try {
-      // Ensure config is initialized
+      // Initialize config manager
       await this.config.init();
-
-      // Load default PFX certificate if configured
-      const defaultPfxPath = await this.config.getString('PFX_CERT_PATH', '');
-      if (defaultPfxPath && existsSync(defaultPfxPath)) {
-        try {
-          const pfxData = await fs.readFile(defaultPfxPath);
-          this.certificates.set('default', pfxData);
-          this.logger.info(`Loaded default PFX certificate from: ${defaultPfxPath}`);
-        } catch (error: any) {
-          this.logger.error(`Failed to load default PFX certificate: ${error.message}`);
-        }
-      }
-
-      // Check for service-specific certificates
-      // Format is SERVICE_PFX_CERT_PATH, e.g., ASSET_PFX_CERT_PATH, AUTH_PFX_CERT_PATH
-      const allConfig = await this.config.getAll();
-      for (const [key, value] of Object.entries(allConfig)) {
-        if (typeof value === 'string' && key.endsWith('_PFX_CERT_PATH') && existsSync(value)) {
-          const serviceName = key.replace('_PFX_CERT_PATH', '').toLowerCase();
-          try {
-            const pfxData = await fs.readFile(value);
-            this.certificates.set(serviceName, pfxData);
-            this.logger.info(`Loaded ${serviceName} PFX certificate from: ${value}`);
-          } catch (error: any) {
-            this.logger.error(`Failed to load ${serviceName} PFX certificate: ${error.message}`);
-          }
-        }
-      }
+      
+      // Get API configuration from config manager
+      this.apiBaseUrl = await this.config.getString('API_BASE_URL', this.apiBaseUrl);
+      this.defaultTimeout = await this.config.getNumber('DEFAULT_TIMEOUT', this.defaultTimeout);
+      this.serviceName = await this.config.getString('SERVICE_NAME', this.serviceName);
+      
+      // Initialize retry options
+      this.defaultRetryOptions = {
+        maxAttempts: await this.config.getNumber('API_RETRY_ATTEMPTS', this.defaultRetryOptions.maxAttempts),
+        retryDelay: await this.config.getNumber('API_RETRY_DELAY', this.defaultRetryOptions.retryDelay)
+      };
+      
+      // Initialize polling options
+      this.defaultPollingOptions = {
+        enabled: await this.config.getBoolean('API_ENABLE_POLLING', this.defaultPollingOptions.enabled),
+        maxAttempts: await this.config.getNumber('API_POLLING_MAX_ATTEMPTS', this.defaultPollingOptions.maxAttempts),
+        interval: await this.config.getNumber('API_POLLING_INTERVAL', this.defaultPollingOptions.interval),
+        timeoutPerAttempt: await this.config.getNumber('API_POLLING_TIMEOUT_PER_ATTEMPT', this.defaultPollingOptions.timeoutPerAttempt)
+      };
+      
+      // Initialize certificate manager
+      await this.certManager.init();
+      
+      // Initialize proxy manager
+      await this.proxyManager.init();
+      
+      this.logger.info(`API client initialized for service: ${this.serviceName}`);
+      this.logger.debug(`Base URL: ${this.apiBaseUrl}`);
     } catch (error: any) {
-      this.logger.error(`Error initializing certificate manager: ${error.message}`);
-    }
-  }
-
-  /**
-   * Ensure certificate manager is initialized
-   * @private
-   */
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initialized) {
-      await this.init();
-    }
-  }
-
-  /**
-   * Get PFX certificate for a specific service
-   * @param serviceName - Service name for service-specific cert, or 'default' for default cert
-   * @returns PFX certificate buffer or null if not found
-   */
-  public async getPfxCertificate(serviceName: string = 'default'): Promise<Buffer | null> {
-    await this.ensureInitialized();
-    
-    const normalizedName = serviceName.toLowerCase();
-    
-    // Check if we already have this certificate loaded
-    if (this.certificates.has(normalizedName)) {
-      return this.certificates.get(normalizedName) || null;
-    }
-    
-    // If not found for the specific service, try loading it from config
-    const certPath = await this.config.getString(`${normalizedName.toUpperCase()}_PFX_CERT_PATH`, '');
-    if (certPath && existsSync(certPath)) {
-      try {
-        const pfxData = await fs.readFile(certPath);
-        this.certificates.set(normalizedName, pfxData);
-        this.logger.info(`Loaded ${normalizedName} PFX certificate from: ${certPath}`);
-        return pfxData;
-      } catch (error: any) {
-        this.logger.error(`Failed to load ${normalizedName} PFX certificate: ${error.message}`);
-      }
-    }
-    
-    // Try to fall back to default if a service-specific cert wasn't found
-    if (normalizedName !== 'default' && this.certificates.has('default')) {
-      this.logger.warn(`No certificate found for ${normalizedName}, falling back to default certificate`);
-      return this.certificates.get('default') || null;
-    }
-    
-    this.logger.warn(`No certificate found for ${normalizedName}`);
-    return null;
-  }
-
-  /**
-   * Get HTTPS Agent configured with a PFX certificate
-   * @param serviceName - Service name for service-specific agent
-   * @param passphrase - Passphrase for the PFX certificate
-   * @returns HTTPS.Agent with PFX certificate or null if certificate not found
-   */
-  public async getHttpsAgent(serviceName: string = 'default', passphrase?: string): Promise<https.Agent | null> {
-    await this.ensureInitialized();
-    
-    const pfx = await this.getPfxCertificate(serviceName);
-    if (!pfx) {
-      return null;
-    }
-    
-    // If passphrase wasn't provided, try to get it from config
-    if (!passphrase) {
-      passphrase = await this.config.getString(
-        `${serviceName.toUpperCase()}_PFX_CERT_PASSPHRASE`, 
-        await this.config.getString('PFX_CERT_PASSPHRASE', '')
-      );
-    }
-    
-    const rejectUnauthorized = await this.config.getBoolean('REJECT_UNAUTHORIZED', true);
-    
-    return new https.Agent({
-      pfx,
-      passphrase,
-      rejectUnauthorized
-    });
-  }
-
-  /**
-   * Load a specific certificate on demand
-   * @param path - Path to the certificate file
-   * @param alias - Alias to store the certificate under
-   * @returns Buffer containing the certificate data
-   */
-  public async loadCertificate(path: string, alias: string): Promise<Buffer> {
-    if (!existsSync(path)) {
-      throw new Error(`Certificate file not found: ${path}`);
-    }
-    
-    try {
-      const certData = await fs.readFile(path);
-      this.certificates.set(alias.toLowerCase(), certData);
-      this.logger.info(`Loaded certificate as ${alias} from: ${path}`);
-      return certData;
-    } catch (error: any) {
-      this.logger.error(`Failed to load certificate: ${error.message}`);
+      this.logger.error(`Error initializing API client: ${error.message}`);
       throw error;
     }
   }
-}
-
-// src/framework/utils/proxy-manager.ts
-import { URL } from 'url';
-import { ConfigManager } from './config-manager';
-import { Logger } from './logger';
-
-/**
- * Proxy configuration interface for axios
- */
-export interface ProxyConfig {
-  host: string;
-  port: number;
-  protocol: 'http' | 'https';
-  auth?: {
-    username: string;
-    password: string;
-  };
-}
-
-/**
- * Proxy Manager for handling HTTP/HTTPS proxies
- * Centralizes proxy configuration and management for API clients
- */
-export class ProxyManager {
-  private static instance: ProxyManager;
-  private logger: Logger;
-  private config: ConfigManager;
-  private proxyConfigs: Map<string, ProxyConfig> = new Map();
-  private initialized: boolean = false;
-  private initPromise: Promise<void> | null = null;
 
   /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    this.logger = new Logger('ProxyManager');
-    this.config = ConfigManager.getInstance();
-  }
-
-  /**
-   * Get singleton instance
-   * @returns ProxyManager instance
-   */
-  public static getInstance(): ProxyManager {
-    if (!ProxyManager.instance) {
-      ProxyManager.instance = new ProxyManager();
-    }
-    return ProxyManager.instance;
-  }
-
-  /**
-   * Initialize the proxy manager
-   * Loads proxy configurations from environment/config
-   */
-  public async init(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    if (this.initPromise) {
-      return this.initPromise;
-    }
-
-    this.initPromise = this.loadProxyConfigurations();
-    await this.initPromise;
-    this.initialized = true;
-  }
-
-  /**
-   * Load proxy configurations from configuration
-   * @private
-   */
-  private async loadProxyConfigurations(): Promise<void> {
-    try {
-      // Ensure config is initialized
-      await this.config.init();
-
-      // Load default proxy if configured
-      const defaultProxyUrl = await this.config.getString('PROXY_URL', '');
-      if (defaultProxyUrl) {
-        try {
-          const proxyConfig = this.parseProxyUrl(defaultProxyUrl);
-          this.proxyConfigs.set('default', proxyConfig);
-          this.logger.info(`Loaded default proxy configuration: ${defaultProxyUrl}`);
-        } catch (error: any) {
-          this.logger.error(`Failed to parse default proxy URL: ${error.message}`);
-        }
-      }
-
-      // Check for service-specific proxies
-      // Format is SERVICE_PROXY_URL, e.g., ASSET_PROXY_URL, AUTH_PROXY_URL
-      const allConfig = await this.config.getAll();
-      for (const [key, value] of Object.entries(allConfig)) {
-        if (typeof value === 'string' && key.endsWith('_PROXY_URL') && value) {
-          const serviceName = key.replace('_PROXY_URL', '').toLowerCase();
-          try {
-            const proxyConfig = this.parseProxyUrl(value);
-            this.proxyConfigs.set(serviceName, proxyConfig);
-            this.logger.info(`Loaded ${serviceName} proxy configuration: ${value}`);
-          } catch (error: any) {
-            this.logger.error(`Failed to parse ${serviceName} proxy URL: ${error.message}`);
-          }
-        }
-      }
-    } catch (error: any) {
-      this.logger.error(`Error initializing proxy manager: ${error.message}`);
-    }
-  }
-
-  /**
-   * Parse a proxy URL into a ProxyConfig object
-   * @param proxyUrl - URL string for proxy (e.g., "http://username:password@proxy.example.com:8080")
-   * @returns ProxyConfig object for axios
-   */
-  private parseProxyUrl(proxyUrl: string): ProxyConfig {
-    try {
-      // Ensure the URL has a protocol
-      const formattedProxyUrl = proxyUrl.startsWith('http') 
-        ? proxyUrl 
-        : `http://${proxyUrl}`;
-      
-      const parsedUrl = new URL(formattedProxyUrl);
-      
-      const proxyConfig: ProxyConfig = {
-        host: parsedUrl.hostname,
-        port: parseInt(parsedUrl.port || '80'),
-        protocol: (parsedUrl.protocol.replace(':', '') as 'http' | 'https')
-      };
-      
-      // Add authentication if present
-      if (parsedUrl.username && parsedUrl.password) {
-        proxyConfig.auth = {
-          username: parsedUrl.username,
-          password: parsedUrl.password
-        };
-      }
-      
-      return proxyConfig;
-    } catch (error: any) {
-      throw new Error(`Invalid proxy URL (${proxyUrl}): ${error.message}`);
-    }
-  }
-
-  /**
-   * Ensure proxy manager is initialized
+   * Ensure client is initialized before making requests
    * @private
    */
   private async ensureInitialized(): Promise<void> {
@@ -798,1925 +146,324 @@ export class ProxyManager {
   }
 
   /**
-   * Get proxy configuration for a specific service
-   * @param serviceName - Service name for service-specific proxy, or 'default' for default proxy
-   * @returns ProxyConfig object or null if not found
+   * Make a GET request
+   * @param endpoint - API endpoint
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
    */
-  public async getProxyConfig(serviceName: string = 'default'): Promise<ProxyConfig | null> {
+  async get<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     await this.ensureInitialized();
     
-    const normalizedName = serviceName.toLowerCase();
+    const url = normalizeUrl(endpoint, this.apiBaseUrl);
+    this.logger.info(`Making GET request to: ${url}`);
     
-    // Check if we already have this proxy configuration loaded
-    if (this.proxyConfigs.has(normalizedName)) {
-      return this.proxyConfigs.get(normalizedName) || null;
+    const requestConfig = await createRequestConfig(
+      options,
+      this.defaultHeaders,
+      this.defaultTimeout,
+      this.serviceName,
+      this.logger
+    );
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return handleLongRunningRequest<T>(
+        () => executeRequest('get', url, undefined, requestConfig, this.logger),
+        this.defaultPollingOptions,
+        options?.pollingOptions,
+        this.logger,
+        this.config
+      );
     }
     
-    // If not found for the specific service, try loading it from config
-    const proxyUrl = await this.config.getString(`${normalizedName.toUpperCase()}_PROXY_URL`, '');
-    if (proxyUrl) {
-      try {
-        const proxyConfig = this.parseProxyUrl(proxyUrl);
-        this.proxyConfigs.set(normalizedName, proxyConfig);
-        this.logger.info(`Loaded ${normalizedName} proxy configuration from config: ${proxyUrl}`);
-        return proxyConfig;
-      } catch (error: any) {
-        this.logger.error(`Failed to parse ${normalizedName} proxy URL: ${error.message}`);
-      }
-    }
-    
-    // Try to fall back to default if a service-specific proxy wasn't found
-    if (normalizedName !== 'default' && this.proxyConfigs.has('default')) {
-      this.logger.warn(`No proxy found for ${normalizedName}, falling back to default proxy`);
-      return this.proxyConfigs.get('default') || null;
-    }
-    
-    return null;
+    return retryRequest<T>(
+      () => executeRequest('get', url, undefined, requestConfig, this.logger),
+      this.defaultRetryOptions,
+      options?.retryOptions,
+      this.logger
+    );
   }
 
   /**
-   * Check if a proxy should be used for a specific host
-   * @param host - Hostname to check
-   * @returns Whether the proxy should be used
+   * Make a POST request
+   * @param endpoint - API endpoint
+   * @param data - Request body
+   * @param options - Request options
+   * @returns Promise<AxiosResponse> - API response
    */
-  public async shouldUseProxy(host: string): Promise<boolean> {
+  async post<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
     await this.ensureInitialized();
     
-    // Get proxy exceptions (NO_PROXY environment variable)
-    const noProxyList = process.env.NO_PROXY || process.env.no_proxy || '';
-    const exceptions = noProxyList.split(',').map(item => item.trim());
+    const url = normalizeUrl(endpoint, this.apiBaseUrl);
+    this.logger.info(`Making POST request to: ${url}`);
     
-    // Don't use proxy for local addresses
-    if (
-      host === 'localhost' || 
-      host === '127.0.0.1' || 
-      host.startsWith('192.168.') ||
-      host.startsWith('10.') ||
-      host.startsWith('172.16.')
-    ) {
-      return false;
+    const requestConfig = await createRequestConfig(
+      options,
+      this.defaultHeaders,
+      this.defaultTimeout,
+      this.serviceName,
+      this.logger
+    );
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return handleLongRunningRequest<T>(
+        () => executeRequest('post', url, data, requestConfig, this.logger),
+        this.defaultPollingOptions,
+        options?.pollingOptions,
+        this.logger,
+        this.config
+      );
     }
     
-    // Check if the host matches any exception
-    for (const exception of exceptions) {
-      if (!exception) continue;
-      
-      // Check for wildcard match (e.g., *.example.com)
-      if (exception.startsWith('*.') && host.endsWith(exception.substring(1))) {
-        return false;
-
-// src/framework/api/types.ts
-import { AxiosRequestConfig, AxiosResponse } from 'axios';
-
-/**
- * Interface for API request options
- */
-export interface ApiRequestOptions {
-  headers?: Record<string, string>;
-  params?: Record<string, any>;
-  data?: any;
-  timeout?: number;
-  validateStatus?: boolean;
-  withCredentials?: boolean;
-  serviceName?: string;       // Service name for certificate and proxy selection
-  pfxPath?: string;           // Path to PFX file (overrides service default)
-  pfxPassphrase?: string;     // Passphrase for PFX file
-  useProxy?: boolean;         // Whether to use proxy settings
-  retryOptions?: RetryOptions;
-  pollingOptions?: PollingOptions;
-}
-
-/**
- * Interface for retry options
- */
-export interface RetryOptions {
-  maxAttempts?: number;
-  retryDelay?: number;
-  retryCondition?: (error: any) => boolean;
-}
-
-/**
- * Interface for polling options for long-running requests
- */
-export interface PollingOptions {
-  enabled?: boolean;
-  maxAttempts?: number;
-  interval?: number;
-  timeoutPerAttempt?: number;
-  successCondition?: (response: AxiosResponse) => boolean;
-}
-
-/**
- * Default retry options
- */
-export interface DefaultRetryOptions {
-  maxAttempts: number;
-  retryDelay: number;
-}
-
-/**
- * Default polling options
- */
-export interface DefaultPollingOptions {
-  enabled: boolean;
-  maxAttempts: number;
-  interval: number;
-  timeoutPerAttempt: number;
-}
-
-/**
- * Extended AxiosRequestConfig to include metadata
- */
-export interface ExtendedAxiosRequestConfig extends AxiosRequestConfig {
-  metadata?: {
-    startTime?: number;
-    endTime?: number;
-    [key: string]: any;
-  };
-}
-
-/**
- * Base API client configuration
- */
-export interface ApiClientConfig {
-  baseUrl: string;
-  timeout: number;
-  headers: Record<string, string>;
-  serviceName?: string;
-  retryOptions: DefaultRetryOptions;
-  pollingOptions: DefaultPollingOptions;
-}
-
-// src/framework/api/request-config.ts
-import { AxiosRequestConfig } from 'axios';
-import { ApiRequestOptions } from './types';
-import { Logger } from '../utils/logger';
-import { CertificateManager } from '../utils/certificate-manager';
-import { ProxyManager, ProxyConfig } from '../utils/proxy-manager';
-import { URL } from 'url';
-
-/**
- * Create request configuration with certificate and proxy settings
- * @param options - API request options
- * @param defaultHeaders - Default headers to include in all requests
- * @param defaultTimeout - Default request timeout
- * @param serviceName - Default service name for certificate and proxy selection
- * @param logger - Logger instance
- * @returns Promise<AxiosRequestConfig> - Axios request configuration
- */
-export async function createRequestConfig(
-  options: ApiRequestOptions | undefined,
-  defaultHeaders: Record<string, string>,
-  defaultTimeout: number,
-  serviceName: string = 'default',
-  logger: Logger
-): Promise<AxiosRequestConfig> {
-  const config: AxiosRequestConfig = {
-    headers: { ...defaultHeaders, ...options?.headers },
-    params: options?.params || {},
-    timeout: options?.timeout || defaultTimeout,
-    validateStatus: options?.validateStatus !== false ? undefined : () => true,
-    withCredentials: options?.withCredentials
-  };
-  
-  // Get the service name to use for certificate and proxy
-  const service = options?.serviceName || serviceName;
-  
-  // Add certificate if needed
-  await addCertificateToConfig(config, service, options?.pfxPath, options?.pfxPassphrase, logger);
-  
-  // Add proxy if needed
-  const useProxy = options?.useProxy !== false; // Use proxy by default if available
-  if (useProxy) {
-    await addProxyToConfig(config, service, logger);
-  }
-  
-  return config;
-}
-
-/**
- * Add certificate to request configuration
- * @param config - Axios request configuration
- * @param serviceName - Service name for certificate selection
- * @param pfxPath - Optional path to PFX file (overrides service default)
- * @param pfxPassphrase - Optional passphrase for PFX file
- * @param logger - Logger instance
- * @private
- */
-async function addCertificateToConfig(
-  config: AxiosRequestConfig,
-  serviceName: string,
-  pfxPath?: string,
-  pfxPassphrase?: string,
-  logger?: Logger
-): Promise<void> {
-  try {
-    // If a specific path is provided, load that certificate
-    if (pfxPath) {
-      const certManager = CertificateManager.getInstance();
-      try {
-        await certManager.loadCertificate(pfxPath, 'temp');
-        const agent = await certManager.getHttpsAgent('temp', pfxPassphrase);
-        if (agent) {
-          config.httpsAgent = agent;
-          logger?.debug(`Using PFX certificate from path: ${pfxPath}`);
-        }
-      } catch (error: any) {
-        logger?.error(`Failed to load PFX certificate from path: ${error.message}`);
-      }
-    } else {
-      // Otherwise, use the service certificate
-      const certManager = CertificateManager.getInstance();
-      const agent = await certManager.getHttpsAgent(serviceName, pfxPassphrase);
-      if (agent) {
-        config.httpsAgent = agent;
-        logger?.debug(`Using PFX certificate for service: ${serviceName}`);
-      }
-    }
-  } catch (error: any) {
-    logger?.error(`Error loading certificate: ${error.message}`);
-  }
-}
-
-/**
- * Add proxy to request configuration
- * @param config - Axios request configuration
- * @param serviceName - Service name for proxy selection
- * @param logger - Logger instance
- * @private
- */
-async function addProxyToConfig(
-  config: AxiosRequestConfig,
-  serviceName: string,
-  logger?: Logger
-): Promise<void> {
-  try {
-    const proxyManager = ProxyManager.getInstance();
-    const proxyConfig = await proxyManager.getProxyConfig(serviceName);
-    
-    if (proxyConfig) {
-      config.proxy = proxyConfig;
-      logger?.debug(`Using proxy for service ${serviceName}: ${proxyConfig.host}:${proxyConfig.port}`);
-    }
-  } catch (error: any) {
-    logger?.error(`Error configuring proxy: ${error.message}`);
-  }
-}
-
-/**
- * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
- * @param endpoint - API endpoint
- * @param baseUrl - Base URL
- * @returns Full URL string
- */
-export function normalizeUrl(endpoint: string, baseUrl: string): string {
-  // Ensure baseUrl has a protocol
-  const normalizedBaseUrl = baseUrl.startsWith('http') 
-    ? baseUrl 
-    : `https://${baseUrl}`;
-    
-  // Ensure endpoint starts with a slash if not empty and doesn't already have one
-  const normalizedEndpoint = endpoint && !endpoint.startsWith('/') 
-    ? '/' + endpoint 
-    : endpoint;
-  
-  try {
-    return new URL(normalizedEndpoint, normalizedBaseUrl).toString();
-  } catch (error: any) {
-    throw new Error(`Invalid URL: Cannot combine ${normalizedBaseUrl} and ${normalizedEndpoint}`);
-  }
-}
-
-// src/framework/api/request-config.ts
-import { AxiosRequestConfig } from 'axios';
-import { ApiRequestOptions } from './types';
-import { Logger } from '../utils/logger';
-import { CertificateManager } from '../utils/certificate-manager';
-import { ProxyManager, ProxyConfig } from '../utils/proxy-manager';
-import { URL } from 'url';
-
-/**
- * Create request configuration with certificate and proxy settings
- * @param options - API request options
- * @param defaultHeaders - Default headers to include in all requests
- * @param defaultTimeout - Default request timeout
- * @param serviceName - Default service name for certificate and proxy selection
- * @param logger - Logger instance
- * @returns Promise<AxiosRequestConfig> - Axios request configuration
- */
-export async function createRequestConfig(
-  options: ApiRequestOptions | undefined,
-  defaultHeaders: Record<string, string>,
-  defaultTimeout: number,
-  serviceName: string = 'default',
-  logger: Logger
-): Promise<AxiosRequestConfig> {
-  const config: AxiosRequestConfig = {
-    headers: { ...defaultHeaders, ...options?.headers },
-    params: options?.params || {},
-    timeout: options?.timeout || defaultTimeout,
-    validateStatus: options?.validateStatus !== false ? undefined : () => true,
-    withCredentials: options?.withCredentials
-  };
-  
-  // Get the service name to use for certificate and proxy
-  const service = options?.serviceName || serviceName;
-  
-  // Add certificate if needed
-  await addCertificateToConfig(config, service, options?.pfxPath, options?.pfxPassphrase, logger);
-  
-  // Add proxy if needed
-  const useProxy = options?.useProxy !== false; // Use proxy by default if available
-  if (useProxy) {
-    await addProxyToConfig(config, service, logger);
-  }
-  
-  return config;
-}
-
-/**
- * Add certificate to request configuration
- * @param config - Axios request configuration
- * @param serviceName - Service name for certificate selection
- * @param pfxPath - Optional path to PFX file (overrides service default)
- * @param pfxPassphrase - Optional passphrase for PFX file
- * @param logger - Logger instance
- * @private
- */
-async function addCertificateToConfig(
-  config: AxiosRequestConfig,
-  serviceName: string,
-  pfxPath?: string,
-  pfxPassphrase?: string,
-  logger?: Logger
-): Promise<void> {
-  try {
-    // If a specific path is provided, load that certificate
-    if (pfxPath) {
-      const certManager = CertificateManager.getInstance();
-      try {
-        await certManager.loadCertificate(pfxPath, 'temp');
-        const agent = await certManager.getHttpsAgent('temp', pfxPassphrase);
-        if (agent) {
-          config.httpsAgent = agent;
-          logger?.debug(`Using PFX certificate from path: ${pfxPath}`);
-        }
-      } catch (error: any) {
-        logger?.error(`Failed to load PFX certificate from path: ${error.message}`);
-      }
-    } else {
-      // Otherwise, use the service certificate
-      const certManager = CertificateManager.getInstance();
-      const agent = await certManager.getHttpsAgent(serviceName, pfxPassphrase);
-      if (agent) {
-        config.httpsAgent = agent;
-        logger?.debug(`Using PFX certificate for service: ${serviceName}`);
-      }
-    }
-  } catch (error: any) {
-    logger?.error(`Error loading certificate: ${error.message}`);
-  }
-}
-
-/**
- * Add proxy to request configuration
- * @param config - Axios request configuration
- * @param serviceName - Service name for proxy selection
- * @param logger - Logger instance
- * @private
- */
-async function addProxyToConfig(
-  config: AxiosRequestConfig,
-  serviceName: string,
-  logger?: Logger
-): Promise<void> {
-  try {
-    const proxyManager = ProxyManager.getInstance();
-    const proxyConfig = await proxyManager.getProxyConfig(serviceName);
-    
-    if (proxyConfig) {
-      config.proxy = proxyConfig;
-      logger?.debug(`Using proxy for service ${serviceName}: ${proxyConfig.host}:${proxyConfig.port}`);
-    }
-  } catch (error: any) {
-    logger?.error(`Error configuring proxy: ${error.message}`);
-  }
-}
-
-/**
- * Normalize URL by ensuring protocol and proper joining of base URL and endpoint
- * @param endpoint - API endpoint
- * @param baseUrl - Base URL
- * @returns Full URL string
- */
-export function normalizeUrl(endpoint: string, baseUrl: string): string {
-  // Ensure baseUrl has a protocol
-  const normalizedBaseUrl = baseUrl.startsWith('http') 
-    ? baseUrl 
-    : `https://${baseUrl}`;
-    
-  // Ensure endpoint starts with a slash if not empty and doesn't already have one
-  const normalizedEndpoint = endpoint && !endpoint.startsWith('/') 
-    ? '/' + endpoint 
-    : endpoint;
-  
-  try {
-    return new URL(normalizedEndpoint, normalizedBaseUrl).toString();
-  } catch (error: any) {
-    throw new Error(`Invalid URL: Cannot combine ${normalizedBaseUrl} and ${normalizedEndpoint}`);
-  }
-}
-
-// src/framework/api/request-executor.ts
-import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
-import { Logger } from '../utils/logger';
-import { ConfigManager } from '../utils/config-manager';
-
-/**
- * Execute a request with timing metrics
- * @param method - HTTP method
- * @param url - Request URL
- * @param data - Request data
- * @param config - Axios request config
- * @param logger - Logger instance
- * @returns Promise<AxiosResponse> - API response
- */
-export async function executeRequest<T = any>(
-  method: Method,
-  url: string,
-  data?: any,
-  config?: AxiosRequestConfig,
-  logger?: Logger
-): Promise<AxiosResponse<T>> {
-  const startTime = Date.now();
-  
-  try {
-    logger?.debug(`Executing ${method.toUpperCase()} request to: ${url}`);
-    
-    // Configure axios request
-    const requestConfig: AxiosRequestConfig = {
-      ...config,
-      method,
-      url,
-      data: method !== 'get' && method !== 'delete' ? data : undefined,
-    };
-    
-    if (logger?.isDebugEnabled()) {
-      logger.debug(`Request config: ${JSON.stringify({
-        url,
-        method,
-        headers: requestConfig.headers,
-        params: requestConfig.params,
-        data: requestConfig.data
-      }, null, 2)}`);
-    }
-    
-    const response = await axios(requestConfig);
-    
-    // Calculate and log duration
-    const duration = Date.now() - startTime;
-    logger?.debug(`Response received in ${duration}ms`);
-    
-    // Store duration for assertion use
-    (response as any)._duration = duration;
-    
-    logResponse(response, logger);
-    return response;
-  } catch (error: any) {
-    // Add request duration to error for potential retry logic
-    const duration = Date.now() - startTime;
-    (error as any)._duration = duration;
-    
-    logError(error, logger);
-    throw error;
-  }
-}
-
-/**
- * Log response details
- * @param response - Axios response
- * @param logger - Logger instance
- */
-export function logResponse(response: AxiosResponse, logger?: Logger): void {
-  if (!logger) return;
-  
-  logger.debug(`Response status: ${response.status}`);
-  
-  // Check if we should log headers
-  const config = ConfigManager.getInstance();
-  const logHeaders = config.getBooleanSync('API_DEBUG_HEADERS', false);
-  if (logHeaders) {
-    logger.debug(`Response headers: ${JSON.stringify(response.headers)}`);
-  }
-  
-  // Log response body in a safe way (truncate if too large)
-  try {
-    const responseBody = JSON.stringify(response.data);
-    const maxBodyLength = config.getNumberSync('API_DEBUG_BODY_LENGTH', 1000);
-    
-    if (responseBody.length > maxBodyLength) {
-      logger.debug(`Response body (truncated): ${responseBody.substring(0, maxBodyLength)}...`);
-    } else {
-      logger.debug(`Response body: ${responseBody}`);
-    }
-  } catch (error) {
-    logger.debug('Response body: [Could not stringify response data]');
-  }
-}
-
-/**
- * Log error details
- * @param error - Axios error
- * @param logger - Logger instance
- */
-export function logError(error: any, logger?: Logger): void {
-  if (!logger) return;
-  
-  if (error.response) {
-    // The request was made and the server responded with a status code
-    // that falls out of the range of 2xx
-    logger.error(`Response error: ${error.response.status} - ${error.message}`);
-    
-    // Log response data if available
-    try {
-      logger.debug(`Error response data: ${JSON.stringify(error.response.data)}`);
-    } catch (jsonError) {
-      logger.debug(`Error response data: [Could not stringify response data]`);
-    }
-    
-    // Check if we should log headers
-    const config = ConfigManager.getInstance();
-    const logHeaders = config.getBooleanSync('API_DEBUG_HEADERS', false);
-    if (logHeaders) {
-      try {
-        logger.debug(`Error response headers: ${JSON.stringify(error.response.headers)}`);
-      } catch (jsonError) {
-        logger.debug(`Error response headers: [Could not stringify headers]`);
-      }
-    }
-  } else if (error.request) {
-    // The request was made but no response was received
-    logger.error(`Request error (no response): ${error.message}`);
-    
-    if (error.code) {
-      logger.debug(`Error code: ${error.code}`);
-    }
-  } else {
-    // Something happened in setting up the request that triggered an Error
-    logger.error(`Request configuration error: ${error.message}`);
-  }
-  
-  // Log request details if available
-  if (error.config) {
-    logger.debug(`Failed request URL: ${error.config.url}`);
-    logger.debug(`Failed request method: ${error.config.method}`);
-  }
-  
-  // If there's a stack trace, log it at debug level
-  if (error.stack) {
-    logger.debug(`Error stack trace: ${error.stack}`);
-  }
-}
-
-// src/framework/api/retry-handler.ts
-import { AxiosResponse } from 'axios';
-import { Logger } from '../utils/logger';
-import { RetryOptions, DefaultRetryOptions } from './types';
-
-/**
- * Default retry condition: retry on network errors or 5xx errors
- */
-export const defaultRetryCondition = (error: any): boolean => {
-  return (
-    error.code === 'ECONNRESET' ||
-    error.code === 'ECONNABORTED' ||
-    error.code === 'ETIMEDOUT' ||
-    error.code === 'ENOTFOUND' ||  // DNS resolution error
-    error.message.includes('getaddrinfo') ||  // Another common DNS error
-    (error.response && error.response.status >= 500 && error.response.status < 600)
-  );
-};
-
-/**
- * Retry a request with backoff strategy
- * @param requestFn - Function to retry
- * @param defaultOptions - Default retry options
- * @param options - Retry options
- * @param logger - Logger instance
- * @returns Promise<AxiosResponse> - API response
- */
-export async function retryRequest<T = any>(
-  requestFn: () => Promise<AxiosResponse<T>>,
-  defaultOptions: DefaultRetryOptions,
-  options?: RetryOptions,
-  logger?: Logger
-): Promise<AxiosResponse<T>> {
-  const maxAttempts = options?.maxAttempts || defaultOptions.maxAttempts;
-  const retryDelay = options?.retryDelay || defaultOptions.retryDelay;
-  const retryCondition = options?.retryCondition || defaultRetryCondition;
-  
-  let lastError: any;
-  
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      logger?.debug(`Request attempt ${attempt}/${maxAttempts}`);
-      return await requestFn();
-    } catch (error: any) {
-      lastError = error;
-      
-      // Log the error with attempt number
-      logger?.debug(`Attempt ${attempt} failed: ${error.message}`);
-      
-      // Check if we should retry
-      if (attempt < maxAttempts && retryCondition(error)) {
-        // Calculate backoff delay with jitter to avoid thundering herd
-        const jitter = Math.random() * 0.3 + 0.85; // Random factor between 0.85 and 1.15
-        const delay = Math.floor(retryDelay * Math.pow(1.5, attempt - 1) * jitter);
-        
-        logger?.info(`Retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        break;
-      }
-    }
-  }
-  
-  throw lastError;
-}
-
-// src/framework/api/polling-handler.ts
-import axios, { AxiosRequestConfig, AxiosResponse, Method } from 'axios';
-import { Logger } from '../utils/logger';
-import { ConfigManager } from '../utils/config-manager';
-import { DefaultPollingOptions, PollingOptions } from './types';
-import { logResponse, logError } from './request-executor';
-
-/**
- * Default success condition: check if response data is not empty
- */
-export const defaultSuccessCondition = <T>(response: AxiosResponse<T>): boolean => {
-  // Check if the response has data
-  if (!response.data) {
-    return false;
-  }
-  
-  // For array responses, check if there are elements
-  if (Array.isArray(response.data)) {
-    return response.data.length > 0;
-  }
-  
-  // For object responses with specific fields, check if required fields have data
-  if (typeof response.data === 'object') {
-    // A general check for common response patterns
-    const dataObj = response.data as any;
-    
-    // Check for common patterns in response objects
-    if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-      return dataObj.assetLayouts.length > 0;
-    }
-    
-    if (dataObj.items && Array.isArray(dataObj.items)) {
-      return dataObj.items.length > 0;
-    }
-    
-    if (dataObj.data && Array.isArray(dataObj.data)) {
-      return dataObj.data.length > 0;
-    }
-    
-    // Check for status fields that indicate completion
-    if (dataObj.status) {
-      const status = String(dataObj.status).toLowerCase();
-      return ['completed', 'success', 'done', 'ready'].includes(status);
-    }
-    
-    // Check if the object has any properties (not empty)
-    return Object.keys(dataObj).length > 0;
-  }
-  
-  // For primitive types, check if it's not null, undefined, or empty string
-  return response.data !== null && response.data !== undefined && response.data !== '';
-};
-
-/**
- * Handle long-running request with polling
- * Suitable for requests where the backend needs time to process before returning complete data
- * @param requestFn - Function to execute the initial request
- * @param defaultOptions - Default polling options
- * @param options - Polling options
- * @param logger - Logger instance
- * @param config - Configuration manager
- * @returns Promise<AxiosResponse> - Final API response
- */
-export async function handleLongRunningRequest<T = any>(
-  requestFn: () => Promise<AxiosResponse<T>>,
-  defaultOptions: DefaultPollingOptions,
-  options?: PollingOptions,
-  logger?: Logger,
-  config?: ConfigManager
-): Promise<AxiosResponse<T>> {
-  // Merge options with defaults
-  const pollOptions = {
-    maxAttempts: options?.maxAttempts || defaultOptions.maxAttempts,
-    interval: options?.interval || defaultOptions.interval,
-    timeoutPerAttempt: options?.timeoutPerAttempt || defaultOptions.timeoutPerAttempt,
-    successCondition: options?.successCondition || defaultSuccessCondition
-  };
-  
-  // Make the initial request
-  let response: AxiosResponse<T>;
-  
-  try {
-    logger?.info(`Making initial request for long-running operation`);
-    response = await requestFn();
-    
-    // Log immediate response for debugging
-    const shouldLogDetailed = config?.getBooleanSync('API_DEBUG_DETAILED', false);
-    if (shouldLogDetailed) {
-      logger?.debug('INITIAL RESPONSE FOR LONG-RUNNING REQUEST: ' + JSON.stringify(response.data, null, 2));
-    }
-    
-    // Store the original request details for retries
-    const originalUrl = response.config.url || '';
-    const originalMethod = (response.config.method || 'get').toLowerCase() as Method;
-    const originalData = response.config.data;
-    
-    logger?.debug(`Original request URL: ${originalUrl}`);
-    
-    // Check if we need to poll for completion
-    if (pollOptions.successCondition(response)) {
-      logger?.info(`Initial response is complete, no polling needed`);
-      return response;
-    }
-    
-    // Start polling for completion
-    logger?.info(`Initial response incomplete, starting polling...`);
-    
-    // Create a new request config for polling
-    const axiosConfig: AxiosRequestConfig = {
-      ...response.config,
-      timeout: pollOptions.timeoutPerAttempt
-    };
-    
-    // Clear any potentially problematic properties
-    delete axiosConfig.transitional;
-    delete axiosConfig.transformRequest;
-    delete axiosConfig.transformResponse;
-    delete axiosConfig.paramsSerializer;
-    
-    // Extract the URL
-    const pollUrl = axiosConfig.url || originalUrl;
-    if (!pollUrl) {
-      throw new Error('Unable to determine URL for polling');
-    }
-    
-    for (let attempt = 1; attempt <= pollOptions.maxAttempts; attempt++) {
-      // Wait for the polling interval
-      logger?.debug(`Waiting ${pollOptions.interval}ms before polling attempt ${attempt}/${pollOptions.maxAttempts}`);
-      await new Promise(resolve => setTimeout(resolve, pollOptions.interval));
-      
-      try {
-        // Make the polling request using a fresh config each time
-        const freshConfig: AxiosRequestConfig = {
-          ...axiosConfig,
-          timeout: pollOptions.timeoutPerAttempt
-        };
-        
-        // Log the polling request details
-        logger?.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} to URL: ${pollUrl}`);
-        
-        // Make the request based on the original method
-        let pollResponse: AxiosResponse<T>;
-        if (originalMethod === 'post' || originalMethod === 'put' || originalMethod === 'patch') {
-          pollResponse = await axios.request<T>({
-            ...freshConfig,
-            method: originalMethod,
-            url: pollUrl,
-            data: originalData
-          });
-        } else {
-          pollResponse = await axios.request<T>({
-            ...freshConfig,
-            method: originalMethod,
-            url: pollUrl
-          });
-        }
-        
-        // Calculate and log duration
-        const duration = Date.now() - (pollResponse.config as any).startTime || 0;
-        (pollResponse as any)._duration = duration;
-        logger?.debug(`Polling response time: ${duration}ms`);
-        
-        // Update our response reference
-        response = pollResponse;
-        
-        // Log the polling response
-        const shouldLogDetailed = config?.getBooleanSync('API_DEBUG_DETAILED', false);
-        if (shouldLogDetailed) {
-          logger?.debug(`POLLING RESPONSE (Attempt ${attempt}): ${JSON.stringify(response.data, null, 2)}`);
-        } else {
-          logResponse(response, logger);
-        }
-        
-        // Check if the response is now complete
-        if (pollOptions.successCondition(response)) {
-          logger?.info(`Polling successful after ${attempt} attempts`);
-          return response;
-        }
-        
-        logger?.debug(`Polling attempt ${attempt}/${pollOptions.maxAttempts} - data still incomplete`);
-      } catch (error: any) {
-        logger?.warn(`Polling attempt ${attempt} failed: ${error.message}`);
-        logError(error, logger);
-        
-        // If this is the last attempt, throw the error
-        if (attempt === pollOptions.maxAttempts) {
-          throw error;
-        }
-      }
-    }
-    
-    // If we get here, we've exceeded the maximum polling attempts
-    throw new Error(`Long-running request did not complete after ${pollOptions.maxAttempts} polling attempts`);
-  } catch (error: any) {
-    logger?.error(`Long-running request failed: ${error.message}`);
-    throw error;
-  }
-}
-
-// src/framework/api/assertions.ts
-import { AxiosResponse } from 'axios';
-import { expect } from '@playwright/test';
-import { Logger } from '../utils/logger';
-
-/**
- * Assert API response status code
- * @param response - Axios response
- * @param expectedStatus - Expected status code
- * @param logger - Logger instance
- */
-export function assertStatusCode(
-  response: AxiosResponse,
-  expectedStatus: number,
-  logger?: Logger
-): void {
-  logger?.debug(`Asserting status code: ${expectedStatus}`);
-  expect(response.status).toBe(expectedStatus);
-}
-
-/**
- * Assert API response contains specific data
- * @param response - Axios response
- * @param expectedData - Data to check for
- * @param logger - Logger instance
- */
-export function assertResponseData(
-  response: AxiosResponse,
-  expectedData: any,
-  logger?: Logger
-): void {
-  logger?.debug(`Asserting response data contains expected properties`);
-  expect(response.data).toMatchObject(expectedData);
-}
-
-/**
- * Assert response has data
- * Specifically useful for checking that a response contains data after a long-running request
- * @param response - Axios response
- * @param logger - Logger instance
- */
-export function assertHasData(
-  response: AxiosResponse,
-  logger?: Logger
-): void {
-  logger?.debug(`Asserting response has data`);
-  expect(response.data).toBeDefined();
-  
-  if (Array.isArray(response.data)) {
-    expect(response.data.length).toBeGreaterThan(0);
-  } else if (typeof response.data === 'object' && response.data !== null) {
-    const dataObj = response.data as any;
-    
-    // Check for common patterns in response objects
-    if (dataObj.assetLayouts && Array.isArray(dataObj.assetLayouts)) {
-      expect(dataObj.assetLayouts.length).toBeGreaterThan(0);
-    } else if (dataObj.items && Array.isArray(dataObj.items)) {
-      expect(dataObj.items.length).toBeGreaterThan(0);
-    } else if (dataObj.data && Array.isArray(dataObj.data)) {
-      expect(dataObj.data.length).toBeGreaterThan(0);
-    } else {
-      expect(Object.keys(dataObj).length).toBeGreaterThan(0);
-    }
-  } else {
-    expect(response.data).not.toBeNull();
-    expect(response.data).not.toEqual('');
-  }
-}
-
-/**
- * Assert response header has a specific value
- * @param response - Axios response
- * @param headerName - Header name
- * @param expectedValue - Expected header value
- * @param logger - Logger instance
- */
-export function assertHeader(
-  response: AxiosResponse,
-  headerName: string,
-  expectedValue: string,
-  logger?: Logger
-): void {
-  logger?.debug(`Asserting header ${headerName} has value ${expectedValue}`);
-  const headerValue = response.headers[headerName.toLowerCase()];
-  expect(headerValue).toBe(expectedValue);
-}
-
-/**
- * Assert response time is within acceptable limits
- * @param response - Axios response
- * @param maxTime - Maximum acceptable response time in ms
- * @param logger - Logger instance
- */
-export function assertResponseTime(
-  response: AxiosResponse,
-  maxTime: number,
-  logger?: Logger
-): void {
-  const duration = (response as any)._duration;
-  if (duration !== undefined) {
-    logger?.debug(`Response time: ${duration}ms, Max allowed: ${maxTime}ms`);
-    expect(duration).toBeLessThanOrEqual(maxTime);
-  } else {
-    logger?.warn('Response time metrics not available');
-  }
-}
-
-// src/framework/api/api-client-factory.ts
-import { BaseApiClient } from '../base-api-client';
-import { ConfigManager } from '../utils/config-manager';
-import { Logger } from '../utils/logger';
-
-/**
- * Factory class for creating API clients
- * Manages client instances and ensures proper initialization
- */
-export class ApiClientFactory {
-  private static instance: ApiClientFactory;
-  private logger: Logger;
-  private config: ConfigManager;
-  private clients: Map<string, BaseApiClient> = new Map();
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    this.logger = new Logger('ApiClientFactory');
-    this.config = ConfigManager.getInstance();
+    return retryRequest<T>(
+      () => executeRequest('post', url, data, requestConfig, this.logger),
+      this.defaultRetryOptions,
+      options?.retryOptions,
+      this.logger
+    );
   }
 
   /**
-   * Get singleton instance
-   * @returns ApiClientFactory instance
-   */
-  public static getInstance(): ApiClientFactory {
-    if (!ApiClientFactory.instance) {
-      ApiClientFactory.instance = new ApiClientFactory();
-    }
-    return ApiClientFactory.instance;
-  }
-
-  /**
-   * Initialize the factory
-   * @returns Promise<void>
-   */
-  public async init(): Promise<void> {
-    await this.config.init();
-    this.logger.info('API Client Factory initialized');
-  }
-
-  /**
-   * Get or create a client instance
-   * @param clientType - Client constructor
-   * @param clientName - Unique name for the client
-   * @param args - Arguments to pass to the constructor
-   * @returns Promise<T> - Initialized client instance
-   */
-  public async getClient<T extends BaseApiClient>(
-    clientType: new (...args: any[]) => T,
-    clientName: string,
-    ...args: any[]
-  ): Promise<T> {
-    // Check if we already have an instance
-    const existingClient = this.clients.get(clientName) as T;
-    if (existingClient) {
-      return existingClient;
-    }
-    
-    // Create a new instance
-    this.logger.info(`Creating new API client: ${clientName}`);
-    const client = new clientType(...args);
-    
-    // Initialize the client
-    await client.init();
-    
-    // Store the instance
-    this.clients.set(clientName, client);
-    
-    return client;
-  }
-
-  /**
-   * Check if a client exists
-   * @param clientName - Client name
-   * @returns boolean - Whether the client exists
-   */
-  public hasClient(clientName: string): boolean {
-    return this.clients.has(clientName);
-  }
-
-  /**
-   * Remove a client instance
-   * @param clientName - Client name
-   */
-  public removeClient(clientName: string): void {
-    if (this.clients.has(clientName)) {
-      this.clients.delete(clientName);
-      this.logger.info(`Removed API client: ${clientName}`);
-    }
-  }
-
-  /**
-   * Clear all client instances
-   */
-  public clearClients(): void {
-    this.clients.clear();
-    this.logger.info('Cleared all API clients');
-  }
-}
-
-// src/api/user-api-client.ts
-import { AxiosResponse } from 'axios';
-import { BaseApiClient } from '../framework/base-api-client';
-import { ApiRequestOptions } from '../framework/api/types';
-
-/**
- * User object interface
- */
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  role: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * User creation request interface
- */
-interface CreateUserRequest {
-  username: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  password: string;
-  role?: string;
-}
-
-/**
- * User API client implementation
- */
-export class UserApiClient extends BaseApiClient {
-  /**
-   * Constructor for UserApiClient
-   * @param apiBaseUrl - Optional base URL override
-   */
-  constructor(apiBaseUrl?: string) {
-    super(apiBaseUrl);
-    
-    // Set service-specific defaults
-    this.setDefaultHeader('X-Service', 'user-service');
-  }
-
-  /**
-   * Get all users
-   * @param options - Query parameters and request options
-   * @returns Promise<AxiosResponse<User[]>> - API response with users
-   */
-  async getUsers(options?: { 
-    limit?: number; 
-    offset?: number;
-    apiOptions?: ApiRequestOptions
-  }): Promise<AxiosResponse<User[]>> {
-    const params: Record<string, any> = {};
-    
-    if (options?.limit !== undefined) {
-      params.limit = options.limit;
-    }
-    
-    if (options?.offset !== undefined) {
-      params.offset = options.offset;
-    }
-    
-    return this.get<User[]>('/users', {
-      params,
-      ...options?.apiOptions
-    });
-  }
-
-  /**
-   * Get user by ID
-   * @param id - User ID
+   * Make a PUT request
+   * @param endpoint - API endpoint
+   * @param data - Request body
    * @param options - Request options
-   * @returns Promise<AxiosResponse<User>> - API response with user
+   * @returns Promise<AxiosResponse> - API response
    */
-  async getUserById(
-    id: string, 
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<User>> {
-    return this.get<User>(`/users/${id}`, options);
-  }
-
-  /**
-   * Create a new user
-   * @param userData - User data
-   * @param token - Optional authentication token
-   * @param options - Request options
-   * @returns Promise<AxiosResponse<User>> - API response with created user
-   */
-  async createUser(
-    userData: CreateUserRequest, 
-    token?: string,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<User>> {
-    const requestOptions: ApiRequestOptions = {
-      ...options
-    };
+  async put<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    await this.ensureInitialized();
     
-    if (token) {
-      requestOptions.headers = {
-        ...requestOptions.headers,
-        ...this.createAuthHeader(token)
-      };
+    const url = normalizeUrl(endpoint, this.apiBaseUrl);
+    this.logger.info(`Making PUT request to: ${url}`);
+    
+    const requestConfig = await createRequestConfig(
+      options,
+      this.defaultHeaders,
+      this.defaultTimeout,
+      this.serviceName,
+      this.logger
+    );
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return handleLongRunningRequest<T>(
+        () => executeRequest('put', url, data, requestConfig, this.logger),
+        this.defaultPollingOptions,
+        options?.pollingOptions,
+        this.logger,
+        this.config
+      );
     }
     
-    return this.post<User>('/users', userData, requestOptions);
+    return retryRequest<T>(
+      () => executeRequest('put', url, data, requestConfig, this.logger),
+      this.defaultRetryOptions,
+      options?.retryOptions,
+      this.logger
+    );
   }
 
   /**
-   * Update a user
-   * @param id - User ID
-   * @param userData - User data to update
-   * @param token - Optional authentication token
+   * Make a PATCH request
+   * @param endpoint - API endpoint
+   * @param data - Request body
    * @param options - Request options
-   * @returns Promise<AxiosResponse<User>> - API response with updated user
+   * @returns Promise<AxiosResponse> - API response
    */
-  async updateUser(
-    id: string, 
-    userData: Partial<User>, 
-    token?: string,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<User>> {
-    const requestOptions: ApiRequestOptions = {
-      ...options
-    };
+  async patch<T = any>(endpoint: string, data?: any, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    await this.ensureInitialized();
     
-    if (token) {
-      requestOptions.headers = {
-        ...requestOptions.headers,
-        ...this.createAuthHeader(token)
-      };
+    const url = normalizeUrl(endpoint, this.apiBaseUrl);
+    this.logger.info(`Making PATCH request to: ${url}`);
+    
+    const requestConfig = await createRequestConfig(
+      options,
+      this.defaultHeaders,
+      this.defaultTimeout,
+      this.serviceName,
+      this.logger
+    );
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return handleLongRunningRequest<T>(
+        () => executeRequest('patch', url, data, requestConfig, this.logger),
+        this.defaultPollingOptions,
+        options?.pollingOptions,
+        this.logger,
+        this.config
+      );
     }
     
-    return this.put<User>(`/users/${id}`, userData, requestOptions);
+    return retryRequest<T>(
+      () => executeRequest('patch', url, data, requestConfig, this.logger),
+      this.defaultRetryOptions,
+      options?.retryOptions,
+      this.logger
+    );
   }
 
   /**
-   * Delete a user
-   * @param id - User ID
-   * @param token - Optional authentication token
+   * Make a DELETE request
+   * @param endpoint - API endpoint
    * @param options - Request options
-   * @returns Promise<AxiosResponse<void>> - API response
+   * @returns Promise<AxiosResponse> - API response
    */
-  async deleteUser(
-    id: string, 
-    token?: string,
-    options?: ApiRequestOptions
-  ): Promise<AxiosResponse<void>> {
-    const requestOptions: ApiRequestOptions = {
-      ...options
-    };
+  async delete<T = any>(endpoint: string, options?: ApiRequestOptions): Promise<AxiosResponse<T>> {
+    await this.ensureInitialized();
     
-    if (token) {
-      requestOptions.headers = {
-        ...requestOptions.headers,
-        ...this.createAuthHeader(token)
-      };
+    const url = normalizeUrl(endpoint, this.apiBaseUrl);
+    this.logger.info(`Making DELETE request to: ${url}`);
+    
+    const requestConfig = await createRequestConfig(
+      options,
+      this.defaultHeaders,
+      this.defaultTimeout,
+      this.serviceName,
+      this.logger
+    );
+    
+    // Check if this is a long-running request that needs polling
+    if (options?.pollingOptions?.enabled || this.defaultPollingOptions.enabled) {
+      return handleLongRunningRequest<T>(
+        () => executeRequest('delete', url, options?.data, requestConfig, this.logger),
+        this.defaultPollingOptions,
+        options?.pollingOptions,
+        this.logger,
+        this.config
+      );
     }
     
-    return this.delete<void>(`/users/${id}`, requestOptions);
+    return retryRequest<T>(
+      () => executeRequest('delete', url, options?.data, requestConfig, this.logger),
+      this.defaultRetryOptions,
+      options?.retryOptions,
+      this.logger
+    );
   }
 
   /**
-   * Get authentication token
-   * @param username - Username
-   * @param password - Password
+   * Assert API response status code
+   * @param response - Axios response
+   * @param expectedStatus - Expected status code
+   */
+  assertStatusCode(response: AxiosResponse, expectedStatus: number): void {
+    assertStatusCode(response, expectedStatus, this.logger);
+  }
+
+  /**
+   * Assert API response contains specific data
+   * @param response - Axios response
+   * @param expectedData - Data to check for
+   */
+  assertResponseData(response: AxiosResponse, expectedData: any): void {
+    assertResponseData(response, expectedData, this.logger);
+  }
+
+  /**
+   * Assert response has data
+   * @param response - Axios response
+   */
+  assertHasData(response: AxiosResponse): void {
+    assertHasData(response, this.logger);
+  }
+
+  /**
+   * Assert response header has a specific value
+   * @param response - Axios response
+   * @param headerName - Header name
+   * @param expectedValue - Expected header value
+   */
+  assertHeader(response: AxiosResponse, headerName: string, expectedValue: string): void {
+    assertHeader(response, headerName, expectedValue, this.logger);
+  }
+
+  /**
+   * Assert response time is within acceptable limits
+   * @param response - Axios response
+   * @param maxTime - Maximum acceptable response time in ms
+   */
+  assertResponseTime(response: AxiosResponse, maxTime: number): void {
+    assertResponseTime(response, maxTime, this.logger);
+  }
+
+  /**
+   * Get authentication token (to be implemented by derived classes)
    * @returns Promise<string> - Authentication token
    */
-  async getAuthToken(
-    username?: string, 
-    password?: string
-  ): Promise<string> {
-    // Get credentials from config if not provided
-    if (!username) {
-      username = await this.config.getString('AUTH_USERNAME', '');
-    }
-    
-    if (!password) {
-      password = await this.config.getString('AUTH_PASSWORD', '');
-    }
-    
-    if (!username || !password) {
-      throw new Error('Authentication credentials not provided');
-    }
-    
-    const response = await this.post('/auth/login', {
-      username,
-      password
-    });
-    
-    if (response.data && response.data.token) {
-      return response.data.token;
-    }
-    
-    throw new Error('Authentication failed: Token not found in response');
-  }
-}
-
-// Example usage:
-async function exampleUsage() {
-  // Create and initialize client
-  const userClient = new UserApiClient();
-  await userClient.init();
-  
-  try {
-    // Get authentication token
-    const token = await userClient.getAuthToken();
-    
-    // Create a new user
-    const newUser = await userClient.createUser({
-      username: 'testuser',
-      email: 'test@example.com',
-      firstName: 'Test',
-      lastName: 'User',
-      password: 'Password123'
-    }, token);
-    
-    console.log('User created:', newUser.data);
-    
-    // Get user details
-    const userId = newUser.data.id;
-    const user = await userClient.getUserById(userId);
-    console.log('User details:', user.data);
-    
-    // Update user
-    const updatedUser = await userClient.updateUser(userId, {
-      firstName: 'Updated',
-      lastName: 'Name'
-    }, token);
-    console.log('User updated:', updatedUser.data);
-    
-    // Delete user
-    await userClient.deleteUser(userId, token);
-    console.log('User deleted');
-    
-  } catch (error: any) {
-    console.error('API Error:', error.message);
-  }
-}
-
-// API Client Framework Usage Guide
-
-/**
- * This guide demonstrates how to use the modular API client framework.
- * The framework provides a robust, type-safe, and feature-rich way to interact with APIs.
- */
-
-// Step 1: Import the necessary classes
-import { BaseApiClient } from './framework/base-api-client';
-import { ApiClientFactory } from './framework/api/api-client-factory';
-import { ConfigManager } from './framework/utils/config-manager';
-import { ApiRequestOptions } from './framework/api/types';
-
-// Step 2: Define your API client by extending BaseApiClient
-class ProductApiClient extends BaseApiClient {
-  constructor() {
-    // Pass the service-specific base URL or use the one from config
-    super();
-    
-    // Set service-specific defaults
-    this.setDefaultHeader('X-Service', 'product-service');
-  }
-  
-  // Define service-specific methods
-  async getProducts(options?: ApiRequestOptions) {
-    return this.get('/products', options);
-  }
-  
-  async getProductById(id: string, options?: ApiRequestOptions) {
-    return this.get(`/products/${id}`, options);
-  }
-  
-  async createProduct(productData: any, token: string, options?: ApiRequestOptions) {
-    const requestOptions: ApiRequestOptions = {
-      ...options,
-      headers: {
-        ...options?.headers,
-        ...this.createAuthHeader(token)
-      }
-    };
-    
-    return this.post('/products', productData, requestOptions);
-  }
-  
-  // Implement getAuthToken if needed
   async getAuthToken(): Promise<string> {
-    // Implementation specific to your auth flow
-    const response = await this.post('/auth/token', {
-      clientId: await this.config.getString('CLIENT_ID'),
-      clientSecret: await this.config.getString('CLIENT_SECRET')
+    throw new Error('getAuthToken() method must be implemented by derived API client classes');
+  }
+
+  /**
+   * Create auth header with token
+   * @param token - Authentication token
+   * @returns Record<string, string> - Headers with authentication
+   */
+  createAuthHeader(token: string): Record<string, string> {
+    return { 'Authorization': `Bearer ${token}` };
+  }
+
+  /**
+   * Attempt to resolve a hostname
+   * @param hostname - Hostname to resolve
+   * @returns Promise<string> - Resolved IP address
+   */
+  async resolveHostname(hostname: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const dns = require('dns');
+      dns.lookup(hostname, (err: Error | null, address: string) => {
+        if (err) {
+          this.logger.error(`Failed to resolve hostname ${hostname}: ${err.message}`);
+          reject(err);
+        } else {
+          this.logger.info(`Resolved ${hostname} to ${address}`);
+          resolve(address);
+        }
+      });
     });
-    
-    return response.data.access_token;
+  }
+
+  /**
+   * Update default headers
+   * @param headers - Headers to update
+   */
+  updateDefaultHeaders(headers: Record<string, string>): void {
+    this.defaultHeaders = {
+      ...this.defaultHeaders,
+      ...headers
+    };
+    this.logger.debug(`Updated default headers: ${JSON.stringify(this.defaultHeaders)}`);
+  }
+
+  /**
+   * Set a specific default header
+   * @param name - Header name
+   * @param value - Header value
+   */
+  setDefaultHeader(name: string, value: string): void {
+    this.defaultHeaders[name] = value;
+    this.logger.debug(`Set default header ${name}: ${value}`);
+  }
+
+  /**
+   * Get client configuration
+   * @returns ApiClientConfig - Current client configuration
+   */
+  getConfig(): ApiClientConfig {
+    return {
+      baseUrl: this.apiBaseUrl,
+      timeout: this.defaultTimeout,
+      headers: { ...this.defaultHeaders },
+      serviceName: this.serviceName,
+      retryOptions: { ...this.defaultRetryOptions },
+      pollingOptions: { ...this.defaultPollingOptions }
+    };
   }
 }
 
-// Step 3: Using the API client with proper initialization
-
-// Option 1: Direct initialization
-async function directExample() {
-  // Create client instance
-  const productClient = new ProductApiClient();
-  
-  // Initialize the client (loads config, certificates, etc.)
-  await productClient.init();
-  
-  // Now you can use the client
-  try {
-    const products = await productClient.getProducts();
-    console.log(`Retrieved ${products.data.length} products`);
-    
-    // Using with authentication
-    const token = await productClient.getAuthToken();
-    const newProduct = await productClient.createProduct({
-      name: 'Test Product',
-      price: 99.99
-    }, token);
-    
-    console.log('Product created:', newProduct.data);
-    
-    // Using assertions
-    productClient.assertStatusCode(newProduct, 201);
-  } catch (error: any) {
-    console.error('API Error:', error.message);
-  }
-}
-
-// Option 2: Using the factory (recommended for larger applications)
-async function factoryExample() {
-  // Get the factory instance
-  const factory = ApiClientFactory.getInstance();
-  await factory.init();
-  
-  // Get a client instance (creates and initializes if needed)
-  const productClient = await factory.getClient(
-    ProductApiClient,
-    'products'
-  );
-  
-  // Use the client as before
-  const products = await productClient.getProducts();
-  
-  // The factory will reuse the same instance next time
-  const sameClient = await factory.getClient(
-    ProductApiClient,
-    'products'
-  );
-  
-  // Now they are the same instance
-  console.log(productClient ===
-
-
-/**
- * ProxyManager.ts
- * 
- * A utility for managing API request proxying configurations and routing
- * API requests through appropriate proxy servers based on environment
- * conditions, target endpoints, and security requirements.
- */
-
-import https from 'https';
-import fs from 'fs';
-import { URL } from 'url';
-import axios, { AxiosRequestConfig, AxiosInstance } from 'axios';
-import { Logger } from '../utils/logger';
-
-// Basic config implementation
-class Config {
-  private configMap: Map<string, any> = new Map();
-  
-  constructor(initialConfig?: Record<string, any>) {
-    if (initialConfig) {
-      Object.entries(initialConfig).forEach(([key, value]) => {
-        this.configMap.set(key, value);
-      });
-    }
-  }
-  
-  get<T>(key: string): T | undefined {
-    return this.configMap.get(key) as T;
-  }
-  
-  set(key: string, value: any): void {
-    this.configMap.set(key, value);
-  }
-}
-
-// Type definitions
-export interface ProxyConfig {
-  id: string;
-  baseUrl: string;
-  isDefault?: boolean;
-  timeout?: number;
-  defaultHeaders?: Record<string, string>;
-  routes?: ProxyRoute[];
-  useProxy?: boolean;
-  proxyHost?: string;
-  proxyPort?: number;
-  proxyAuth?: ProxyCredentials;
-  useSsl?: boolean;
-  certificates?: CertificateConfig;
-  healthCheckEndpoint?: string;
-  healthCheckTimeout?: number;
-}
-
-export interface ProxyRoute {
-  pathPrefix?: string;
-  pathPattern?: string;
-  hostname?: string;
-}
-
-export interface ProxyCredentials {
-  username: string;
-  password: string;
-}
-
-export interface CertificateConfig {
-  pfxCertPath?: string;
-  pfxPassphrase?: string;
-  caCertPath?: string;
-  certPath?: string;
-  keyPath?: string;
-  verifySSL?: boolean;
-}
-
-export class ProxyManager {
-  private logger: Logger;
-  private config: Config;
-  private proxyConfigs: Map<string, ProxyConfig> = new Map();
-  private axiosInstances: Map<string, AxiosInstance> = new Map();
-  private defaultProxyId: string | null = null;
-
-  constructor(logger: Logger) {
-    this.logger = logger;
-    this.config = new Config();
-    this.initialize();
-  }
-
-  /**
-   * Initialize the proxy manager with configurations from the config service
-   */
-  private initialize(): void {
-    try {
-      const proxyConfigs = this.config.get<ProxyConfig[]>('proxies') || [];
-      
-      if (proxyConfigs.length === 0) {
-        this.logger.warn('No proxy configurations found');
-        return;
-      }
-
-      // Load all proxy configurations
-      proxyConfigs.forEach(proxyConfig => {
-        if (!proxyConfig.id) {
-          this.logger.warn('Skipping proxy config without ID');
-          return;
-        }
-        
-        this.proxyConfigs.set(proxyConfig.id, proxyConfig);
-        
-        // Create an axios instance for this proxy
-        this.createAxiosInstance(proxyConfig);
-        
-        this.logger.info(`Loaded proxy configuration: ${proxyConfig.id}`);
-        
-        // Set as default if marked as default
-        if (proxyConfig.isDefault) {
-          this.defaultProxyId = proxyConfig.id;
-          this.logger.info(`Set default proxy to: ${proxyConfig.id}`);
-        }
-      });
-      
-      if (!this.defaultProxyId && proxyConfigs.length > 0) {
-        // If no default was explicitly set but we have proxies, set the first as default
-        this.defaultProxyId = proxyConfigs[0].id;
-        this.logger.info(`No default proxy set, using first proxy as default: ${this.defaultProxyId}`);
-      }
-    } catch (error) {
-      this.logger.error('Failed to initialize proxy manager');
-      throw new Error('Failed to initialize proxy manager');
-    }
-  }
-
-  /**
-   * Create an axios instance configured for a specific proxy
-   */
-  private createAxiosInstance(proxyConfig: ProxyConfig): void {
-    try {
-      const axiosConfig: AxiosRequestConfig = {
-        baseURL: proxyConfig.baseUrl,
-        timeout: proxyConfig.timeout || 30000,
-        headers: proxyConfig.defaultHeaders || {}
-      };
-
-      // Configure proxy if needed
-      if (proxyConfig.useProxy && proxyConfig.proxyHost && proxyConfig.proxyPort) {
-        axiosConfig.proxy = {
-          host: proxyConfig.proxyHost,
-          port: proxyConfig.proxyPort,
-          auth: proxyConfig.proxyAuth ? {
-            username: proxyConfig.proxyAuth.username,
-            password: proxyConfig.proxyAuth.password
-          } : undefined
-        };
-      }
-
-      // Configure SSL/TLS if needed
-      if (proxyConfig.useSsl && proxyConfig.certificates) {
-        const httpsAgent = this.createHttpsAgent(proxyConfig.certificates);
-        if (httpsAgent) {
-          axiosConfig.httpsAgent = httpsAgent;
-        }
-      }
-
-      const instance = axios.create(axiosConfig);
-      
-      // Add request interceptor for logging
-      instance.interceptors.request.use(
-        (config) => {
-          this.logger.debug(`Proxying request via ${proxyConfig.id}`);
-          return config;
-        },
-        (error) => {
-          this.logger.error(`Request error in proxy ${proxyConfig.id}`);
-          return Promise.reject(error);
-        }
-      );
-
-      // Add response interceptor for logging
-      instance.interceptors.response.use(
-        (response) => {
-          this.logger.debug(`Received response via ${proxyConfig.id}`);
-          return response;
-        },
-        (error) => {
-          this.logger.error(`Response error in proxy ${proxyConfig.id}`);
-          return Promise.reject(error);
-        }
-      );
-
-      this.axiosInstances.set(proxyConfig.id, instance);
-    } catch (error) {
-      this.logger.error(`Failed to create axios instance for proxy ${proxyConfig.id}`);
-      throw new Error(`Failed to create axios instance for proxy ${proxyConfig.id}`);
-    }
-  }
-
-  /**
-   * Create an HTTPS agent with the appropriate certificate configuration
-   */
-  private createHttpsAgent(certConfig: CertificateConfig): https.Agent | undefined {
-    try {
-      const agentOptions: https.AgentOptions = {
-        rejectUnauthorized: certConfig.verifySSL !== false
-      };
-
-      // PFX certificate configuration
-      if (certConfig.pfxCertPath) {
-        if (!fs.existsSync(certConfig.pfxCertPath)) {
-          throw new Error(`PFX certificate file not found: ${certConfig.pfxCertPath}`);
-        }
-        
-        agentOptions.pfx = fs.readFileSync(certConfig.pfxCertPath);
-        
-        if (certConfig.pfxPassphrase) {
-          agentOptions.passphrase = certConfig.pfxPassphrase;
-        }
-      } 
-      // CA, cert, and key configuration
-      else if (certConfig.caCertPath || certConfig.certPath || certConfig.keyPath) {
-        if (certConfig.caCertPath) {
-          if (!fs.existsSync(certConfig.caCertPath)) {
-            throw new Error(`CA certificate file not found: ${certConfig.caCertPath}`);
-          }
-          agentOptions.ca = fs.readFileSync(certConfig.caCertPath);
-        }
-        
-        if (certConfig.certPath) {
-          if (!fs.existsSync(certConfig.certPath)) {
-            throw new Error(`Certificate file not found: ${certConfig.certPath}`);
-          }
-          agentOptions.cert = fs.readFileSync(certConfig.certPath);
-        }
-        
-        if (certConfig.keyPath) {
-          if (!fs.existsSync(certConfig.keyPath)) {
-            throw new Error(`Key file not found: ${certConfig.keyPath}`);
-          }
-          agentOptions.key = fs.readFileSync(certConfig.keyPath);
-        }
-      }
-
-      return new https.Agent(agentOptions);
-    } catch (error) {
-      this.logger.error('Failed to create HTTPS agent with certificates');
-      throw new Error('Failed to create HTTPS agent with certificates');
-    }
-  }
-
-  /**
-   * Get the appropriate axios instance for a given request
-   */
-  public getProxyForRequest(url: string, options?: { proxyId?: string }): AxiosInstance {
-    const requestedProxyId = options?.proxyId;
-    
-    // If a specific proxy is requested and exists, use it
-    if (requestedProxyId && this.axiosInstances.has(requestedProxyId)) {
-      return this.axiosInstances.get(requestedProxyId)!;
-    }
-    
-    // Otherwise try to find a matching proxy based on route rules
-    const matchedProxyId = this.findMatchingProxyForUrl(url);
-    
-    if (matchedProxyId && this.axiosInstances.has(matchedProxyId)) {
-      return this.axiosInstances.get(matchedProxyId)!;
-    }
-    
-    // Fall back to default proxy
-    if (this.defaultProxyId && this.axiosInstances.has(this.defaultProxyId)) {
-      return this.axiosInstances.get(this.defaultProxyId)!;
-    }
-    
-    // If we get here, we don't have a valid proxy
-    throw new Error('No suitable proxy configuration found for the request');
-  }
-
-  /**
-   * Find a matching proxy based on route rules for a given URL
-   */
-  private findMatchingProxyForUrl(url: string): string | null {
-    for (const [proxyId, config] of this.proxyConfigs.entries()) {
-      if (!config.routes || config.routes.length === 0) {
-        continue;
-      }
-      
-      for (const route of config.routes) {
-        if (this.doesRouteMatchUrl(route, url)) {
-          this.logger.debug(`URL ${url} matched route in proxy ${proxyId}`);
-          return proxyId;
-        }
-      }
-    }
-    
-    return null;
-  }
-
-  /**
-   * Check if a route rule matches a given URL
-   */
-  private doesRouteMatchUrl(route: ProxyRoute, url: string): boolean {
-    try {
-      // Handle prefix matching
-      if (route.pathPrefix && url.startsWith(route.pathPrefix)) {
-        return true;
-      }
-      
-      // Handle regex pattern matching
-      if (route.pathPattern) {
-        const regex = new RegExp(route.pathPattern);
-        if (regex.test(url)) {
-          return true;
-        }
-      }
-      
-      // Handle hostname matching
-      if (route.hostname) {
-        try {
-          const parsedUrl = new URL(url);
-          if (parsedUrl.hostname === route.hostname) {
-            return true;
-          }
-        } catch (e) {
-          // Invalid URL, can't match hostname
-        }
-      }
-      
-      return false;
-    } catch (error) {
-      this.logger.error('Error matching route to URL');
-      return false;
-    }
-  }
-
-  /**
-   * Remove sensitive information from headers for logging
-   */
-  private sanitizeHeaders(headers: any): any {
-    const sanitized = { ...headers };
-    const sensitiveHeaders = ['authorization', 'cookie', 'x-api-key', 'proxy-authorization'];
-    
-    for (const header of Object.keys(sanitized)) {
-      if (sensitiveHeaders.includes(header.toLowerCase())) {
-        sanitized[header] = '[REDACTED]';
-      }
-    }
-    
-    return sanitized;
-  }
-
-  /**
-   * Add a new proxy configuration at runtime
-   */
-  public addProxyConfig(proxyConfig: ProxyConfig): void {
-    if (!proxyConfig.id) {
-      throw new Error('Proxy configuration must have an ID');
-    }
-    
-    this.proxyConfigs.set(proxyConfig.id, proxyConfig);
-    this.createAxiosInstance(proxyConfig);
-    
-    if (proxyConfig.isDefault) {
-      this.defaultProxyId = proxyConfig.id;
-    }
-    
-    this.logger.info(`Added new proxy configuration: ${proxyConfig.id}`);
-  }
-
-  /**
-   * Remove a proxy configuration
-   */
-  public removeProxyConfig(proxyId: string): boolean {
-    const exists = this.proxyConfigs.has(proxyId);
-    
-    if (exists) {
-      this.proxyConfigs.delete(proxyId);
-      this.axiosInstances.delete(proxyId);
-      
-      if (this.defaultProxyId === proxyId) {
-        // Reset default if we're removing it
-        this.defaultProxyId = null;
-        
-        // Try to set a new default
-        const firstProxy = this.proxyConfigs.keys().next().value;
-        if (firstProxy) {
-          this.defaultProxyId = firstProxy;
-        }
-      }
-      
-      this.logger.info(`Removed proxy configuration: ${proxyId}`);
-    }
-    
-    return exists;
-  }
-
-  /**
-   * Update an existing proxy configuration
-   */
-  public updateProxyConfig(proxyId: string, updatedConfig: Partial<ProxyConfig>): boolean {
-    if (!this.proxyConfigs.has(proxyId)) {
-      return false;
-    }
-    
-    const currentConfig = this.proxyConfigs.get(proxyId)!;
-    const newConfig = { ...currentConfig, ...updatedConfig, id: proxyId };
-    
-    this.proxyConfigs.set(proxyId, newConfig);
-    this.createAxiosInstance(newConfig);
-    
-    if (newConfig.isDefault) {
-      this.defaultProxyId = proxyId;
-    } else if (currentConfig.isDefault && !newConfig.isDefault && this.defaultProxyId === proxyId) {
-      // If this was the default but no longer is, reset default
-      this.defaultProxyId = null;
-    }
-    
-    this.logger.info(`Updated proxy configuration: ${proxyId}`);
-    return true;
-  }
-
-  /**
-   * Get the list of available proxy configurations
-   */
-  public getAvailableProxies(): string[] {
-    return Array.from(this.proxyConfigs.keys());
-  }
-
-  /**
-   * Get a proxy configuration by ID
-   */
-  public getProxyConfig(proxyId: string): ProxyConfig | undefined {
-    return this.proxyConfigs.get(proxyId);
-  }
-
-  /**
-   * Set the default proxy
-   */
-  public setDefaultProxy(proxyId: string): boolean {
-    if (!this.proxyConfigs.has(proxyId)) {
-      return false;
-    }
-    
-    // Update the previous default proxy
-    if (this.defaultProxyId && this.proxyConfigs.has(this.defaultProxyId)) {
-      const prevDefault = this.proxyConfigs.get(this.defaultProxyId)!;
-      this.proxyConfigs.set(this.defaultProxyId, { ...prevDefault, isDefault: false });
-    }
-    
-    // Set the new default proxy
-    const newDefault = this.proxyConfigs.get(proxyId)!;
-    this.proxyConfigs.set(proxyId, { ...newDefault, isDefault: true });
-    this.defaultProxyId = proxyId;
-    
-    this.logger.info(`Set default proxy to: ${proxyId}`);
-    return true;
-  }
-
-  /**
-   * Check if a specific proxy is available and functioning
-   */
-  public async checkProxyHealth(proxyId: string): Promise<boolean> {
-    if (!this.axiosInstances.has(proxyId)) {
-      return false;
-    }
-    
-    try {
-      const instance = this.axiosInstances.get(proxyId)!;
-      const config = this.proxyConfigs.get(proxyId)!;
-      
-      // Use health check endpoint if defined, otherwise make a simple request
-      const url = config.healthCheckEndpoint || '/';
-      
-      const response = await instance.get(url, { 
-        timeout: config.healthCheckTimeout || 5000 
-      });
-      
-      return response.status >= 200 && response.status < 300;
-    } catch (error) {
-      this.logger.warn(`Health check failed for proxy ${proxyId}`);
-      return false;
-    }
-  }
-
-  /**
-   * Execute a proxy request through the appropriate proxy
-   */
-  public async executeRequest(
-    method: string,
-    url: string,
-    options: {
-      data?: any,
-      headers?: Record<string, string>,
-      params?: Record<string, any>,
-      timeout?: number,
-      proxyId?: string
-    } = {}
-  ) {
-    try {
-      const proxy = this.getProxyForRequest(url, { proxyId: options.proxyId });
-      
-      const requestConfig: AxiosRequestConfig = {
-        method: method as any,
-        url,
-        data: options.data,
-        headers: options.headers,
-        params: options.params,
-        timeout: options.timeout
-      };
-      
-      return await proxy.request(requestConfig);
-    } catch (error) {
-      this.logger.error('Proxy request failed');
-      throw error;
-    }
-  }
-}
+// Re-export all types and utilities for easier importing
+export * from './api/types';
+export * from './api/request-config';
+export * from './api/assertions';
