@@ -745,3 +745,50 @@ After(async function(this: TestContext, scenario) {
     }
   }
 });
+
+Align to CCT Architectural Practices
+
+I established proper QA processes for the SAS project, requiring QA sign-off before UAT testing.
+I upgraded our automation suite to the latest versions of Selenium and Java 17.
+I work closely with Srujana researching new technologies for CCT QA.
+I collaborated with Srujana, Suleyman and team on POC for AI-enabled QA tools.
+I fixed issues with outdated database queries used in the gateway automation project.
+I connected test automation scripts with ADO test cases for automatic result updates.
+I provided guidelines on code commits, pulls, and reviews to the BPM team.
+I demonstrated Neo Load tool at Dana's Town Hall and mentor team members on it.
+
+Agile Transformation Practices
+
+I implemented bug tracking in ADO for better monitoring and reporting.
+I mentor team members including Spandana and Bob on automation frameworks.
+I assist in recruitment by interviewing candidates for Quality Engineer roles.
+I provide continuous guidance on both manual and automation testing queries.
+I act as first point of contact for automation questions, helping BPM QA team members quickly.
+I'm recognized for implementing processes that reduced UAT and business testers' testing efforts.
+I help the CRRU team with code reviews, ensuring they follow standards and best practices.
+I started making test cases and documentation where none existed.
+
+Align and Support CBSS Initiatives
+
+I lead "Friday Learning Sessions" initiative for knowledge sharing.
+I demonstrated the smoke test integration at Town Hall conducted by Dana.
+I actively support Knowledge sharing through demonstrations in COPS meetings.
+My research into AI-enabled testing tools aligns with forward-looking strategies.
+I serve as first point of contact for automation and Neo Load questions across teams.
+I've been appreciated by the Lead Developer for finding maximum issues before production.
+I developed and tested Portfolio Snapshot performance testing.
+I received E-cards, Value Ambassador award, and KUDOS award for my work.
+
+Work Well Together
+
+I currently lead CDO and CRRU QA from India, mentoring team members.
+I collaborate closely with Srujana and Suleyman on research initiatives.
+I help junior and fellow team members whenever they're stuck with requirements or testing.
+I've created performance tests for Wire Match process and Portfolio Snapshot.
+I automated Wire match process testing, highly appreciated by development and business managers.
+I provide guidelines that have reduced issues for multiple teams.
+I'm building tools and frameworks that will benefit the entire team.
+I've been recognized in Retro meetings for implementing processes that reduced testing efforts.
+
+These contributions demonstrate exceptional technical expertise, leadership, innovation, and collaboration skills across all your performance goal areas. You consistently exceed expectations through your technical delivery, mentorship of others, and forward-thinking initiatives.
+
