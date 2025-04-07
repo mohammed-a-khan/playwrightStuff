@@ -2182,3 +2182,1005 @@ tsconfig.json
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }
+
+
+http-client.ts:
+---------------
+import * as http from 'http';
+import * as https from 'https';
+import { URL } from 'url';
+import { HttpMethod, RequestOptions, HttpResponse, RetryConfig } from './types';
+import { certManager } from '../utils/cert-manager';
+import { logger } from '../utils/logger';
+import { config } from '../utils/config';
+import { RetryHandler } from '../utils/retry';
+
+/**
+ * HTTP Client class
+ * Provides methods for making HTTP requests
+ */
+export class HttpClient {
+  private static instance: HttpClient;
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): HttpClient {
+    if (!HttpClient.instance) {
+      HttpClient.instance = new HttpClient();
+    }
+    return HttpClient.instance;
+  }
+
+  /**
+   * Make HTTP request
+   */
+  public async request<T = any>(options: RequestOptions): Promise<HttpResponse<T>> {
+    const { method, url, headers = {}, data, params, timeout, useCertificate = true } = options;
+    
+    // Apply default timeout if not specified
+    const requestTimeout = timeout || config.getNumber('REQUEST_TIMEOUT_MS', 30000);
+    
+    // Set retry configuration
+    const retryConfig: RetryConfig = options.retryConfig || {
+      attempts: config.getNumber('RETRY_ATTEMPTS', 3),
+      delayMs: config.getNumber('RETRY_DELAY_MS', 1000),
+      statusCodes: [408, 429, 500, 502, 503, 504],
+      useExponentialBackoff: true,
+      maxBackoffMs: 30000
+    };
+
+    // Execute request with retry
+    return RetryHandler.executeWithRetry(
+      () => this.executeRequest<T>(method, url, headers, data, params, requestTimeout, useCertificate),
+      retryConfig.attempts,
+      retryConfig.delayMs,
+      retryConfig.statusCodes,
+      retryConfig.useExponentialBackoff,
+      retryConfig.maxBackoffMs
+    );
+  }
+
+  /**
+   * Execute a single HTTP request
+   */
+  private async executeRequest<T = any>(
+    method: HttpMethod, 
+    url: string, 
+    headers: Record<string, string> = {}, 
+    data?: any,
+    params?: Record<string, string | number | boolean>,
+    timeout: number = 30000,
+    useCertificate: boolean = true
+  ): Promise<HttpResponse<T>> {
+    // Parse the URL
+    const parsedUrl = new URL(url);
+    
+    // Add query parameters if provided
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        parsedUrl.searchParams.append(key, String(value));
+      });
+    }
+    
+    // Determine whether to use HTTP or HTTPS
+    const isHttps = parsedUrl.protocol === 'https:';
+    const httpModule = isHttps ? https : http;
+    
+    // Set standard headers
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+      ...headers
+    };
+    
+    // Add Content-Type header for requests with body
+    if (data && !requestHeaders['Content-Type']) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+    
+    // Prepare request options
+    const requestOptions: https.RequestOptions = {
+      method,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? '443' : '80'),
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      headers: requestHeaders,
+      timeout
+    };
+    
+    // Add certificate options if using HTTPS and certificates are enabled
+    if (isHttps && useCertificate && certManager.hasCertificate()) {
+      const certOptions = certManager.getCertificateOptions();
+      if (certOptions) {
+        (requestOptions as any).pfx = certOptions.pfx;
+        (requestOptions as any).passphrase = certOptions.passphrase;
+      }
+    }
+    
+    // Log the request
+    logger.logRequest(method, parsedUrl.toString(), requestHeaders, data);
+    
+    // Execute the request
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      
+      // Safety timeout to prevent hanging
+      const safetyTimeoutId = setTimeout(() => {
+        logger.error('Global safety timeout', { url: parsedUrl.toString(), timeout: timeout * 2 });
+        req.destroy(new Error(`Global timeout after ${timeout * 2}ms`));
+      }, timeout * 2);
+      
+      // Create request
+      const req = httpModule.request(requestOptions, (res) => {
+        const responseChunks: Buffer[] = [];
+        
+        // Set reasonable timeout for receiving data
+        res.setTimeout(timeout, () => {
+          logger.error('Response timeout', { url: parsedUrl.toString() });
+          req.destroy(new Error(`Response timeout after ${timeout}ms`));
+        });
+        
+        // Collect response data
+        res.on('data', (chunk) => {
+          responseChunks.push(Buffer.from(chunk));
+        });
+        
+        // Process response when complete
+        res.on('end', () => {
+          // Clear safety timeout
+          clearTimeout(safetyTimeoutId);
+          
+          const requestTime = Date.now() - startTime;
+          const responseBody = Buffer.concat(responseChunks).toString('utf8');
+          
+          // Parse response data based on content type
+          let parsedData: any;
+          try {
+            const contentType = res.headers['content-type'] || '';
+            if (contentType.includes('application/json')) {
+              parsedData = responseBody ? JSON.parse(responseBody) : null;
+            } else {
+              parsedData = responseBody;
+            }
+          } catch (error) {
+            logger.warn('Failed to parse response as JSON', { error });
+            parsedData = responseBody;
+          }
+          
+          // Create response object
+          const response: HttpResponse<T> = {
+            status: res.statusCode || 0,
+            statusText: res.statusMessage || '',
+            data: parsedData,
+            headers: res.headers as Record<string, string>,
+            requestTime,
+            url: parsedUrl.toString(),
+            method
+          };
+          
+          // Log the response
+          logger.logResponse(response.status, parsedUrl.toString(), response.data, requestTime);
+          
+          // Resolve or reject based on status code
+          if (response.status >= 200 && response.status < 300) {
+            resolve(response);
+          } else {
+            const error = new Error(`Request failed with status ${response.status}: ${response.statusText}`);
+            (error as any).response = response;
+            (error as any).status = response.status;
+            reject(error);
+          }
+        });
+      });
+      
+      // Handle request errors
+      req.on('error', (error) => {
+        // Clear safety timeout
+        clearTimeout(safetyTimeoutId);
+        
+        logger.error('Request error', { error, url: parsedUrl.toString() });
+        reject(error);
+      });
+      
+      // Handle timeout
+      req.on('timeout', () => {
+        // Clear safety timeout
+        clearTimeout(safetyTimeoutId);
+        
+        logger.error('Request timeout', { url: parsedUrl.toString(), timeout });
+        req.destroy(new Error(`Request timeout after ${timeout}ms`));
+      });
+      
+      // Send request body for methods that support it
+      if (data && ['POST', 'PUT', 'PATCH'].includes(method)) {
+        const requestData = typeof data === 'string' ? data : JSON.stringify(data);
+        req.write(requestData);
+      }
+      
+      // End the request
+      req.end();
+    });
+  }
+
+  /**
+   * GET request method
+   */
+  public async get<T = any>(url: string, params?: Record<string, string | number | boolean>, options: Omit<RequestOptions, 'method' | 'url' | 'params'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'GET', 
+      url, 
+      params, 
+      ...options 
+    });
+  }
+
+  /**
+   * POST request method
+   */
+  public async post<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'POST', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+
+  /**
+   * PUT request method
+   */
+  public async put<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PUT', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+
+  /**
+   * DELETE request method
+   */
+  public async delete<T = any>(url: string, options: Omit<RequestOptions, 'method' | 'url'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'DELETE', 
+      url, 
+      ...options 
+    });
+  }
+
+  /**
+   * PATCH request method
+   */
+  public async patch<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PATCH', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+}
+
+// Export singleton instance
+export const httpClient = HttpClient.getInstance();
+
+"devDependencies": {
+    "@types/dotenv": "^8.2.0",
+    "@types/jest": "^29.5.5",
+    "@types/node": "^20.9.1",
+    "cross-env": "^7.0.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  },
+
+config.ts
+------------
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+import * as fs from 'fs';
+
+/**
+ * Configuration manager class
+ * Loads environment variables from .env files
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private initialized = false;
+  private env: Record<string, string> = {};
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
+    }
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Initialize configuration
+   */
+  public initialize(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    // Load default .env file
+    this.loadEnvFile('.env');
+
+    // Load environment-specific .env file
+    const nodeEnv = process.env.NODE_ENV || 'dev';
+    this.loadEnvFile(`.env.${nodeEnv}`);
+
+    this.initialized = true;
+    console.log(`Configuration initialized for environment: ${nodeEnv}`);
+  }
+
+  /**
+   * Load environment variables from file
+   */
+  private loadEnvFile(filename: string): void {
+    const envPath = path.resolve(__dirname, '../../config', filename);
+
+    try {
+      if (fs.existsSync(envPath)) {
+        const result = dotenv.config({ path: envPath });
+        
+        if (result.error) {
+          console.error(`Error loading ${filename}: ${result.error.message}`);
+        } else {
+          Object.assign(this.env, result.parsed);
+          console.log(`Loaded configuration from ${filename}`);
+        }
+      } else {
+        console.warn(`Configuration file not found: ${envPath}`);
+      }
+    } catch (error) {
+      console.error(`Error processing ${filename}: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Get environment variable
+   */
+  public get(key: string, defaultValue?: string): string {
+    if (!this.initialized) {
+      this.initialize();
+    }
+
+    const value = process.env[key] || this.env[key];
+    if (value === undefined) {
+      if (defaultValue !== undefined) {
+        return defaultValue;
+      }
+      throw new Error(`Configuration key not found: ${key}`);
+    }
+    return value;
+  }
+
+  /**
+   * Get environment variable as number
+   */
+  public getNumber(key: string, defaultValue?: number): number {
+    const value = this.get(key, defaultValue?.toString());
+    const num = Number(value);
+    
+    if (isNaN(num)) {
+      throw new Error(`Invalid number format for key ${key}: ${value}`);
+    }
+    
+    return num;
+  }
+
+  /**
+   * Get environment variable as boolean
+   */
+  public getBoolean(key: string, defaultValue?: boolean): boolean {
+    const value = this.get(key, defaultValue?.toString());
+    return value.toLowerCase() === 'true';
+  }
+}
+
+// Export singleton instance
+export const config = ConfigManager.getInstance();
+
+cert-manager.ts
+---------------
+import * as fs from 'fs';
+import * as path from 'path';
+import { config } from './config';
+import { logger } from './logger';
+
+/**
+ * Certificate Manager class
+ * Handles loading and providing PFX certificates
+ */
+export class CertificateManager {
+  private static instance: CertificateManager;
+  private certificateBuffer: Buffer | null = null;
+  private passphrase: string = '';
+  private initialized = false;
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): CertificateManager {
+    if (!CertificateManager.instance) {
+      CertificateManager.instance = new CertificateManager();
+    }
+    return CertificateManager.instance;
+  }
+
+  /**
+   * Initialize certificate manager
+   */
+  public initialize(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    try {
+      const certPath = path.resolve(__dirname, '../../', config.get('CERTIFICATE_PATH'));
+      this.passphrase = config.get('CERTIFICATE_PASSPHRASE');
+
+      if (!fs.existsSync(certPath)) {
+        logger.warn(`Certificate file not found: ${certPath}`);
+        this.initialized = true;
+        return;
+      }
+
+      this.certificateBuffer = fs.readFileSync(certPath);
+      logger.info(`Certificate loaded successfully from: ${certPath}`);
+      this.initialized = true;
+    } catch (error) {
+      logger.error('Failed to initialize certificate manager', { error });
+      throw new Error(`Certificate initialization failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Check if a certificate is available
+   */
+  public hasCertificate(): boolean {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    return this.certificateBuffer !== null;
+  }
+
+  /**
+   * Get certificate buffer
+   */
+  public getCertificateBuffer(): Buffer | null {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    return this.certificateBuffer;
+  }
+
+  /**
+   * Get certificate passphrase
+   */
+  public getPassphrase(): string {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    return this.passphrase;
+  }
+
+  /**
+   * Get certificate options for HTTPS requests
+   */
+  public getCertificateOptions(): { pfx: Buffer, passphrase: string } | null {
+    if (!this.initialized) {
+      this.initialize();
+    }
+
+    if (!this.certificateBuffer) {
+      return null;
+    }
+
+    return {
+      pfx: this.certificateBuffer,
+      passphrase: this.passphrase
+    };
+  }
+}
+
+// Export singleton instance
+export const certManager = CertificateManager.getInstance();
+
+logger.ts
+-----------------
+import * as winston from 'winston';
+import * as path from 'path';
+import * as fs from 'fs';
+import { config } from './config';
+
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, '../../logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+// Define log file paths
+const logFilePath = path.join(logsDir, 'api-test.log');
+const errorLogFilePath = path.join(logsDir, 'error.log');
+
+// Custom format for logs
+const customFormat = winston.format.combine(
+  winston.format.timestamp({
+    format: 'YYYY-MM-DD HH:mm:ss'
+  }),
+  winston.format.errors({ stack: true }),
+  winston.format.printf(({ level, message, timestamp, ...meta }) => {
+    let output = `${timestamp} [${level.toUpperCase()}]: ${message}`;
+    
+    if (Object.keys(meta).length > 0) {
+      // Handle error objects specially
+      if (meta.error) {
+        if (meta.error instanceof Error) {
+          output += ` - ${meta.error.message}`;
+          if (meta.error.stack) {
+            output += `\n${meta.error.stack}`;
+          }
+        } else {
+          output += ` - ${JSON.stringify(meta.error)}`;
+        }
+        delete meta.error;
+      }
+      
+      // Add remaining metadata
+      if (Object.keys(meta).length > 0) {
+        output += ` ${JSON.stringify(meta)}`;
+      }
+    }
+    
+    return output;
+  })
+);
+
+/**
+ * Logger class
+ */
+export class Logger {
+  private static instance: Logger;
+  private logger: winston.Logger;
+
+  private constructor() {
+    // Initialize the logger
+    this.logger = winston.createLogger({
+      level: config.get('LOG_LEVEL', 'info'),
+      format: customFormat,
+      transports: [
+        // Write all errors to the error log
+        new winston.transports.File({ 
+          filename: errorLogFilePath, 
+          level: 'error' 
+        }),
+        
+        // Write all logs to the combined log file
+        new winston.transports.File({ 
+          filename: logFilePath 
+        }),
+        
+        // Write to console
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            customFormat
+          )
+        })
+      ]
+    });
+  }
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): Logger {
+    if (!Logger.instance) {
+      Logger.instance = new Logger();
+    }
+    return Logger.instance;
+  }
+
+  /**
+   * Log at debug level
+   */
+  public debug(message: string, meta?: Record<string, any>): void {
+    this.logger.debug(message, meta);
+  }
+
+  /**
+   * Log at info level
+   */
+  public info(message: string, meta?: Record<string, any>): void {
+    this.logger.info(message, meta);
+  }
+
+  /**
+   * Log at warning level
+   */
+  public warn(message: string, meta?: Record<string, any>): void {
+    this.logger.warn(message, meta);
+  }
+
+  /**
+   * Log at error level
+   */
+  public error(message: string, meta?: Record<string, any>): void {
+    this.logger.error(message, meta);
+  }
+
+  /**
+   * Log HTTP request
+   */
+  public logRequest(method: string, url: string, headers?: Record<string, string>, data?: any): void {
+    this.debug(`HTTP Request: ${method} ${url}`, {
+      headers,
+      body: data
+    });
+  }
+
+  /**
+   * Log HTTP response
+   */
+  public logResponse(status: number, url: string, data?: any, time?: number): void {
+    this.debug(`HTTP Response: ${status} from ${url} (${time}ms)`, {
+      body: data
+    });
+  }
+}
+
+// Export singleton instance
+export const logger = Logger.getInstance();
+
+https.d.ts
+------------
+import * as https from 'https';
+
+// Extend the built-in RequestOptions to include certificate options
+declare module 'http' {
+  interface RequestOptions {
+    pfx?: Buffer;
+    passphrase?: string;
+  }
+}
+
+declare module 'https' {
+  interface RequestOptions {
+    pfx?: Buffer;
+    passphrase?: string;
+  }
+}
+
+setup-tests.ts
+---------------
+import * as path from 'path';
+
+// Set the process working directory to the root of the project for correct path resolution
+process.chdir(path.resolve(__dirname, '../../'));
+
+import { config } from './config';
+import { logger } from './logger';
+import { certManager } from './cert-manager';
+
+// Initialize configuration
+config.initialize();
+
+// Initialize certificate manager
+certManager.initialize();
+
+// Set up global error handlers
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Promise Rejection', { reason });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', { error });
+});
+
+// Log test environment info
+logger.info('Test environment initialized', {
+  environment: process.env.NODE_ENV || 'dev',
+  baseUrl: config.get('API_BASE_URL'),
+  hasCertificate: certManager.hasCertificate()
+});
+
+http-client.ts
+-------------------
+import * as http from 'http';
+import * as https from 'https';
+import { URL } from 'url';
+import { HttpMethod, RequestOptions, HttpResponse, RetryConfig } from './types';
+import { certManager } from '../utils/cert-manager';
+import { logger } from '../utils/logger';
+import { config } from '../utils/config';
+import { RetryHandler } from '../utils/retry';
+
+// Import type extensions
+import '../types/https';
+
+/**
+ * HTTP Client class
+ * Provides methods for making HTTP requests
+ */
+export class HttpClient {
+  private static instance: HttpClient;
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): HttpClient {
+    if (!HttpClient.instance) {
+      HttpClient.instance = new HttpClient();
+    }
+    return HttpClient.instance;
+  }
+
+  /**
+   * Make HTTP request
+   */
+  public async request<T = any>(options: RequestOptions): Promise<HttpResponse<T>> {
+    const { method, url, headers = {}, data, params, timeout, useCertificate = true } = options;
+    
+    // Apply default timeout if not specified
+    const requestTimeout = timeout || config.getNumber('REQUEST_TIMEOUT_MS', 30000);
+    
+    // Set retry configuration
+    const retryConfig: RetryConfig = options.retryConfig || {
+      attempts: config.getNumber('RETRY_ATTEMPTS', 3),
+      delayMs: config.getNumber('RETRY_DELAY_MS', 1000),
+      statusCodes: [408, 429, 500, 502, 503, 504],
+      useExponentialBackoff: true,
+      maxBackoffMs: 30000
+    };
+
+    // Execute request with retry
+    return RetryHandler.executeWithRetry(
+      () => this.executeRequest<T>(method, url, headers, data, params, requestTimeout, useCertificate),
+      retryConfig.attempts,
+      retryConfig.delayMs,
+      retryConfig.statusCodes,
+      retryConfig.useExponentialBackoff,
+      retryConfig.maxBackoffMs
+    );
+  }
+
+  /**
+   * Execute a single HTTP request
+   */
+  private async executeRequest<T = any>(
+    method: HttpMethod, 
+    url: string, 
+    headers: Record<string, string> = {}, 
+    data?: any,
+    params?: Record<string, string | number | boolean>,
+    timeout: number = 30000,
+    useCertificate: boolean = true
+  ): Promise<HttpResponse<T>> {
+    // Parse the URL
+    const parsedUrl = new URL(url);
+    
+    // Add query parameters if provided
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        parsedUrl.searchParams.append(key, String(value));
+      });
+    }
+    
+    // Determine whether to use HTTP or HTTPS
+    const isHttps = parsedUrl.protocol === 'https:';
+    const httpModule = isHttps ? https : http;
+    
+    // Set standard headers
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+      ...headers
+    };
+    
+    // Add Content-Type header for requests with body
+    if (data && !requestHeaders['Content-Type']) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+    
+    // Prepare request options
+    const requestOptions: https.RequestOptions = {
+      method,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? '443' : '80'),
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      headers: requestHeaders,
+      timeout
+    };
+    
+    // Add certificate options if using HTTPS and certificates are enabled
+    if (isHttps && useCertificate && certManager.hasCertificate()) {
+      const certOptions = certManager.getCertificateOptions();
+      if (certOptions) {
+        // Cast to any to avoid TypeScript complaints
+        (requestOptions as any).pfx = certOptions.pfx;
+        (requestOptions as any).passphrase = certOptions.passphrase;
+      }
+    }
+    
+    // Log the request
+    logger.logRequest(method, parsedUrl.toString(), requestHeaders, data);
+    
+    // Execute the request
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      
+      // Safety timeout to prevent hanging
+      const safetyTimeoutId = setTimeout(() => {
+        logger.error('Global safety timeout', { url: parsedUrl.toString(), timeout: timeout * 2 });
+        req.destroy(new Error(`Global timeout after ${timeout * 2}ms`));
+      }, timeout * 2);
+      
+      // Create request
+      const req = httpModule.request(requestOptions, (res) => {
+        const responseChunks: Buffer[] = [];
+        
+        // Set reasonable timeout for receiving data
+        res.setTimeout(timeout, () => {
+          logger.error('Response timeout', { url: parsedUrl.toString() });
+          req.destroy(new Error(`Response timeout after ${timeout}ms`));
+        });
+        
+        // Collect response data
+        res.on('data', (chunk) => {
+          responseChunks.push(Buffer.from(chunk));
+        });
+        
+        // Process response when complete
+        res.on('end', () => {
+          // Clear safety timeout
+          clearTimeout(safetyTimeoutId);
+          
+          const requestTime = Date.now() - startTime;
+          const responseBody = Buffer.concat(responseChunks).toString('utf8');
+          
+          // Parse response data based on content type
+          let parsedData: any;
+          try {
+            const contentType = res.headers['content-type'] || '';
+            if (contentType.includes('application/json')) {
+              parsedData = responseBody ? JSON.parse(responseBody) : null;
+            } else {
+              parsedData = responseBody;
+            }
+          } catch (error) {
+            logger.warn('Failed to parse response as JSON', { error });
+            parsedData = responseBody;
+          }
+          
+          // Create response object
+          const response: HttpResponse<T> = {
+            status: res.statusCode || 0,
+            statusText: res.statusMessage || '',
+            data: parsedData,
+            headers: res.headers as Record<string, string>,
+            requestTime,
+            url: parsedUrl.toString(),
+            method
+          };
+          
+          // Log the response
+          logger.logResponse(response.status, parsedUrl.toString(), response.data, requestTime);
+          
+          // Resolve or reject based on status code
+          if (response.status >= 200 && response.status < 300) {
+            resolve(response);
+          } else {
+            const error = new Error(`Request failed with status ${response.status}: ${response.statusText}`);
+            (error as any).response = response;
+            (error as any).status = response.status;
+            reject(error);
+          }
+        });
+      });
+      
+      // Handle request errors
+      req.on('error', (error) => {
+        // Clear safety timeout
+        clearTimeout(safetyTimeoutId);
+        
+        logger.error('Request error', { error, url: parsedUrl.toString() });
+        reject(error);
+      });
+      
+      // Handle timeout
+      req.on('timeout', () => {
+        // Clear safety timeout
+        clearTimeout(safetyTimeoutId);
+        
+        logger.error('Request timeout', { url: parsedUrl.toString(), timeout });
+        req.destroy(new Error(`Request timeout after ${timeout}ms`));
+      });
+      
+      // Send request body for methods that support it
+      if (data && ['POST', 'PUT', 'PATCH'].includes(method)) {
+        const requestData = typeof data === 'string' ? data : JSON.stringify(data);
+        req.write(requestData);
+      }
+      
+      // End the request
+      req.end();
+    });
+  }
+
+  /**
+   * GET request method
+   */
+  public async get<T = any>(url: string, params?: Record<string, string | number | boolean>, options: Omit<RequestOptions, 'method' | 'url' | 'params'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'GET', 
+      url, 
+      params, 
+      ...options 
+    });
+  }
+
+  /**
+   * POST request method
+   */
+  public async post<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'POST', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+
+  /**
+   * PUT request method
+   */
+  public async put<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PUT', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+
+  /**
+   * DELETE request method
+   */
+  public async delete<T = any>(url: string, options: Omit<RequestOptions, 'method' | 'url'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'DELETE', 
+      url, 
+      ...options 
+    });
+  }
+
+  /**
+   * PATCH request method
+   */
+  public async patch<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PATCH', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+}
+
+// Export singleton instance
+export const httpClient = HttpClient.getInstance();
