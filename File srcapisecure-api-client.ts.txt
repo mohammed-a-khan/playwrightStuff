@@ -825,16 +825,19 @@ export interface AssetLayoutRequest {
   reportDate: string;
 }
 
+export interface AssetLayout {
+  dealId: number;
+  entityId: number;
+  // Add other fields as needed
+  [key: string]: any; // This allows for additional fields
+}
+
 export interface AssetLayoutResponse {
-  status: string;
-  message: string;
-  data: {
-    assetId: string;
-    assetName: string;
-    assetType: string;
-    assetValue: number;
-    [key: string]: any;
-  };
+  assetLayouts: AssetLayout[];
+  systemError: string | null;
+  responseMessageId: string;
+  validationErrorMessage: string | null;
+  errorMessage: string | null;
 }
 
 // src/models/response.model.ts
@@ -1128,12 +1131,19 @@ Then('the response should contain valid asset layout data', function() {
   expect(this.context.assetLayoutResponse?.data).to.not.be.undefined;
   
   const response = this.context.assetLayoutResponse?.data;
-  expect(response.status).to.equal('success');
-  expect(response.data).to.not.be.undefined;
-  expect(response.data.assetId).to.be.a('string');
-  expect(response.data.assetName).to.be.a('string');
-  expect(response.data.assetType).to.be.a('string');
-  expect(response.data.assetValue).to.be.a('number');
+  expect(response.assetLayouts).to.be.an('array');
+  expect(response.assetLayouts.length).to.be.greaterThan(0);
+  expect(response.systemError).to.be.null;
+  expect(response.errorMessage).to.be.null;
+  expect(response.validationErrorMessage).to.be.null;
+  expect(response.responseMessageId).to.be.a('string');
+  
+  // Validate the first asset layout in the array
+  const firstAssetLayout = response.assetLayouts[0];
+  expect(firstAssetLayout).to.have.property('dealId');
+  expect(firstAssetLayout).to.have.property('entityId');
+  expect(firstAssetLayout.dealId).to.be.a('number');
+  expect(firstAssetLayout.entityId).to.be.a('number');
 });
 
 Then('the response should contain an error message', function() {
@@ -1141,8 +1151,10 @@ Then('the response should contain an error message', function() {
   expect(this.context.assetLayoutResponse?.data).to.not.be.undefined;
   
   const response = this.context.assetLayoutResponse?.data;
-  expect(response.status).to.equal('error');
-  expect(response.message).to.be.a('string');
+  expect(response.errorMessage).to.not.be.null;
+  expect(response.errorMessage).to.be.a('string');
+  expect(response.assetLayouts).to.be.an('array');
+  expect(response.assetLayouts.length).to.equal(0);
 });
 
 Then('the response should contain a validation error', function() {
@@ -1150,8 +1162,10 @@ Then('the response should contain a validation error', function() {
   expect(this.context.assetLayoutResponse?.data).to.not.be.undefined;
   
   const response = this.context.assetLayoutResponse?.data;
-  expect(response.status).to.equal('error');
-  expect(response.message).to.include('validation');
+  expect(response.validationErrorMessage).to.not.be.null;
+  expect(response.validationErrorMessage).to.be.a('string');
+  expect(response.assetLayouts).to.be.an('array');
+  expect(response.assetLayouts.length).to.equal(0);
 });
 
 // tests/testData/payloads/assetLayoutPayload.json
