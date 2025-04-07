@@ -1,51 +1,11 @@
-// Directory Structure
-/*
-playwright-api-framework/
-├── config/
-│   ├── config.ts                    // Configuration manager
-│   └── environments/
-│       ├── .env.sit                 // SIT environment variables
-│       ├── .env.uat                 // UAT environment variables
-│       └── .env.prod                // PROD environment variables
-├── certs/
-│   └── kpfxPROD.pfx                 // Certificate file (placeholder)
-├── src/
-│   ├── api/
-│   │   ├── apiClient.ts             // API client for making requests
-│   │   ├── endpoints.ts             // API endpoints configuration
-│   │   └── services/
-│   │       └── assetLayoutService.ts // API service for asset layout
-│   ├── helpers/
-│   │   ├── certificateHelper.ts     // Helper for certificate handling
-│   │   ├── dataHelper.ts            // Helper for test data management
-│   │   ├── loggerHelper.ts          // Custom logger
-│   │   └── reportHelper.ts          // Custom reporting
-│   ├── models/
-│   │   ├── assetLayout.model.ts     // Data models
-│   │   └── response.model.ts        // Response models
-│   ├── hooks/
-│   │   └── hooks.ts                 // Cucumber hooks
-│   └── utils/
-│       ├── commonUtils.ts           // Common utilities
-│       └── fileUtils.ts             // File utilities
-├── tests/
-│   ├── features/
-│   │   └── assetLayout.feature      // Cucumber feature files
-│   ├── step-definitions/
-│   │   └── assetLayoutSteps.ts      // Step definitions
-│   └── testData/
-│       └── payloads/
-│           └── assetLayoutPayload.json // Test payloads
-├── reports/
-│   └── html/                        // Custom HTML reports
-├── package.json                     // Project dependencies
-├── tsconfig.json                    // TypeScript configuration
-├── cucumber.js                      // Cucumber configuration
-├── playwright.config.ts             // Playwright configuration
-└── README.md                        // Framework documentation
-*/
+# Complete Framework Structure
 
-// package.json
+Here's a complete overview of all the key files that should be in your project:
+
+## Core Configuration Files
+
+### 1. package.json
+```json
 {
   "name": "playwright-api-framework",
   "version": "1.0.0",
@@ -53,13 +13,12 @@ playwright-api-framework/
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "pretest": "npm run build",
     "test": "cucumber-js",
     "test:sit": "cross-env NODE_ENV=sit cucumber-js",
     "test:uat": "cross-env NODE_ENV=uat cucumber-js",
     "test:prod": "cross-env NODE_ENV=prod cucumber-js",
     "test:debug": "cross-env DEBUG=true cucumber-js",
-    "report": "node ./dist/src/helpers/reportHelper.js",
+    "report": "node ./src/helpers/reportHelper.js",
     "clean": "rimraf reports/json/* reports/html/* dist/*"
   },
   "keywords": [
@@ -92,8 +51,10 @@ playwright-api-framework/
     "rimraf": "^5.0.1"
   }
 }
+```
 
-// tsconfig.json
+### 2. tsconfig.json
+```json
 {
   "compilerOptions": {
     "target": "ES2018",
@@ -112,20 +73,25 @@ playwright-api-framework/
     },
     "allowJs": true,
     "strict": false,
-    "noImplicitAny": false
+    "noImplicitAny": false,
+    "experimentalDecorators": true,
+    "types": ["node", "@cucumber/cucumber"]
   },
-  "include": ["**/*.ts", "**/*.js"],
+  "include": ["**/*.ts", "**/*.d.ts"],
   "exclude": ["node_modules", "dist"]
 }
+```
 
-// cucumber.js
+### 3. cucumber.js
+```javascript
 const common = {
   require: [
     'ts-node/register',
-    './src/hooks/hooks.js',
-    './tests/step-definitions/**/*.js'
+    './tests/support/World.ts',
+    './src/hooks/hooks.ts',
+    './tests/step-definitions/*.ts'
   ],
-  paths: ['tests/features/'],
+  paths: ['./tests/features/'],
   format: [
     'progress-bar',
     'json:reports/json/cucumber-report.json'
@@ -137,8 +103,10 @@ const common = {
 module.exports = {
   default: common
 };
+```
 
-// playwright.config.ts
+### 4. playwright.config.ts
+```typescript
 import { PlaywrightTestConfig } from '@playwright/test';
 import * as dotenv from 'dotenv';
 import path from 'path';
@@ -163,8 +131,12 @@ const config: PlaywrightTestConfig = {
 };
 
 export default config;
+```
 
-// config/config.ts
+## Environment Configuration
+
+### 5. config/config.ts
+```typescript
 import * as dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs-extra';
@@ -222,32 +194,22 @@ class Config {
 }
 
 export default Config.getInstance();
+```
 
-// config/environments/.env.sit
+### 6. config/environments/.env.sit
+```
 API_BASE_URL=https://katapi-sit.k8s.americas.ishare.net
 CERT_PATH=./certs/kpfxPROD.pfx
 CERT_PASSPHRASE=khan#123!
 DEBUG=false
 TIMEOUT=30000
 RETRY_ATTEMPTS=2
+```
 
-// config/environments/.env.uat
-API_BASE_URL=https://katapi-uat.k8s.americas.ishare.net
-CERT_PATH=./certs/kpfxPROD.pfx
-CERT_PASSPHRASE=khan#123!
-DEBUG=false
-TIMEOUT=30000
-RETRY_ATTEMPTS=1
+## API Client and Endpoints
 
-// config/environments/.env.prod
-API_BASE_URL=https://katapi-prod.k8s.americas.ishare.net
-CERT_PATH=./certs/kpfxPROD.pfx
-CERT_PASSPHRASE=khan#123!
-DEBUG=false
-TIMEOUT=30000
-RETRY_ATTEMPTS=0
-
-// src/api/apiClient.ts
+### 7. src/api/apiClient.ts
+```typescript
 import { request, APIRequestContext, APIResponse } from '@playwright/test';
 import config from '../../config/config';
 import logger from '../helpers/loggerHelper';
@@ -356,14 +318,18 @@ export class ApiClient {
 }
 
 export default ApiClient.getInstance();
+```
 
-// src/api/endpoints.ts
+### 8. src/api/endpoints.ts
+```typescript
 export const Endpoints = {
   ASSET_LAYOUT: '/v1/assets/assetlayout',
   // Add more endpoints as needed
 };
+```
 
-// src/api/services/assetLayoutService.ts
+### 9. src/api/services/assetLayoutService.ts
+```typescript
 import apiClient from '../apiClient';
 import { Endpoints } from '../endpoints';
 import { AssetLayoutRequest, AssetLayoutResponse } from '../../models/assetLayout.model';
@@ -404,8 +370,48 @@ export class AssetLayoutService {
 }
 
 export default AssetLayoutService.getInstance();
+```
 
-// src/helpers/certificateHelper.ts
+## Models
+
+### 10. src/models/assetLayout.model.ts
+```typescript
+export interface AssetLayoutRequest {
+  messageId: number;
+  dealId: number;
+  reportDate: string;
+}
+
+export interface AssetLayout {
+  dealId: number;
+  entityId: number;
+  // Add other fields as needed
+  [key: string]: any; // This allows for additional fields
+}
+
+export interface AssetLayoutResponse {
+  assetLayouts: AssetLayout[];
+  systemError: string | null;
+  responseMessageId: string;
+  validationErrorMessage: string | null;
+  errorMessage: string | null;
+}
+```
+
+### 11. src/models/response.model.ts
+```typescript
+export interface ApiResponse<T> {
+  statusCode: number;
+  headers: Record<string, string>;
+  data: T;
+  ok: boolean;
+}
+```
+
+## Helpers
+
+### 12. src/helpers/certificateHelper.ts
+```typescript
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import config from '../../config/config';
@@ -452,66 +458,10 @@ export class CertificateHelper {
 }
 
 export const certificateHelper = CertificateHelper.getInstance();
+```
 
-// src/helpers/dataHelper.ts
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import logger from './loggerHelper';
-
-export class DataHelper {
-  private static instance: DataHelper;
-
-  private constructor() {}
-
-  public static getInstance(): DataHelper {
-    if (!DataHelper.instance) {
-      DataHelper.instance = new DataHelper();
-    }
-    return DataHelper.instance;
-  }
-
-  public async loadJsonData<T>(filePath: string): Promise<T> {
-    try {
-      const absolutePath = path.resolve(filePath);
-      logger.debug(`Loading JSON data from: ${absolutePath}`);
-      
-      if (!fs.existsSync(absolutePath)) {
-        throw new Error(`File not found: ${absolutePath}`);
-      }
-      
-      const fileContent = await fs.readFile(absolutePath, 'utf8');
-      return JSON.parse(fileContent) as T;
-    } catch (error) {
-      logger.error(`Error loading JSON data: ${error}`);
-      throw error;
-    }
-  }
-
-  public async saveJsonData<T>(filePath: string, data: T): Promise<void> {
-    try {
-      const absolutePath = path.resolve(filePath);
-      logger.debug(`Saving JSON data to: ${absolutePath}`);
-      
-      const dirPath = path.dirname(absolutePath);
-      await fs.ensureDir(dirPath);
-      
-      await fs.writeFile(absolutePath, JSON.stringify(data, null, 2), 'utf8');
-      logger.debug('JSON data saved successfully');
-    } catch (error) {
-      logger.error(`Error saving JSON data: ${error}`);
-      throw error;
-    }
-  }
-
-  public async getPayload<T>(payloadName: string): Promise<T> {
-    const payloadPath = path.resolve(`tests/testData/payloads/${payloadName}.json`);
-    return this.loadJsonData<T>(payloadPath);
-  }
-}
-
-export default DataHelper.getInstance();
-
-// src/helpers/loggerHelper.ts
+### 13. src/helpers/loggerHelper.ts
+```typescript
 import winston from 'winston';
 import path from 'path';
 import fs from 'fs-extra';
@@ -549,316 +499,64 @@ const logger = winston.createLogger({
 });
 
 export default logger;
+```
 
-// src/helpers/reportHelper.ts
+## Cucumber Setup
+
+### 14. tests/support/World.ts
+```typescript
+import { setWorldConstructor, World as CucumberWorld } from '@cucumber/cucumber';
+
+export class CustomWorld extends CucumberWorld {
+  context: {
+    scenarioName: string;
+    scenarioId: string;
+    startTime: Date;
+    responses: Record<string, any>;
+    assetLayoutResponse?: any;
+  };
+
+  constructor(options) {
+    super(options);
+    this.context = {
+      scenarioName: '',
+      scenarioId: '',
+      startTime: new Date(),
+      responses: {}
+    };
+  }
+}
+
+setWorldConstructor(CustomWorld);
+```
+
+### 15. tests/support/world.d.ts
+```typescript
+import { World as CucumberWorld } from '@cucumber/cucumber';
+import { ApiResponse } from '../../src/models/response.model';
+import { AssetLayoutResponse } from '../../src/models/assetLayout.model';
+
+declare module '@cucumber/cucumber' {
+  interface World {
+    context: {
+      scenarioName: string;
+      scenarioId: string;
+      startTime: Date;
+      responses: Record<string, any>;
+      assetLayoutResponse?: ApiResponse<AssetLayoutResponse>;
+    };
+  }
+}
+```
+
+### 16. src/hooks/hooks.ts
+```typescript
+import { BeforeAll, AfterAll, Before, After, Status } from '@cucumber/cucumber';
+import apiClient from '../api/apiClient';
+import logger from '../helpers/loggerHelper';
+import reportHelper from '../helpers/reportHelper';
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import moment from 'moment';
-import logger from './loggerHelper';
-import config from '../../config/config';
-
-export class ReportHelper {
-  private static instance: ReportHelper;
-  private testResults: any[] = [];
-  private startTime: Date | null = null;
-  private endTime: Date | null = null;
-
-  private constructor() {}
-
-  public static getInstance(): ReportHelper {
-    if (!ReportHelper.instance) {
-      ReportHelper.instance = new ReportHelper();
-    }
-    return ReportHelper.instance;
-  }
-
-  public startTestRun(): void {
-    this.startTime = new Date();
-    this.testResults = [];
-    logger.info(`Test run started at ${this.startTime.toISOString()}`);
-  }
-
-  public addTestResult(feature: string, scenario: string, status: string, duration: number, error?: string): void {
-    this.testResults.push({
-      feature,
-      scenario,
-      status,
-      duration,
-      error,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  public endTestRun(): void {
-    this.endTime = new Date();
-    logger.info(`Test run ended at ${this.endTime.toISOString()}`);
-  }
-
-  public async generateReport(): Promise<void> {
-    if (!this.startTime || !this.endTime) {
-      logger.error('Cannot generate report: Test run not properly started or ended');
-      return;
-    }
-
-    const reportDir = path.join(process.cwd(), 'reports', 'html');
-    await fs.ensureDir(reportDir);
-
-    const timestamp = moment().format('YYYYMMDD_HHmmss');
-    const reportPath = path.join(reportDir, `report_${timestamp}.html`);
-
-    const totalDuration = this.endTime.getTime() - this.startTime.getTime();
-    const totalTests = this.testResults.length;
-    const passedTests = this.testResults.filter(test => test.status === 'passed').length;
-    const failedTests = this.testResults.filter(test => test.status === 'failed').length;
-    const skippedTests = this.testResults.filter(test => test.status === 'skipped').length;
-
-    const environment = config.getEnvironment();
-    const baseUrl = config.getBaseUrl();
-
-    const reportHtml = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>API Test Report</title>
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          margin: 0;
-          padding: 20px;
-          color: #333;
-        }
-        .report-header {
-          background-color: #f8f9fa;
-          padding: 20px;
-          border-radius: 5px;
-          margin-bottom: 20px;
-          border: 1px solid #ddd;
-        }
-        .report-summary {
-          display: flex;
-          justify-content: space-between;
-          flex-wrap: wrap;
-        }
-        .summary-item {
-          background-color: #fff;
-          padding: 15px;
-          border-radius: 5px;
-          margin: 10px 0;
-          width: 22%;
-          box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .summary-item.total { border-left: 5px solid #6c757d; }
-        .summary-item.passed { border-left: 5px solid #28a745; }
-        .summary-item.failed { border-left: 5px solid #dc3545; }
-        .summary-item.skipped { border-left: 5px solid #ffc107; }
-        .summary-item h3 {
-          margin: 0;
-          font-size: 14px;
-          color: #6c757d;
-        }
-        .summary-item p {
-          font-size: 24px;
-          font-weight: bold;
-          margin: 10px 0 0 0;
-        }
-        .test-results {
-          margin-top: 30px;
-        }
-        table {
-          width: 100%;
-          border-collapse: collapse;
-        }
-        th, td {
-          padding: 12px 15px;
-          text-align: left;
-          border-bottom: 1px solid #ddd;
-        }
-        th {
-          background-color: #f8f9fa;
-          font-weight: bold;
-        }
-        tr:hover {
-          background-color: #f1f1f1;
-        }
-        .status {
-          padding: 5px 10px;
-          border-radius: 3px;
-          font-weight: bold;
-        }
-        .status.passed { background-color: #d4edda; color: #155724; }
-        .status.failed { background-color: #f8d7da; color: #721c24; }
-        .status.skipped { background-color: #fff3cd; color: #856404; }
-        .error-details {
-          color: #721c24;
-          background-color: #f8d7da;
-          padding: 10px;
-          border-radius: 3px;
-          margin-top: 5px;
-          display: none;
-        }
-        .toggle-error {
-          cursor: pointer;
-          color: blue;
-          text-decoration: underline;
-        }
-        .progress-bar {
-          height: 10px;
-          background-color: #e9ecef;
-          border-radius: 5px;
-          margin-top: 20px;
-          overflow: hidden;
-        }
-        .progress {
-          height: 100%;
-          background-color: #28a745;
-          border-radius: 5px;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="report-header">
-        <h1>API Test Automation Report</h1>
-        <p>Environment: ${environment}</p>
-        <p>Base URL: ${baseUrl}</p>
-        <p>Start Time: ${this.startTime.toLocaleString()}</p>
-        <p>End Time: ${this.endTime.toLocaleString()}</p>
-        <p>Total Duration: ${(totalDuration / 1000).toFixed(2)} seconds</p>
-        
-        <div class="progress-bar">
-          <div class="progress" style="width: ${(passedTests / totalTests) * 100}%"></div>
-        </div>
-      </div>
-      
-      <div class="report-summary">
-        <div class="summary-item total">
-          <h3>Total Tests</h3>
-          <p>${totalTests}</p>
-        </div>
-        <div class="summary-item passed">
-          <h3>Passed</h3>
-          <p>${passedTests}</p>
-        </div>
-        <div class="summary-item failed">
-          <h3>Failed</h3>
-          <p>${failedTests}</p>
-        </div>
-        <div class="summary-item skipped">
-          <h3>Skipped</h3>
-          <p>${skippedTests}</p>
-        </div>
-      </div>
-      
-      <div class="test-results">
-        <h2>Test Results</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Feature</th>
-              <th>Scenario</th>
-              <th>Status</th>
-              <th>Duration</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${this.testResults.map(test => `
-              <tr>
-                <td>${test.feature}</td>
-                <td>${test.scenario}</td>
-                <td><span class="status ${test.status}">${test.status.toUpperCase()}</span></td>
-                <td>${(test.duration / 1000).toFixed(2)}s</td>
-                <td>
-                  ${test.error ? `
-                    <span class="toggle-error" onclick="toggleError('${test.scenario.replace(/[^a-zA-Z0-9]/g, '')}')">Show/Hide Error</span>
-                    <div id="${test.scenario.replace(/[^a-zA-Z0-9]/g, '')}" class="error-details">${test.error}</div>
-                  ` : '-'}
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-      
-      <script>
-        function toggleError(id) {
-          const element = document.getElementById(id);
-          if (element.style.display === 'block') {
-            element.style.display = 'none';
-          } else {
-            element.style.display = 'block';
-          }
-        }
-      </script>
-    </body>
-    </html>
-    `;
-
-    await fs.writeFile(reportPath, reportHtml, 'utf8');
-    logger.info(`Report generated: ${reportPath}`);
-
-    // Also generate a JSON report
-    const jsonReportPath = path.join(reportDir, `report_${timestamp}.json`);
-    const jsonReport = {
-      summary: {
-        environment,
-        baseUrl,
-        startTime: this.startTime.toISOString(),
-        endTime: this.endTime.toISOString(),
-        totalDuration,
-        totalTests,
-        passedTests,
-        failedTests,
-        skippedTests
-      },
-      results: this.testResults
-    };
-
-    await fs.writeFile(jsonReportPath, JSON.stringify(jsonReport, null, 2), 'utf8');
-    logger.info(`JSON report generated: ${jsonReportPath}`);
-  }
-}
-
-export default ReportHelper.getInstance();
-
-// src/models/assetLayout.model.ts
-export interface AssetLayoutRequest {
-  messageId: number;
-  dealId: number;
-  reportDate: string;
-}
-
-export interface AssetLayout {
-  dealId: number;
-  entityId: number;
-  // Add other fields as needed
-  [key: string]: any; // This allows for additional fields
-}
-
-export interface AssetLayoutResponse {
-  assetLayouts: AssetLayout[];
-  systemError: string | null;
-  responseMessageId: string;
-  validationErrorMessage: string | null;
-  errorMessage: string | null;
-}
-
-// src/models/response.model.ts
-export interface ApiResponse<T> {
-  statusCode: number;
-  headers: Record<string, string>;
-  data: T;
-  ok: boolean;
-}
-
-// src/hooks/hooks.ts
-const { BeforeAll, AfterAll, Before, After, Status } = require('@cucumber/cucumber');
-const apiClient = require('../api/apiClient').default;
-const logger = require('../helpers/loggerHelper').default;
-const reportHelper = require('../helpers/reportHelper').default;
-const fs = require('fs-extra');
-const path = require('path');
 
 // Ensure reports directory exists
 const reportsDir = path.join(process.cwd(), 'reports');
@@ -882,8 +580,7 @@ AfterAll(async function() {
 
 Before(async function(scenario) {
   logger.info(`Starting scenario: ${scenario.pickle.name}`);
-  const world = this;
-  world.context = {
+  this.context = {
     scenarioName: scenario.pickle.name,
     scenarioId: scenario.pickle.id,
     startTime: new Date(),
@@ -892,8 +589,7 @@ Before(async function(scenario) {
 });
 
 After(async function(scenario) {
-  const world = this;
-  const duration = new Date().getTime() - world.context.startTime.getTime();
+  const duration = new Date().getTime() - this.context.startTime.getTime();
   
   logger.info(`Completed scenario: ${scenario.pickle.name} with status: ${scenario.result?.status}`);
   
@@ -911,138 +607,12 @@ After(async function(scenario) {
     error
   );
 });
+```
 
-// src/utils/commonUtils.ts
-import logger from '../helpers/loggerHelper';
+## Tests
 
-export class CommonUtils {
-  private static instance: CommonUtils;
-
-  private constructor() {}
-
-  public static getInstance(): CommonUtils {
-    if (!CommonUtils.instance) {
-      CommonUtils.instance = new CommonUtils();
-    }
-    return CommonUtils.instance;
-  }
-
-  public async sleep(ms: number): Promise<void> {
-    logger.debug(`Sleeping for ${ms} milliseconds`);
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  public generateRandomId(prefix: string = 'auto', length: number = 6): string {
-    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = prefix;
-    
-    for (let i = 0; i < length; i++) {
-      result += characters.charAt(Math.floor(Math.random() * characters.length));
-    }
-    
-    return result;
-  }
-
-  public formatDate(date: Date = new Date(), format: string = 'YYYY-MM-DD'): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    
-    return format
-      .replace('YYYY', year.toString())
-      .replace('MM', month)
-      .replace('DD', day);
-  }
-
-  public validateResponse(response: any, expectedStatus: number = 200): boolean {
-    if (!response) {
-      logger.error('Response is null or undefined');
-      return false;
-    }
-    
-    if (response.statusCode !== expectedStatus) {
-      logger.error(`Expected status ${expectedStatus}, but got ${response.statusCode}`);
-      return false;
-    }
-    
-    return true;
-  }
-}
-
-export default CommonUtils.getInstance();
-
-// src/utils/fileUtils.ts
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import logger from '../helpers/loggerHelper';
-
-export class FileUtils {
-  private static instance: FileUtils;
-
-  private constructor() {}
-
-  public static getInstance(): FileUtils {
-    if (!FileUtils.instance) {
-      FileUtils.instance = new FileUtils();
-    }
-    return FileUtils.instance;
-  }
-
-  public async readFile(filePath: string, encoding: BufferEncoding = 'utf8'): Promise<string> {
-    try {
-      const absolutePath = path.resolve(filePath);
-      logger.debug(`Reading file: ${absolutePath}`);
-      
-      if (!fs.existsSync(absolutePath)) {
-        throw new Error(`File not found: ${absolutePath}`);
-      }
-      
-      return fs.readFile(absolutePath, encoding);
-    } catch (error) {
-      logger.error(`Error reading file: ${error}`);
-      throw error;
-    }
-  }
-
-  public async writeFile(filePath: string, data: string, encoding: BufferEncoding = 'utf8'): Promise<void> {
-    try {
-      const absolutePath = path.resolve(filePath);
-      const dirPath = path.dirname(absolutePath);
-      
-      logger.debug(`Writing file: ${absolutePath}`);
-      await fs.ensureDir(dirPath);
-      
-      return fs.writeFile(absolutePath, data, encoding);
-    } catch (error) {
-      logger.error(`Error writing file: ${error}`);
-      throw error;
-    }
-  }
-
-  public async copyFile(source: string, destination: string): Promise<void> {
-    try {
-      const absoluteSource = path.resolve(source);
-      const absoluteDestination = path.resolve(destination);
-      
-      if (!fs.existsSync(absoluteSource)) {
-        throw new Error(`Source file not found: ${absoluteSource}`);
-      }
-      
-      const dirPath = path.dirname(absoluteDestination);
-      await fs.ensureDir(dirPath);
-      
-      logger.debug(`Copying file from ${absoluteSource} to ${absoluteDestination}`);
-      return fs.copy(absoluteSource, absoluteDestination);
-    } catch (error) {
-      logger.error(`Error copying file: ${error}`);
-      throw error;
-    }
-  }
-}
-
-export default FileUtils.getInstance();
-
-// tests/features/assetLayout.feature
+### 17. tests/features/assetLayout.feature
+```gherkin
 Feature: Asset Layout API Tests
   As a user
   I want to test the Asset Layout API
@@ -1071,12 +641,15 @@ Feature: Asset Layout API Tests
       | 1234      | 34384  | invalid-date|
     Then the response status code should be 400
     And the response should contain a validation error
+```
 
-// tests/step-definitions/assetLayoutSteps.ts
-const { Given, When, Then, DataTable } = require('@cucumber/cucumber');
-const { expect } = require('chai');
-const AssetLayoutService = require('../../src/api/services/assetLayoutService').default;
-const logger = require('../../src/helpers/loggerHelper').default;
+### 18. tests/step-definitions/assetLayoutSteps.ts
+```typescript
+import { Given, When, Then } from '@cucumber/cucumber';
+import { expect } from 'chai';
+import AssetLayoutService from '../../src/api/services/assetLayoutService';
+import { AssetLayoutRequest } from '../../src/models/assetLayout.model';
+import logger from '../../src/helpers/loggerHelper';
 
 Given('the API is available', async function() {
   // This step is a placeholder to verify the API is accessible
@@ -1093,7 +666,7 @@ When('I send a request to get asset layout with the following data:', async func
     }
 
     const row = rows[0];
-    const request = {
+    const request: AssetLayoutRequest = {
       messageId: parseInt(row.messageId),
       dealId: parseInt(row.dealId),
       reportDate: row.reportDate
@@ -1156,197 +729,13 @@ Then('the response should contain a validation error', function() {
   expect(response.assetLayouts).to.be.an('array');
   expect(response.assetLayouts.length).to.equal(0);
 });
+```
 
-// tests/testData/payloads/assetLayoutPayload.json
+### 19. tests/testData/payloads/assetLayoutPayload.json
+```json
 {
   "messageId": 1234,
   "dealId": 34384,
   "reportDate": "2024-03-31"
 }
-
-// README.md
-# Enterprise-Level API Test Automation Framework
-
-A comprehensive, plug-and-play test automation framework for API testing using Playwright, TypeScript, and Cucumber BDD.
-
-## Features
-
-- **Plug and Play**: Easily configurable for different APIs with minimal coding required
-- **BDD Approach**: Using Cucumber to write human-readable tests
-- **TypeScript Support**: Strong typing for better development experience
-- **Environment Management**: Support for different environments (SIT, UAT, PROD)
-- **Certificate Management**: Built-in support for PFX certificates
-- **Custom Reporting**: Attractive HTML reports with detailed test results
-- **Logging**: Comprehensive logging with different log levels
-- **Reusability**: Well-structured code for maximum reusability
-- **Error Handling**: Robust error handling mechanisms
-
-## Prerequisites
-
-- Node.js (v16 or higher)
-- npm (v8 or higher)
-
-## Getting Started
-
-### Installation
-
-1. Clone this repository
-2. Install dependencies:
-
-```bash
-npm install
 ```
-
-### Configuration
-
-1. Update environment variables in the `.env.*` files in the `config/environments` directory
-2. Place your certificate in the `certs` directory
-
-### Adding a New API Test
-
-1. Define your API model in the `src/models` directory
-2. Create a service class in the `src/api/services` directory
-3. Add the endpoint to `src/api/endpoints.ts`
-4. Write your Cucumber feature file in the `tests/features` directory
-5. Implement step definitions in the `tests/step-definitions` directory
-6. Add test data in the `tests/testData` directory
-
-### Running Tests
-
-```bash
-# Run tests in SIT environment
-npm run test:sit
-
-# Run tests in UAT environment
-npm run test:uat
-
-# Run tests in PROD environment
-npm run test:prod
-
-# Run tests in debug mode
-npm run test:debug
-```
-
-### Viewing Reports
-
-After running tests, HTML reports will be generated in the `reports/html` directory.
-
-## Project Structure
-
-```
-playwright-api-framework/
-├── config/                       # Configuration files
-├── certs/                        # Certificate files
-├── src/                          # Source code
-│   ├── api/                      # API related code
-│   ├── helpers/                  # Helper functions
-│   ├── models/                   # Data models
-│   ├── hooks/                    # Cucumber hooks
-│   └── utils/                    # Utility functions
-├── tests/                        # Test files
-│   ├── features/                 # Cucumber feature files
-│   ├── step-definitions/         # Step definitions
-│   └── testData/                 # Test data
-├── reports/                      # Test reports
-├── package.json                  # Project dependencies
-├── tsconfig.json                 # TypeScript configuration
-├── cucumber.js                   # Cucumber configuration
-└── playwright.config.ts          # Playwright configuration
-```
-
-## Extending the Framework
-
-### Adding a New API Service
-
-1. Create a new service class in `src/api/services/`:
-
-```typescript
-import apiClient from '../apiClient';
-import { Endpoints } from '../endpoints';
-import { YourRequestModel, YourResponseModel } from '../../models/your-models';
-import logger from '../../helpers/loggerHelper';
-import { ApiResponse } from '../../models/response.model';
-
-export class YourService {
-  private static instance: YourService;
-
-  private constructor() {}
-
-  public static getInstance(): YourService {
-    if (!YourService.instance) {
-      YourService.instance = new YourService();
-    }
-    return YourService.instance;
-  }
-
-  public async yourMethod(request: YourRequestModel): Promise<ApiResponse<YourResponseModel>> {
-    try {
-      const response = await apiClient.post(Endpoints.YOUR_ENDPOINT, request);
-      
-      const apiResponse: ApiResponse<YourResponseModel> = {
-        statusCode: response.status(),
-        headers: response.headers(),
-        data: await response.json() as YourResponseModel,
-        ok: response.ok()
-      };
-      
-      return apiResponse;
-    } catch (error) {
-      logger.error(`Error in your method: ${error}`);
-      throw error;
-    }
-  }
-}
-
-export default YourService.getInstance();
-```
-
-2. Add the endpoint in `src/api/endpoints.ts`:
-
-```typescript
-export const Endpoints = {
-  // Existing endpoints...
-  YOUR_ENDPOINT: '/path/to/your/endpoint',
-};
-```
-
-### Creating a New Feature and Step Definitions
-
-1. Create a new feature file in `tests/features/`:
-
-```gherkin
-Feature: Your Feature Name
-  Description of your feature
-
-  Background:
-    Given the API is available
-
-  Scenario: Your scenario name
-    When I perform some action with the following data:
-      | param1 | param2 |
-      | value1 | value2 |
-    Then I should see some result
-```
-
-2. Create step definitions in `tests/step-definitions/`:
-
-```typescript
-import { Given, When, Then, DataTable } from '@cucumber/cucumber';
-import { expect } from 'chai';
-import YourService from '../../src/api/services/yourService';
-import { YourRequestModel, YourResponseModel } from '../../src/models/your-models';
-import { ApiResponse } from '../../src/models/response.model';
-import logger from '../../src/helpers/loggerHelper';
-
-When('I perform some action with the following data:', async function(dataTable: DataTable) {
-  // Implementation
-});
-
-Then('I should see some result', function() {
-  // Implementation
-});
-```
-
-## Contributing
-
-Please follow the existing coding style and patterns when contributing to this framework.
