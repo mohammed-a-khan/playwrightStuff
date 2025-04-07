@@ -1538,3 +1538,591 @@ const response = await client.post('/secure-endpoint', data, {
 ## License
 
 This project is licensed under the ISC License.
+
+http-client.ts
+----------------------
+
+import * as http from 'http';
+import * as https from 'https';
+import { URL } from 'url';
+import { HttpMethod, RequestOptions, HttpResponse, RetryConfig } from './types';
+import { certManager } from '../utils/cert-manager';
+import { logger } from '../utils/logger';
+import { config } from '../utils/config';
+import { RetryHandler } from '../utils/retry';
+
+/**
+ * HTTP Client class
+ * Provides methods for making HTTP requests
+ */
+export class HttpClient {
+  private static instance: HttpClient;
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): HttpClient {
+    if (!HttpClient.instance) {
+      HttpClient.instance = new HttpClient();
+    }
+    return HttpClient.instance;
+  }
+
+  /**
+   * Make HTTP request
+   */
+  public async request<T = any>(options: RequestOptions): Promise<HttpResponse<T>> {
+    const { method, url, headers = {}, data, params, timeout, useCertificate = true } = options;
+    
+    // Apply default timeout if not specified
+    const requestTimeout = timeout || config.getNumber('REQUEST_TIMEOUT_MS', 30000);
+    
+    // Set retry configuration
+    const retryConfig: RetryConfig = options.retryConfig || {
+      attempts: config.getNumber('RETRY_ATTEMPTS', 3),
+      delayMs: config.getNumber('RETRY_DELAY_MS', 1000),
+      statusCodes: [408, 429, 500, 502, 503, 504],
+      useExponentialBackoff: true,
+      maxBackoffMs: 30000
+    };
+
+    // Execute request with retry
+    return RetryHandler.executeWithRetry(
+      () => this.executeRequest<T>(method, url, headers, data, params, requestTimeout, useCertificate),
+      retryConfig.attempts,
+      retryConfig.delayMs,
+      retryConfig.statusCodes,
+      retryConfig.useExponentialBackoff,
+      retryConfig.maxBackoffMs
+    );
+  }
+
+  /**
+   * Execute a single HTTP request
+   */
+  private async executeRequest<T = any>(
+    method: HttpMethod, 
+    url: string, 
+    headers: Record<string, string> = {}, 
+    data?: any,
+    params?: Record<string, string | number | boolean>,
+    timeout: number = 30000,
+    useCertificate: boolean = true
+  ): Promise<HttpResponse<T>> {
+    // Parse the URL
+    const parsedUrl = new URL(url);
+    
+    // Add query parameters if provided
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        parsedUrl.searchParams.append(key, String(value));
+      });
+    }
+    
+    // Determine whether to use HTTP or HTTPS
+    const isHttps = parsedUrl.protocol === 'https:';
+    const httpModule = isHttps ? https : http;
+    
+    // Set standard headers
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+      ...headers
+    };
+    
+    // Add Content-Type header for requests with body
+    if (data && !requestHeaders['Content-Type']) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+    
+    // Prepare request options
+    const requestOptions: http.RequestOptions = {
+      method,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? '443' : '80'),
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      headers: requestHeaders,
+      timeout
+    };
+    
+    // Add certificate options if using HTTPS and certificates are enabled
+    if (isHttps && useCertificate && certManager.hasCertificate()) {
+      const certOptions = certManager.getCertificateOptions();
+      if (certOptions) {
+        requestOptions.pfx = certOptions.pfx;
+        requestOptions.passphrase = certOptions.passphrase;
+      }
+    }
+    
+    // Log the request
+    logger.logRequest(method, parsedUrl.toString(), requestHeaders, data);
+    
+    // Execute the request
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      
+      // Safety timeout to prevent hanging
+      const safetyTimeoutId = global.setTimeout(() => {
+        logger.error('Global safety timeout', { url: parsedUrl.toString(), timeout: timeout * 2 });
+        req.destroy(new Error(`Global timeout after ${timeout * 2}ms`));
+      }, timeout * 2);
+      
+      // Create request
+      const req = httpModule.request(requestOptions, (res) => {
+        const responseChunks: Buffer[] = [];
+        
+        // Set reasonable timeout for receiving data
+        res.setTimeout(timeout, () => {
+          logger.error('Response timeout', { url: parsedUrl.toString() });
+          req.destroy(new Error(`Response timeout after ${timeout}ms`));
+        });
+        
+        // Collect response data
+        res.on('data', (chunk) => {
+          responseChunks.push(Buffer.from(chunk));
+        });
+        
+        // Process response when complete
+        res.on('end', () => {
+          // Clear safety timeout
+          global.clearTimeout(safetyTimeoutId);
+          
+          const requestTime = Date.now() - startTime;
+          const responseBody = Buffer.concat(responseChunks).toString('utf8');
+          
+          // Parse response data based on content type
+          let parsedData: any;
+          try {
+            const contentType = res.headers['content-type'] || '';
+            if (contentType.includes('application/json')) {
+              parsedData = responseBody ? JSON.parse(responseBody) : null;
+            } else {
+              parsedData = responseBody;
+            }
+          } catch (error) {
+            logger.warn('Failed to parse response as JSON', { error });
+            parsedData = responseBody;
+          }
+          
+          // Create response object
+          const response: HttpResponse<T> = {
+            status: res.statusCode || 0,
+            statusText: res.statusMessage || '',
+            data: parsedData,
+            headers: res.headers as Record<string, string>,
+            requestTime,
+            url: parsedUrl.toString(),
+            method
+          };
+          
+          // Log the response
+          logger.logResponse(response.status, parsedUrl.toString(), response.data, requestTime);
+          
+          // Resolve or reject based on status code
+          if (response.status >= 200 && response.status < 300) {
+            resolve(response);
+          } else {
+            const error = new Error(`Request failed with status ${response.status}: ${response.statusText}`);
+            (error as any).response = response;
+            (error as any).status = response.status;
+            reject(error);
+          }
+        });
+      });
+      
+      // Handle request errors
+      req.on('error', (error) => {
+        // Clear safety timeout
+        global.clearTimeout(safetyTimeoutId);
+        
+        logger.error('Request error', { error, url: parsedUrl.toString() });
+        reject(error);
+      });
+      
+      // Handle timeout
+      req.on('timeout', () => {
+        // Clear safety timeout
+        global.clearTimeout(safetyTimeoutId);
+        
+        logger.error('Request timeout', { url: parsedUrl.toString(), timeout });
+        req.destroy(new Error(`Request timeout after ${timeout}ms`));
+      });
+      
+      // Send request body for methods that support it
+      if (data && ['POST', 'PUT', 'PATCH'].includes(method)) {
+        const requestData = typeof data === 'string' ? data : JSON.stringify(data);
+        req.write(requestData);
+      }
+      
+      // End the request
+      req.end();
+    });
+  }
+
+  /**
+   * GET request method
+   */
+  public async get<T = any>(url: string, params?: Record<string, string | number | boolean>, options: Omit<RequestOptions, 'method' | 'url' | 'params'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'GET', 
+      url, 
+      params, 
+      ...options 
+    });
+  }
+
+  /**
+   * POST request method
+   */
+  public async post<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'POST', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+
+  /**
+   * PUT request method
+   */
+  public async put<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PUT', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+
+  /**
+   * DELETE request method
+   */
+  public async delete<T = any>(url: string, options: Omit<RequestOptions, 'method' | 'url'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'DELETE', 
+      url, 
+      ...options 
+    });
+  }
+
+  /**
+   * PATCH request method
+   */
+  public async patch<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PATCH', 
+      url, 
+      data, 
+      ...options 
+    });
+  }
+}
+
+// Export singleton instance
+export const httpClient = HttpClient.getInstance();
+
+retry.ts
+------------
+import { logger } from './logger';
+
+/**
+ * Retry Handler for API requests
+ */
+export class RetryHandler {
+  /**
+   * Execute a function with retry logic
+   * @param fn - Function to execute
+   * @param attempts - Maximum number of retry attempts
+   * @param delayMs - Base delay between retries in milliseconds
+   * @param statusCodes - HTTP status codes that should trigger a retry
+   * @param useExponentialBackoff - Whether to use exponential backoff
+   * @param maxBackoffMs - Maximum backoff time in milliseconds
+   */
+  public static async executeWithRetry<T>(
+    fn: () => Promise<T>,
+    attempts: number = 3,
+    delayMs: number = 1000,
+    statusCodes: number[] = [408, 429, 500, 502, 503, 504],
+    useExponentialBackoff: boolean = true,
+    maxBackoffMs: number = 30000
+  ): Promise<T> {
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= attempts + 1; attempt++) {
+      try {
+        // Execute the function
+        const result = await fn();
+        
+        // If this is a retry attempt, log success
+        if (attempt > 1) {
+          logger.info(`Request succeeded after ${attempt - 1} ${attempt === 2 ? 'retry' : 'retries'}`);
+        }
+        
+        return result;
+      } catch (error: any) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // Check if we've reached the maximum number of retries
+        if (attempt > attempts) {
+          logger.error(`Request failed after ${attempts} retries`, { error: lastError });
+          throw lastError;
+        }
+        
+        // Extract status code if available
+        let statusCode: number | undefined;
+        if (error.status) {
+          statusCode = error.status;
+        } else if (error.statusCode) {
+          statusCode = error.statusCode;
+        } else if (error.response?.status) {
+          statusCode = error.response.status;
+        }
+        
+        // Check if the error is a network error
+        const isNetworkError = 
+          !statusCode && 
+          (error.code === 'ECONNABORTED' || 
+           error.code === 'ETIMEDOUT' || 
+           error.code === 'ECONNREFUSED' ||
+           error.code === 'ENOTFOUND' ||
+           error.message?.includes('timeout'));
+        
+        // Determine if we should retry
+        const shouldRetry = isNetworkError || (statusCode && statusCodes.includes(statusCode));
+        
+        if (!shouldRetry) {
+          logger.error(`Request failed with status ${statusCode || 'unknown'}, not retrying`, { error: lastError });
+          throw lastError;
+        }
+        
+        // Calculate delay with exponential backoff if enabled
+        let currentDelay = delayMs;
+        if (useExponentialBackoff) {
+          currentDelay = Math.min(
+            delayMs * Math.pow(2, attempt - 1), 
+            maxBackoffMs
+          );
+        }
+        
+        logger.warn(`Request attempt ${attempt} failed, retrying in ${currentDelay}ms`, {
+          statusCode,
+          error: lastError.message
+        });
+        
+        // Wait before retrying
+        await RetryHandler.delay(currentDelay);
+      }
+    }
+    
+    throw lastError || new Error('Unknown error during retry');
+  }
+
+  /**
+   * Simple delay function
+   */
+  private static async delay(ms: number): Promise<void> {
+    return new Promise(resolve => {
+      const timeout = global.setTimeout(resolve, ms);
+      // Ensure the timeout doesn't keep the Node.js process alive
+      if (timeout.unref) {
+        timeout.unref();
+      }
+    });
+  }
+}
+
+base-client.ts
+------------------
+import { httpClient } from '../framework/http/http-client';
+import { HttpResponse, RequestOptions } from '../framework/http/types';
+import { config } from '../framework/utils/config';
+import { logger } from '../framework/utils/logger';
+
+/**
+ * Base API Client class
+ * All specific API clients should extend this class
+ */
+export abstract class BaseApiClient {
+  protected baseUrl: string;
+  protected defaultHeaders: Record<string, string>;
+
+  /**
+   * Create a new API client
+   * @param baseUrl - Base URL for API calls (optional, uses API_BASE_URL from config if not provided)
+   */
+  constructor(baseUrl?: string) {
+    this.baseUrl = baseUrl || config.get('API_BASE_URL');
+    this.defaultHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+  }
+
+  /**
+   * Set base URL
+   */
+  public setBaseUrl(url: string): void {
+    this.baseUrl = url;
+  }
+
+  /**
+   * Get base URL
+   */
+  public getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  /**
+   * Set default headers
+   */
+  public setDefaultHeaders(headers: Record<string, string>): void {
+    this.defaultHeaders = {
+      ...this.defaultHeaders,
+      ...headers
+    };
+  }
+
+  /**
+   * Add a default header
+   */
+  public addDefaultHeader(name: string, value: string): void {
+    this.defaultHeaders[name] = value;
+  }
+
+  /**
+   * Get default headers
+   */
+  public getDefaultHeaders(): Record<string, string> {
+    return this.defaultHeaders;
+  }
+
+  /**
+   * Resolve URL by appending endpoint to base URL
+   */
+  protected resolveUrl(endpoint: string): string {
+    // Ensure there's exactly one slash between baseUrl and endpoint
+    const baseWithSlash = this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`;
+    const endpointWithoutSlash = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+    
+    return `${baseWithSlash}${endpointWithoutSlash}`;
+  }
+
+  /**
+   * Make a GET request
+   */
+  protected async get<T = any>(endpoint: string, params?: Record<string, string | number | boolean>, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.get<T>(url, params, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
+  }
+
+  /**
+   * Make a POST request
+   */
+  protected async post<T = any>(endpoint: string, data?: any, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.post<T>(url, data, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
+  }
+
+  /**
+   * Make a PUT request
+   */
+  protected async put<T = any>(endpoint: string, data?: any, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.put<T>(url, data, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
+  }
+
+  /**
+   * Make a DELETE request
+   */
+  protected async delete<T = any>(endpoint: string, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.delete<T>(url, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
+  }
+
+  /**
+   * Make a PATCH request
+   */
+  protected async patch<T = any>(endpoint: string, data?: any, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.patch<T>(url, data, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
+  }
+
+  /**
+   * Wait for a condition to be met with polling
+   */
+  protected async pollUntil<T = any>(
+    endpoint: string,
+    condition: (response: HttpResponse<T>) => boolean,
+    options: {
+      interval?: number;
+      timeout?: number;
+      maxAttempts?: number;
+      params?: Record<string, string | number | boolean>;
+      requestOptions?: Partial<RequestOptions>;
+    } = {}
+  ): Promise<HttpResponse<T>> {
+    const {
+      interval = 2000,
+      timeout = 60000,
+      maxAttempts = 30,
+      params = {},
+      requestOptions = {}
+    } = options;
+    
+    const startTime = Date.now();
+    let attempts = 0;
+    
+    logger.info(`Starting polling for endpoint: ${endpoint}`);
+    
+    while (true) {
+      attempts++;
+      try {
+        const response = await this.get<T>(endpoint, params, requestOptions);
+        
+        if (condition(response)) {
+          logger.info(`Polling condition met after ${attempts} attempts (${Date.now() - startTime}ms)`);
+          return response;
+        }
+        
+        logger.debug(`Polling attempt ${attempts}: condition not met yet`);
+      } catch (error) {
+        logger.warn(`Polling attempt ${attempts} failed with error`, { error });
+      }
+      
+      // Check if we've reached the maximum number of attempts
+      if (maxAttempts && attempts >= maxAttempts) {
+        throw new Error(`Polling reached maximum attempts (${maxAttempts})`);
+      }
+      
+      // Check if we've reached the timeout
+      if (Date.now() - startTime >= timeout) {
+        throw new Error(`Polling timed out after ${timeout}ms`);
+      }
+      
+      // Wait before the next attempt
+      await new Promise(resolve => {
+        const timeoutId = global.setTimeout(resolve, interval);
+        if (timeoutId.unref) {
+          timeoutId.unref();
+        }
+      });
+    }
+  }
+}
