@@ -1080,6 +1080,103 @@ export abstract class BaseApiClient {
   }
 }
 
+asset-client.ts
+---------------
+import { BaseApiClient } from './base-client';
+import { HttpResponse } from '../framework/http/types';
+import { logger } from '../framework/utils/logger';
+
+/**
+ * Asset API response interface
+ */
+export interface AssetLayoutResponse {
+  status: string;
+  data: any;
+  messageId: number;
+}
+
+/**
+ * Asset API request interface
+ */
+export interface AssetLayoutRequest {
+  messageId: number;
+  dealId: number;
+  reportDate: string;
+}
+
+/**
+ * Asset API Client
+ * Handles API calls to the Asset endpoints
+ */
+export class AssetApiClient extends BaseApiClient {
+  /**
+   * Create a new Asset API client
+   * @param baseUrl - Base URL for API calls (optional)
+   */
+  constructor(baseUrl?: string) {
+    super(baseUrl);
+    logger.info('Asset API client initialized');
+  }
+
+  /**
+   * Get asset layout
+   * @param request - Asset layout request
+   */
+  public async getAssetLayout(request: AssetLayoutRequest): Promise<HttpResponse<AssetLayoutResponse>> {
+    logger.info('Requesting asset layout', { request });
+    
+    return this.post<AssetLayoutResponse>('/assets/assetlayout', request);
+  }
+
+  /**
+   * Get asset layout and wait for completion
+   * Use this when the operation might take time to complete
+   * @param request - Asset layout request
+   */
+  public async getAssetLayoutWithPolling(request: AssetLayoutRequest): Promise<HttpResponse<AssetLayoutResponse>> {
+    logger.info('Requesting asset layout with polling', { request });
+    
+    // First, submit the request
+    const initialResponse = await this.post<AssetLayoutResponse>('/assets/assetlayout', request);
+    
+    // If the result is already available, return it
+    if (initialResponse.data.status === 'COMPLETED') {
+      return initialResponse;
+    }
+    
+    // Otherwise, poll until completion
+    return this.pollUntil<AssetLayoutResponse>(
+      `/assets/assetlayout/status/${request.messageId}`,
+      (response) => response.data.status === 'COMPLETED',
+      {
+        interval: 5000,   // Check every 5 seconds
+        timeout: 300000,  // Timeout after 5 minutes
+        maxAttempts: 60
+      }
+    );
+  }
+
+  /**
+   * Get asset by ID
+   * @param assetId - Asset ID
+   */
+  public async getAssetById(assetId: string): Promise<HttpResponse<any>> {
+    logger.info(`Requesting asset by ID: ${assetId}`);
+    
+    return this.get<any>(`/assets/${assetId}`);
+  }
+
+  /**
+   * Search assets
+   * @param params - Search parameters
+   */
+  public async searchAssets(params: Record<string, string | number | boolean>): Promise<HttpResponse<any>> {
+    logger.info('Searching assets', { params });
+    
+    return this.get<any>('/assets/search', params);
+  }
+}
+
 src/framework/utils/setup-tests.ts
 -------------------------------------
 /**
