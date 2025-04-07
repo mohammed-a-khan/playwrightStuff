@@ -1,37 +1,707 @@
-native-request-executor.ts
-------------------------------
+package.json
+------------
+{
+  "name": "api-test-framework",
+  "version": "1.0.0",
+  "description": "Simple plug-and-play API testing framework",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "jest",
+    "test:dev": "cross-env NODE_ENV=dev jest",
+    "test:sit": "cross-env NODE_ENV=sit jest",
+    "test:prod": "cross-env NODE_ENV=prod jest",
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "debug": "node --inspect-brk -r ts-node/register src/index.ts"
+  },
+  "keywords": [
+    "api",
+    "testing",
+    "framework"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.5",
+    "@types/node": "^20.9.1",
+    "cross-env": "^7.0.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/*.test.ts"
+    ],
+    "setupFiles": [
+      "<rootDir>/src/framework/utils/setup-tests.ts"
+    ]
+  }
+}
+
+tsconfig.json
+----------------
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "sourceMap": true,
+    "declaration": true,
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "*": ["node_modules/*"]
+    },
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}
+
+// .env - Default environment configuration
+API_BASE_URL=https://katapi-dev.k8s.americas.ishare.net/v1
+CERTIFICATE_PATH=./certs/kpfxPROD.pfx
+CERTIFICATE_PASSPHRASE=khan#123!
+REQUEST_TIMEOUT_MS=30000
+RETRY_ATTEMPTS=3
+RETRY_DELAY_MS=1000
+LOG_LEVEL=info
+
+.env.sit
+-------------
+API_BASE_URL=https://katapi-sit.k8s.americas.ishare.net/v1
+CERTIFICATE_PATH=./certs/kpfxPROD.pfx
+CERTIFICATE_PASSPHRASE=khan#123!
+REQUEST_TIMEOUT_MS=30000
+RETRY_ATTEMPTS=3
+RETRY_DELAY_MS=1000
+LOG_LEVEL=info
+
+.env.prod
+----------
+API_BASE_URL=https://katapi.k8s.americas.ishare.net/v1
+CERTIFICATE_PATH=./certs/kpfxPROD.pfx
+CERTIFICATE_PASSPHRASE=khan#123!
+REQUEST_TIMEOUT_MS=30000
+RETRY_ATTEMPTS=3
+RETRY_DELAY_MS=1000
+LOG_LEVEL=info
+
+src/framework/http/types.ts
+--------------------------------
+/**
+ * HTTP method types
+ */
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+
+/**
+ * Request options interface
+ */
+export interface RequestOptions {
+  method: HttpMethod;
+  url: string;
+  headers?: Record<string, string>;
+  data?: any;
+  params?: Record<string, string | number | boolean>;
+  timeout?: number;
+  useCertificate?: boolean;
+  retryConfig?: RetryConfig;
+}
+
+/**
+ * Retry configuration interface
+ */
+export interface RetryConfig {
+  attempts: number;
+  delayMs: number;
+  statusCodes?: number[];
+  useExponentialBackoff?: boolean;
+  maxBackoffMs?: number;
+}
+
+/**
+ * HTTP response interface
+ */
+export interface HttpResponse<T = any> {
+  status: number;
+  statusText: string;
+  data: T;
+  headers: Record<string, string>;
+  requestTime: number;
+  url: string;
+  method: HttpMethod;
+}
+
+src/framework/utils/config.ts
+----------------------------------
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+import * as fs from 'fs';
+
+/**
+ * Configuration manager class
+ * Loads environment variables from .env files
+ */
+export class ConfigManager {
+  private static instance: ConfigManager;
+  private initialized = false;
+  private env: Record<string, string> = {};
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): ConfigManager {
+    if (!ConfigManager.instance) {
+      ConfigManager.instance = new ConfigManager();
+    }
+    return ConfigManager.instance;
+  }
+
+  /**
+   * Initialize configuration
+   */
+  public initialize(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    // Load default .env file
+    this.loadEnvFile('.env');
+
+    // Load environment-specific .env file
+    const nodeEnv = process.env.NODE_ENV || 'dev';
+    this.loadEnvFile(`.env.${nodeEnv}`);
+
+    this.initialized = true;
+    console.log(`Configuration initialized for environment: ${nodeEnv}`);
+  }
+
+  /**
+   * Load environment variables from file
+   */
+  private loadEnvFile(filename: string): void {
+    const envPath = path.resolve(process.cwd(), 'config', filename);
+
+    try {
+      if (fs.existsSync(envPath)) {
+        const result = dotenv.config({ path: envPath });
+        
+        if (result.error) {
+          console.error(`Error loading ${filename}: ${result.error.message}`);
+        } else {
+          Object.assign(this.env, result.parsed);
+          console.log(`Loaded configuration from ${filename}`);
+        }
+      } else {
+        console.warn(`Configuration file not found: ${envPath}`);
+      }
+    } catch (error) {
+      console.error(`Error processing ${filename}: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Get environment variable
+   */
+  public get(key: string, defaultValue?: string): string {
+    if (!this.initialized) {
+      this.initialize();
+    }
+
+    const value = process.env[key] || this.env[key];
+    if (value === undefined) {
+      if (defaultValue !== undefined) {
+        return defaultValue;
+      }
+      throw new Error(`Configuration key not found: ${key}`);
+    }
+    return value;
+  }
+
+  /**
+   * Get environment variable as number
+   */
+  public getNumber(key: string, defaultValue?: number): number {
+    const value = this.get(key, defaultValue?.toString());
+    const num = Number(value);
+    
+    if (isNaN(num)) {
+      throw new Error(`Invalid number format for key ${key}: ${value}`);
+    }
+    
+    return num;
+  }
+
+  /**
+   * Get environment variable as boolean
+   */
+  public getBoolean(key: string, defaultValue?: boolean): boolean {
+    const value = this.get(key, defaultValue?.toString());
+    return value.toLowerCase() === 'true';
+  }
+}
+
+// Export singleton instance
+export const config = ConfigManager.getInstance();
+
+src/framework/utils/logger.ts
+---------------------------------
+import * as winston from 'winston';
+import * as path from 'path';
+import * as fs from 'fs';
+import { config } from './config';
+
+// Create logs directory if it doesn't exist
+const logsDir = path.join(process.cwd(), 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+// Define log file paths
+const logFilePath = path.join(logsDir, 'api-test.log');
+const errorLogFilePath = path.join(logsDir, 'error.log');
+
+// Custom format for logs
+const customFormat = winston.format.combine(
+  winston.format.timestamp({
+    format: 'YYYY-MM-DD HH:mm:ss'
+  }),
+  winston.format.errors({ stack: true }),
+  winston.format.printf(({ level, message, timestamp, ...meta }) => {
+    let output = `${timestamp} [${level.toUpperCase()}]: ${message}`;
+    
+    if (Object.keys(meta).length > 0) {
+      // Handle error objects specially
+      if (meta.error) {
+        if (meta.error instanceof Error) {
+          output += ` - ${meta.error.message}`;
+          if (meta.error.stack) {
+            output += `\n${meta.error.stack}`;
+          }
+        } else {
+          output += ` - ${JSON.stringify(meta.error)}`;
+        }
+        delete meta.error;
+      }
+      
+      // Add remaining metadata
+      if (Object.keys(meta).length > 0) {
+        output += ` ${JSON.stringify(meta)}`;
+      }
+    }
+    
+    return output;
+  })
+);
+
+/**
+ * Logger class
+ */
+export class Logger {
+  private static instance: Logger;
+  private logger: winston.Logger;
+
+  private constructor() {
+    // Initialize the logger
+    this.logger = winston.createLogger({
+      level: config.get('LOG_LEVEL', 'info'),
+      format: customFormat,
+      transports: [
+        // Write all errors to the error log
+        new winston.transports.File({ 
+          filename: errorLogFilePath, 
+          level: 'error' 
+        }),
+        
+        // Write all logs to the combined log file
+        new winston.transports.File({ 
+          filename: logFilePath 
+        }),
+        
+        // Write to console
+        new winston.transports.Console({
+          format: winston.format.combine(
+            winston.format.colorize(),
+            customFormat
+          )
+        })
+      ]
+    });
+  }
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): Logger {
+    if (!Logger.instance) {
+      Logger.instance = new Logger();
+    }
+    return Logger.instance;
+  }
+
+  /**
+   * Log at debug level
+   */
+  public debug(message: string, meta?: Record<string, any>): void {
+    this.logger.debug(message, meta);
+  }
+
+  /**
+   * Log at info level
+   */
+  public info(message: string, meta?: Record<string, any>): void {
+    this.logger.info(message, meta);
+  }
+
+  /**
+   * Log at warning level
+   */
+  public warn(message: string, meta?: Record<string, any>): void {
+    this.logger.warn(message, meta);
+  }
+
+  /**
+   * Log at error level
+   */
+  public error(message: string, meta?: Record<string, any>): void {
+    this.logger.error(message, meta);
+  }
+
+  /**
+   * Log HTTP request
+   */
+  public logRequest(method: string, url: string, headers?: Record<string, string>, data?: any): void {
+    this.debug(`HTTP Request: ${method} ${url}`, {
+      headers,
+      body: data
+    });
+  }
+
+  /**
+   * Log HTTP response
+   */
+  public logResponse(status: number, url: string, data?: any, time?: number): void {
+    this.debug(`HTTP Response: ${status} from ${url} (${time}ms)`, {
+      body: data
+    });
+  }
+}
+
+// Export singleton instance
+export const logger = Logger.getInstance();
+
+src/framework/utils/cert-manager.ts
+-------------------------------------
+import * as fs from 'fs';
+import * as path from 'path';
+import { config } from './config';
+import { logger } from './logger';
+
+/**
+ * Certificate Manager class
+ * Handles loading and providing PFX certificates
+ */
+export class CertificateManager {
+  private static instance: CertificateManager;
+  private certificateBuffer: Buffer | null = null;
+  private passphrase: string = '';
+  private initialized = false;
+
+  private constructor() {}
+
+  /**
+   * Get singleton instance
+   */
+  public static getInstance(): CertificateManager {
+    if (!CertificateManager.instance) {
+      CertificateManager.instance = new CertificateManager();
+    }
+    return CertificateManager.instance;
+  }
+
+  /**
+   * Initialize certificate manager
+   */
+  public initialize(): void {
+    if (this.initialized) {
+      return;
+    }
+
+    try {
+      const certPath = path.resolve(process.cwd(), config.get('CERTIFICATE_PATH'));
+      this.passphrase = config.get('CERTIFICATE_PASSPHRASE');
+
+      if (!fs.existsSync(certPath)) {
+        logger.warn(`Certificate file not found: ${certPath}`);
+        this.initialized = true;
+        return;
+      }
+
+      this.certificateBuffer = fs.readFileSync(certPath);
+      logger.info(`Certificate loaded successfully from: ${certPath}`);
+      this.initialized = true;
+    } catch (error) {
+      logger.error('Failed to initialize certificate manager', { error });
+      throw new Error(`Certificate initialization failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Check if a certificate is available
+   */
+  public hasCertificate(): boolean {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    return this.certificateBuffer !== null;
+  }
+
+  /**
+   * Get certificate buffer
+   */
+  public getCertificateBuffer(): Buffer | null {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    return this.certificateBuffer;
+  }
+
+  /**
+   * Get certificate passphrase
+   */
+  public getPassphrase(): string {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    return this.passphrase;
+  }
+
+  /**
+   * Get certificate options for HTTPS requests
+   */
+  public getCertificateOptions(): { pfx: Buffer, passphrase: string } | null {
+    if (!this.initialized) {
+      this.initialize();
+    }
+
+    if (!this.certificateBuffer) {
+      return null;
+    }
+
+    return {
+      pfx: this.certificateBuffer,
+      passphrase: this.passphrase
+    };
+  }
+}
+
+// Export singleton instance
+export const certManager = CertificateManager.getInstance();
+
+src/framework/utils/retry.ts
+----------------------------
+import { logger } from './logger';
+
+/**
+ * Retry Handler for API requests
+ */
+export class RetryHandler {
+  /**
+   * Execute a function with retry logic
+   * @param fn - Function to execute
+   * @param attempts - Maximum number of retry attempts
+   * @param delayMs - Base delay between retries in milliseconds
+   * @param statusCodes - HTTP status codes that should trigger a retry
+   * @param useExponentialBackoff - Whether to use exponential backoff
+   * @param maxBackoffMs - Maximum backoff time in milliseconds
+   */
+  public static async executeWithRetry<T>(
+    fn: () => Promise<T>,
+    attempts: number = 3,
+    delayMs: number = 1000,
+    statusCodes: number[] = [408, 429, 500, 502, 503, 504],
+    useExponentialBackoff: boolean = true,
+    maxBackoffMs: number = 30000
+  ): Promise<T> {
+    let lastError: Error | null = null;
+    
+    for (let attempt = 1; attempt <= attempts + 1; attempt++) {
+      try {
+        // Execute the function
+        const result = await fn();
+        
+        // If this is a retry attempt, log success
+        if (attempt > 1) {
+          logger.info(`Request succeeded after ${attempt - 1} ${attempt === 2 ? 'retry' : 'retries'}`);
+        }
+        
+        return result;
+      } catch (error: any) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // Check if we've reached the maximum number of retries
+        if (attempt > attempts) {
+          logger.error(`Request failed after ${attempts} retries`, { error: lastError });
+          throw lastError;
+        }
+        
+        // Extract status code if available
+        let statusCode: number | undefined;
+        if (error.status) {
+          statusCode = error.status;
+        } else if (error.statusCode) {
+          statusCode = error.statusCode;
+        } else if (error.response?.status) {
+          statusCode = error.response.status;
+        }
+        
+        // Check if the error is a network error
+        const isNetworkError = 
+          !statusCode && 
+          (error.code === 'ECONNABORTED' || 
+           error.code === 'ETIMEDOUT' || 
+           error.code === 'ECONNREFUSED' ||
+           error.code === 'ENOTFOUND' ||
+           error.message?.includes('timeout'));
+        
+        // Determine if we should retry
+        const shouldRetry = isNetworkError || (statusCode && statusCodes.includes(statusCode));
+        
+        if (!shouldRetry) {
+          logger.error(`Request failed with status ${statusCode || 'unknown'}, not retrying`, { error: lastError });
+          throw lastError;
+        }
+        
+        // Calculate delay with exponential backoff if enabled
+        let currentDelay = delayMs;
+        if (useExponentialBackoff) {
+          currentDelay = Math.min(
+            delayMs * Math.pow(2, attempt - 1), 
+            maxBackoffMs
+          );
+        }
+        
+        logger.warn(`Request attempt ${attempt} failed, retrying in ${currentDelay}ms`, {
+          statusCode,
+          error: lastError.message
+        });
+        
+        // Wait before retrying
+        await RetryHandler.delay(currentDelay);
+      }
+    }
+    
+    throw lastError || new Error('Unknown error during retry');
+  }
+
+  /**
+   * Simple delay function
+   */
+  private static async delay(ms: number): Promise<void> {
+    return new Promise(resolve => {
+      const timeout = setTimeout(resolve, ms);
+      // Ensure the timeout doesn't keep the Node.js process alive
+      if (timeout.unref) {
+        timeout.unref();
+      }
+    });
+  }
+}
+
+src/framework/http/http-client.ts
+--------------------------------------
 import * as http from 'http';
 import * as https from 'https';
 import { URL } from 'url';
-import { RequestConfig, ApiResponse } from './types';
-import { RetryHandler } from './retry-handler';
-import { certificate } from '../utils/certificate-manager';
-import { proxy } from '../utils/proxy-manager';
+import { HttpMethod, RequestOptions, HttpResponse, RetryConfig } from './types';
+import { certManager } from '../utils/cert-manager';
 import { logger } from '../utils/logger';
-import { EventEmitter } from 'events';
-import { ErrorHandler, ApiError, ErrorType } from '../utils/error-handler';
+import { config } from '../utils/config';
+import { RetryHandler } from '../utils/retry';
 
 /**
- * Native HTTP Request Executor
- * Uses Node.js native HTTP/HTTPS modules instead of Axios
+ * HTTP Client class
+ * Provides methods for making HTTP requests
  */
-export class NativeRequestExecutor {
+export class HttpClient {
+  private static instance: HttpClient;
+
+  private constructor() {}
+
   /**
-   * Execute an API request using native Node.js HTTP/HTTPS modules
-   * @param config - Request configuration
+   * Get singleton instance
    */
-  public static async executeRequest<T = any>(config: RequestConfig): Promise<ApiResponse<T>> {
-    // Increase max event listeners to avoid memory leak warnings
-    EventEmitter.defaultMaxListeners = Math.max(EventEmitter.defaultMaxListeners, 50);
+  public static getInstance(): HttpClient {
+    if (!HttpClient.instance) {
+      HttpClient.instance = new HttpClient();
+    }
+    return HttpClient.instance;
+  }
+
+  /**
+   * Make HTTP request
+   */
+  public async request<T = any>(options: RequestOptions): Promise<HttpResponse<T>> {
+    const { method, url, headers = {}, data, params, timeout, useCertificate = true } = options;
     
-    // Construct full URL
-    const url = `${config.baseUrl}${config.endpoint}`;
+    // Apply default timeout if not specified
+    const requestTimeout = timeout || config.getNumber('REQUEST_TIMEOUT_MS', 30000);
+    
+    // Set retry configuration
+    const retryConfig: RetryConfig = options.retryConfig || {
+      attempts: config.getNumber('RETRY_ATTEMPTS', 3),
+      delayMs: config.getNumber('RETRY_DELAY_MS', 1000),
+      statusCodes: [408, 429, 500, 502, 503, 504],
+      useExponentialBackoff: true,
+      maxBackoffMs: 30000
+    };
+
+    // Execute request with retry
+    return RetryHandler.executeWithRetry(
+      () => this.executeRequest<T>(method, url, headers, data, params, requestTimeout, useCertificate),
+      retryConfig.attempts,
+      retryConfig.delayMs,
+      retryConfig.statusCodes,
+      retryConfig.useExponentialBackoff,
+      retryConfig.maxBackoffMs
+    );
+  }
+
+  /**
+   * Execute a single HTTP request
+   */
+  private async executeRequest<T = any>(
+    method: HttpMethod, 
+    url: string, 
+    headers: Record<string, string> = {}, 
+    data?: any,
+    params?: Record<string, string | number | boolean>,
+    timeout: number = 30000,
+    useCertificate: boolean = true
+  ): Promise<HttpResponse<T>> {
+    // Parse the URL
     const parsedUrl = new URL(url);
     
     // Add query parameters if provided
-    if (config.params) {
-      Object.entries(config.params).forEach(([key, value]) => {
-        parsedUrl.searchParams.append(key, value);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        parsedUrl.searchParams.append(key, String(value));
       });
     }
     
@@ -39,2122 +709,204 @@ export class NativeRequestExecutor {
     const isHttps = parsedUrl.protocol === 'https:';
     const httpModule = isHttps ? https : http;
     
-    // Prepare request options
-    const requestOptions: https.RequestOptions = {
-      method: config.method,
-      headers: {
-        ...config.headers,
-        'Content-Type': config.headers?.['Content-Type'] || 'application/json',
-        'Accept': config.headers?.['Accept'] || 'application/json'
-      },
-      timeout: config.timeout || 30000,
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (isHttps ? 443 : 80),
-      path: `${parsedUrl.pathname}${parsedUrl.search}`
+    // Set standard headers
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+      ...headers
     };
     
-    // Add certificate if configured and available
-    if (isHttps && config.useCertificate && certificate.hasCertificate()) {
-      const certOptions = certificate.getCertificateOptions();
+    // Add Content-Type header for requests with body
+    if (data && !requestHeaders['Content-Type']) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+    
+    // Prepare request options
+    const requestOptions: http.RequestOptions = {
+      method,
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? '443' : '80'),
+      path: `${parsedUrl.pathname}${parsedUrl.search}`,
+      headers: requestHeaders,
+      timeout
+    };
+    
+    // Add certificate options if using HTTPS and certificates are enabled
+    if (isHttps && useCertificate && certManager.hasCertificate()) {
+      const certOptions = certManager.getCertificateOptions();
       if (certOptions) {
         requestOptions.pfx = certOptions.pfx;
         requestOptions.passphrase = certOptions.passphrase;
       }
     }
     
-    // Add proxy if configured
-    if (config.useProxy && proxy.hasProxy()) {
-      const proxyAgent = proxy.getProxyAgent();
-      if (proxyAgent) {
-        // Using proxy agent as agent for HTTPS requests
-        (requestOptions as any).agent = proxyAgent;
-      }
-    }
+    // Log the request
+    logger.logRequest(method, parsedUrl.toString(), requestHeaders, data);
     
-    // Log request details
-    logger.debug('Executing API request', {
-      method: config.method,
-      url,
-      headers: requestOptions.headers,
-      params: config.params,
-      useCertificate: config.useCertificate,
-      useProxy: config.useProxy
-    });
-    
-    const startTime = Date.now();
-    
-    // Execute request with retry logic
-    try {
-      const makeRequest = async (): Promise<ApiResponse<T>> => {
-        return new Promise((resolve, reject) => {
-          // Safety timeout to prevent hanging requests
-          const safetyTimeout = setTimeout(() => {
-            logger.warn(`Safety timeout triggered after ${config.timeout ? config.timeout * 2 : 60000}ms for request: ${url}`);
-            if (req && !req.destroyed) {
-              req.destroy(new Error('Safety timeout exceeded'));
-            }
-            reject(new Error(`Request safety timeout exceeded (${config.timeout ? config.timeout * 2 : 60000}ms)`));
-          }, config.timeout ? config.timeout * 2 : 60000);
-
-          const req = httpModule.request(requestOptions, (res) => {
-            // Response received, record timestamp
-            const responseReceivedTime = Date.now();
-            const responseChunks: Buffer[] = [];
-            
-            // Set reasonable timeout for receiving data
-            res.setTimeout(config.timeout || 30000, () => {
-              logger.warn(`Response data timeout for ${url}`);
-              req.destroy(new Error('Response data timeout'));
-            });
-            
-            res.on('data', (chunk) => {
-              responseChunks.push(Buffer.from(chunk));
-            });
-            
-            res.on('error', (error) => {
-              clearTimeout(safetyTimeout);
-              logger.error('Error reading response', { error: error.message, url });
-              reject(error);
-            });
-            
-            res.on('end', () => {
-              clearTimeout(safetyTimeout);
-              const responseTime = Date.now() - startTime;
-              const responseBody = Buffer.concat(responseChunks).toString('utf8');
-              
-              // Parse response data
-              let parsedData: any;
-              try {
-                const contentType = res.headers['content-type'] || '';
-                if (contentType.includes('application/json')) {
-                  parsedData = responseBody ? JSON.parse(responseBody) : null;
-                } else {
-                  parsedData = responseBody;
-                }
-              } catch (error) {
-                logger.warn('Failed to parse response as JSON, returning raw response body', { 
-                  error: error instanceof Error ? error.message : String(error),
-                  contentType: res.headers['content-type'],
-                  bodyPreview: responseBody.substring(0, 100) + (responseBody.length > 100 ? '...' : '')
-                });
-                parsedData = responseBody;
-              }
-              
-              // Construct API response
-              const apiResponse: ApiResponse<T> = {
-                status: res.statusCode || 0,
-                statusText: res.statusMessage || '',
-                data: parsedData,
-                headers: res.headers as Record<string, string>,
-                responseTime,
-                receivedAt: new Date().toISOString()
-              };
-              
-              // Log response details
-              logger.debug('API response received', {
-                status: apiResponse.status,
-                statusText: apiResponse.statusText,
-                responseTime,
-                contentLength: responseBody.length,
-                dataType: typeof apiResponse.data
-              });
-              
-              resolve(apiResponse);
-            });
-          });
+    // Execute the request
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      
+      // Create request
+      const req = httpModule.request(requestOptions, (res) => {
+        const responseChunks: Buffer[] = [];
+        
+        // Collect response data
+        res.on('data', (chunk) => {
+          responseChunks.push(Buffer.from(chunk));
+        });
+        
+        // Process response when complete
+        res.on('end', () => {
+          const requestTime = Date.now() - startTime;
+          const responseBody = Buffer.concat(responseChunks).toString('utf8');
           
-          // Set timeout
-          req.setTimeout(config.timeout || 30000, () => {
-            logger.warn(`Request timeout for ${url} after ${config.timeout || 30000}ms`);
-            req.destroy(new Error(`Request timeout after ${config.timeout || 30000}ms`));
-          });
-          
-          // Handle request error
-          req.on('error', (error) => {
-            clearTimeout(safetyTimeout);
-            
-            // Create enhanced API error
-            const apiError = ErrorHandler.createApiError(error, `API request failed: ${error.message}`);
-            
-            // Enhance with request details
-            apiError.requestUrl = url;
-            apiError.requestMethod = config.method;
-            
-            if (config.data) {
-              apiError.requestBody = config.data;
+          // Parse response data based on content type
+          let parsedData: any;
+          try {
+            const contentType = res.headers['content-type'] || '';
+            if (contentType.includes('application/json')) {
+              parsedData = responseBody ? JSON.parse(responseBody) : null;
+            } else {
+              parsedData = responseBody;
             }
-            
-            // Log with enhanced context
-            logger.error('API request error', { 
-              error: apiError.toJSON(),
-              url 
-            });
-            
-            reject(apiError);
-          });
-          
-          // Handle request abort
-          req.on('abort', () => {
-            clearTimeout(safetyTimeout);
-            logger.warn('API request aborted', { url });
-            
-            const abortError = new ApiError('Request aborted', {
-              type: ErrorType.NETWORK,
-              requestUrl: url,
-              requestMethod: config.method,
-              requestBody: config.data,
-              retryable: true
-            });
-            
-            reject(abortError);
-          });
-          
-          // Send request body for methods that support it
-          if (config.data && ['POST', 'PUT', 'PATCH'].includes(config.method)) {
-            let requestData: string;
-            try {
-              requestData = typeof config.data === 'string' 
-                ? config.data 
-                : JSON.stringify(config.data);
-            } catch (error) {
-              clearTimeout(safetyTimeout);
-              logger.error('Failed to stringify request data', { 
-                error: error instanceof Error ? error.message : String(error), 
-                url 
-              });
-              reject(new Error(`Failed to stringify request data: ${error instanceof Error ? error.message : String(error)}`));
-              return;
-            }
-            
-            try {
-              req.write(requestData);
-            } catch (error) {
-              clearTimeout(safetyTimeout);
-              logger.error('Failed to write request data', { 
-                error: error instanceof Error ? error.message : String(error), 
-                url 
-              });
-              reject(new Error(`Failed to write request data: ${error instanceof Error ? error.message : String(error)}`));
-              return;
-            }
+          } catch (error) {
+            logger.warn('Failed to parse response as JSON', { error });
+            parsedData = responseBody;
           }
           
-          // End the request - wrap in try/catch to handle potential errors
-          try {
-            req.end();
-          } catch (error) {
-            clearTimeout(safetyTimeout);
-            logger.error('Error ending request', { 
-              error: error instanceof Error ? error.message : String(error), 
-              url 
-            });
-            reject(new Error(`Error ending request: ${error instanceof Error ? error.message : String(error)}`));
+          // Create response object
+          const response: HttpResponse<T> = {
+            status: res.statusCode || 0,
+            statusText: res.statusMessage || '',
+            data: parsedData,
+            headers: res.headers as Record<string, string>,
+            requestTime,
+            url: parsedUrl.toString(),
+            method
+          };
+          
+          // Log the response
+          logger.logResponse(response.status, parsedUrl.toString(), response.data, requestTime);
+          
+          // Resolve or reject based on status code
+          if (response.status >= 200 && response.status < 300) {
+            resolve(response);
+          } else {
+            const error = new Error(`Request failed with status ${response.status}: ${response.statusText}`);
+            (error as any).response = response;
+            (error as any).status = response.status;
+            reject(error);
           }
         });
-      };
-      
-      // Execute request with retry
-      return await RetryHandler.executeWithRetry(
-        makeRequest,
-        config.retry?.attempts || 0,
-        config.retry?.delayMs || 1000,
-        config.retry?.statusCodes
-      );
-    } catch (error: any) {
-      const responseTime = Date.now() - startTime;
-      
-      // Create enhanced API error
-      const apiError = ErrorHandler.createApiError(
-        error, 
-        `API request to ${url} failed: ${error.message || 'Unknown error'}`
-      );
-      
-      // Enhance with request details if not already set
-      if (!apiError.requestUrl) {
-        apiError.requestUrl = url;
-      }
-      
-      if (!apiError.requestMethod) {
-        apiError.requestMethod = config.method;
-      }
-      
-      if (!apiError.requestBody && config.data) {
-        apiError.requestBody = config.data;
-      }
-      
-      // Log error with enhanced context
-      logger.error('API request failed', {
-        method: config.method,
-        url,
-        error: apiError.toJSON(),
-        responseTime
       });
       
-      // Throw the enhanced error
-      throw apiError;
-    }
-  }
-}
-
-enhanced-polling-handler.ts
-----------------------------
-import { ApiResponse, PollingConfig, PollingResult } from './types';
-import { RetryHandler } from './retry-handler';
-import { logger } from '../utils/logger';
-
-/**
- * Enhanced Polling Handler for awaiting conditions on API responses
- * Provides improved handling of asynchronous operations and race conditions
- */
-export class EnhancedPollingHandler {
-  /**
-   * Poll an API endpoint until a condition is met or timeout occurs
-   * @param requestFn - Function that makes an API request and returns a Promise<ApiResponse>
-   * @param config - Polling configuration
-   */
-  public static async pollUntilCondition<T = any>(
-    requestFn: () => Promise<ApiResponse<T>>,
-    config: PollingConfig
-  ): Promise<PollingResult<T>> {
-    const startTime = Date.now();
-    let attempts = 0;
-    let lastResponse: ApiResponse<T>;
-    let lastError: Error | null = null;
-    
-    logger.info('Starting polling operation', {
-      intervalMs: config.intervalMs,
-      timeoutMs: config.timeoutMs,
-      maxAttempts: config.maxAttempts
-    });
-    
-    while (true) {
-      attempts++;
+      // Handle request errors
+      req.on('error', (error) => {
+        logger.error('Request error', { error, url: parsedUrl.toString() });
+        reject(error);
+      });
       
-      try {
-        // Use a timeout promise to ensure the request doesn't hang indefinitely
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error(`Request timed out after ${config.requestTimeoutMs || 10000}ms during polling attempt ${attempts}`));
-          }, config.requestTimeoutMs || 10000);
-        });
-        
-        // Race the request against the timeout
-        lastResponse = await Promise.race([
-          requestFn(),
-          timeoutPromise
-        ]) as ApiResponse<T>;
-        
-        // Check if the condition is met
-        if (config.condition(lastResponse)) {
-          logger.info('Polling condition met', {
-            attempts,
-            elapsedMs: Date.now() - startTime
-          });
-          
-          return {
-            success: true,
-            response: lastResponse,
-            attempts,
-            totalTimeMs: Date.now() - startTime
-          };
-        }
-        
-        logger.debug('Polling condition not met, continuing', {
-          attempt: attempts,
-          responseStatus: lastResponse.status,
-          elapsedMs: Date.now() - startTime
-        });
-      } catch (error: any) {
-        lastError = error;
-        logger.warn('Error during polling request', {
-          attempt: attempts,
-          error: error.message || 'Unknown error'
-        });
-        
-        // Create a failed response if an error occurred
-        lastResponse = {
-          status: 0,
-          statusText: error.message || 'Error',
-          data: null,
-          headers: {},
-          responseTime: 0
-        } as ApiResponse<T>;
+      // Handle timeout
+      req.on('timeout', () => {
+        logger.error('Request timeout', { url: parsedUrl.toString(), timeout });
+        req.destroy(new Error(`Request timeout after ${timeout}ms`));
+      });
+      
+      // Send request body for methods that support it
+      if (data && ['POST', 'PUT', 'PATCH'].includes(method)) {
+        const requestData = typeof data === 'string' ? data : JSON.stringify(data);
+        req.write(requestData);
       }
       
-      // Check if we've reached the maximum number of attempts
-      if (config.maxAttempts && attempts >= config.maxAttempts) {
-        logger.warn('Polling reached maximum attempts', {
-          attempts,
-          maxAttempts: config.maxAttempts,
-          lastError: lastError?.message
-        });
-        
-        break;
-      }
-      
-      // Check if we've reached the timeout
-      if (Date.now() - startTime >= config.timeoutMs) {
-        logger.warn('Polling timed out', {
-          attempts,
-          timeoutMs: config.timeoutMs,
-          elapsedMs: Date.now() - startTime,
-          lastError: lastError?.message
-        });
-        
-        break;
-      }
-      
-      // Implement exponential backoff if configured
-      const delayTime = config.useExponentialBackoff 
-        ? Math.min(config.intervalMs * Math.pow(2, attempts - 1), config.maxBackoffMs || 30000)
-        : config.intervalMs;
-      
-      logger.debug(`Waiting ${delayTime}ms before next polling attempt`);
-      
-      // Wait before next attempt using a more reliable method
-      await new Promise(resolve => setTimeout(resolve, delayTime));
-    }
-    
-    // If we get here, polling failed
-    const errorMessage = lastError 
-      ? `Polling failed: ${lastError.message}` 
-      : 'Polling failed to meet condition within the specified constraints';
-    
-    logger.error(errorMessage, {
-      attempts,
-      elapsedMs: Date.now() - startTime
-    });
-    
-    if (config.throwOnFailure) {
-      throw new Error(errorMessage);
-    }
-    
-    return {
-      success: false,
-      response: lastResponse!,
-      attempts,
-      totalTimeMs: Date.now() - startTime,
-      error: lastError
-    };
-  }
-
-  /**
-   * Wait until a specific condition is met
-   * Simplified version of pollUntilCondition for use cases where a full API request isn't needed
-   * 
-   * @param conditionFn - Function that returns a promise resolving to a boolean
-   * @param description - Description of what we're waiting for (for logging)
-   * @param options - Wait options
-   */
-  public static async waitUntil(
-    conditionFn: () => Promise<boolean>,
-    description: string,
-    options: {
-      intervalMs?: number;
-      timeoutMs?: number;
-      maxAttempts?: number;
-      useExponentialBackoff?: boolean;
-      throwOnFailure?: boolean;
-    } = {}
-  ): Promise<boolean> {
-    const intervalMs = options.intervalMs || 1000;
-    const timeoutMs = options.timeoutMs || 30000;
-    const maxAttempts = options.maxAttempts || 30;
-    const useExponentialBackoff = options.useExponentialBackoff || false;
-    const throwOnFailure = options.throwOnFailure !== undefined ? options.throwOnFailure : true;
-    
-    const startTime = Date.now();
-    let attempts = 0;
-    let lastError: Error | null = null;
-    
-    logger.info(`Waiting until: ${description}`, {
-      intervalMs,
-      timeoutMs,
-      maxAttempts
-    });
-    
-    while (true) {
-      attempts++;
-      
-      try {
-        // Check if the condition is met
-        if (await conditionFn()) {
-          logger.info(`Condition met: ${description}`, {
-            attempts,
-            elapsedMs: Date.now() - startTime
-          });
-          
-          return true;
-        }
-        
-        logger.debug(`Condition not yet met: ${description}, continuing to wait`, {
-          attempt: attempts,
-          elapsedMs: Date.now() - startTime
-        });
-      } catch (error: any) {
-        lastError = error;
-        logger.warn(`Error checking condition: ${description}`, {
-          attempt: attempts,
-          error: error.message || 'Unknown error'
-        });
-      }
-      
-      // Check if we've reached the maximum number of attempts
-      if (maxAttempts && attempts >= maxAttempts) {
-        const message = `Reached maximum attempts (${maxAttempts}) while waiting for: ${description}`;
-        logger.warn(message, {
-          attempts,
-          maxAttempts,
-          lastError: lastError?.message
-        });
-        
-        if (throwOnFailure) {
-          throw new Error(message);
-        }
-        
-        return false;
-      }
-      
-      // Check if we've reached the timeout
-      if (Date.now() - startTime >= timeoutMs) {
-        const message = `Timeout (${timeoutMs}ms) while waiting for: ${description}`;
-        logger.warn(message, {
-          attempts,
-          timeoutMs,
-          elapsedMs: Date.now() - startTime,
-          lastError: lastError?.message
-        });
-        
-        if (throwOnFailure) {
-          throw new Error(message);
-        }
-        
-        return false;
-      }
-      
-      // Implement exponential backoff if configured
-      const delayTime = useExponentialBackoff 
-        ? Math.min(intervalMs * Math.pow(2, attempts - 1), 30000)
-        : intervalMs;
-      
-      // Wait before next attempt
-      await new Promise(resolve => setTimeout(resolve, delayTime));
-    }
-  }
-}
-
-retry-handler.ts
-----------------------
-import { logger } from '../utils/logger';
-/**
- * Retry Handler for API requests
- * Handles retrying failed requests with configurable retry policy
- */
-export class RetryHandler {
-  /**
-   * Execute a function with retry logic
-   * @param fn - Function to execute
-   * @param retryAttempts - Number of retry attempts
-   * @param retryDelayMs - Base delay between retries in milliseconds
-   * @param statusCodes - HTTP status codes that should trigger a retry
-   * @param options - Additional retry options
-   */
-  public static async executeWithRetry<T>(
-    fn: () => Promise<T>,
-    retryAttempts: number = 3,
-    retryDelayMs: number = 1000,
-    statusCodes: number[] = [408, 429, 500, 502, 503, 504],
-    options: {
-      useExponentialBackoff?: boolean;
-      maxBackoffMs?: number;
-      jitter?: boolean;
-      retryOnAllErrors?: boolean;
-    } = {}
-  ): Promise<T> {
-    const useExponentialBackoff = options.useExponentialBackoff !== undefined ? options.useExponentialBackoff : true;
-    const maxBackoffMs = options.maxBackoffMs || 30000; // Default 30 seconds max backoff
-    const jitter = options.jitter !== undefined ? options.jitter : true;
-    const retryOnAllErrors = options.retryOnAllErrors || false;
-    
-    let lastError: Error | null = null;
-    const startTime = Date.now();
-    
-    logger.debug(`Starting request with retry (attempts: ${retryAttempts}, baseDelay: ${retryDelayMs}ms, exponentialBackoff: ${useExponentialBackoff})`);
-    
-    for (let attempt = 1; attempt <= retryAttempts + 1; attempt++) {
-      try {
-        // Execute the function with timeout protection
-        const result = await Promise.race([
-          fn(),
-          new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error('Global timeout exceeded')), 60000) // 1 minute global timeout
-          )
-        ]) as T;
-        
-        // If this is a retry attempt, log success
-        if (attempt > 1) {
-          logger.info(`Request succeeded after ${attempt - 1} ${attempt === 2 ? 'retry' : 'retries'}, total time: ${Date.now() - startTime}ms`);
-        }
-        
-        return result;
-      } catch (error: any) {
-        lastError = error;
-        
-        // Check if we've reached the maximum number of retries
-        if (attempt > retryAttempts) {
-          logger.error(`Request failed after ${retryAttempts} ${retryAttempts === 1 ? 'retry' : 'retries'}, total time: ${Date.now() - startTime}ms`, { 
-            error: error instanceof Error ? error.message : String(error),
-            code: error.code || 'unknown',
-            status: error.status || error.statusCode || 'unknown'
-          });
-          throw error;
-        }
-        
-        // Extract status code from error if available
-        let statusCode: number | undefined;
-        
-        // Handle different error formats
-        if (error.response?.status) {
-          statusCode = error.response.status;
-        } else if (typeof error.statusCode === 'number') {
-          statusCode = error.statusCode;
-        } else if (typeof error.status === 'number') {
-          statusCode = error.status;
-        } else if (error.response?.statusCode) {
-          statusCode = error.response.statusCode;
-        }
-        
-        // Determine if error is a network-related error
-        const isNetworkError = 
-          !statusCode && 
-          (error.code === 'ECONNABORTED' || 
-           error.code === 'ETIMEDOUT' || 
-           error.code === 'ECONNREFUSED' ||
-           error.code === 'ENOTFOUND' ||
-           error.code === 'ECONNRESET' ||
-           error.code === 'EPIPE' ||
-           error.code === 'EHOSTUNREACH' ||
-           error.code === 'ENETUNREACH' ||
-           error.message?.includes('timeout') ||
-           error.message?.includes('timed out'));
-        
-        // Determine if we should retry based on status code, network error, or all errors option
-        const shouldRetry = retryOnAllErrors || 
-                           isNetworkError || 
-                           (statusCode && statusCodes.includes(statusCode));
-        
-        if (!shouldRetry) {
-          logger.error(`Request failed with status ${statusCode || 'unknown'}, not retrying`, { 
-            error: error instanceof Error ? error.message : String(error),
-            code: error.code || 'unknown'
-          });
-          throw error;
-        }
-        
-        // Calculate delay with exponential backoff if enabled
-        let delayMs = retryDelayMs;
-        
-        if (useExponentialBackoff) {
-          // Calculate exponential backoff: base * 2^(attempt-1) with jitter
-          delayMs = retryDelayMs * Math.pow(2, attempt - 1);
-          
-          // Apply jitter if enabled (adds random variation to prevent thundering herd)
-          if (jitter) {
-            // Add +/- 20% random jitter
-            const jitterFactor = 0.8 + (Math.random() * 0.4); // 0.8 to 1.2
-            delayMs = Math.floor(delayMs * jitterFactor);
-          }
-          
-          // Cap at max backoff
-          delayMs = Math.min(delayMs, maxBackoffMs);
-        }
-        
-        // Special case for 429 Too Many Requests with Retry-After header
-        if (statusCode === 429 && error.response?.headers?.['retry-after']) {
-          const retryAfter = parseInt(error.response.headers['retry-after'], 10);
-          if (!isNaN(retryAfter)) {
-            // Convert from seconds to milliseconds and add small buffer
-            delayMs = (retryAfter * 1000) + 500;
-            logger.info(`Using Retry-After header value: ${retryAfter} seconds`);
-          }
-        }
-        
-        // Log retry attempt
-        logger.warn(`Request failed (attempt ${attempt}/${retryAttempts + 1}), retrying in ${delayMs}ms`, {
-          statusCode: statusCode || 'unknown',
-          errorMessage: error.message || 'Unknown error',
-          code: error.code || 'unknown',
-          attempt,
-          nextDelayMs: delayMs
-        });
-        
-        // Wait before retrying with a more reliable promise-based delay
-        await new Promise(resolve => {
-          const timeoutId = setTimeout(resolve, delayMs);
-          // Ensure the timeout is unref'd so it doesn't keep the Node.js process alive
-          if (timeoutId.unref) {
-            timeoutId.unref();
-          }
-        });
-      }
-    }
-    
-    // This should never be reached due to the throw in the loop above
-    throw lastError || new Error('Unknown error occurred during retry');
-  }
-
-  /**
-   * Delay execution for specified time
-   * @param ms - Delay in milliseconds
-   */
-  public static async delay(ms: number): Promise<void> {
-    return new Promise(resolve => {
-      const timeoutId = setTimeout(resolve, ms);
-      // Ensure the timeout is unref'd so it doesn't keep the Node.js process alive
-      if (timeoutId.unref) {
-        timeoutId.unref();
-      }
-    });
-  }
-}
-
-types.ts
---------------------
-/**
- * API request method types
- */
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-
-/**
- * Enhanced API request configuration
- */
-export interface RequestConfig {
-  // Base URL for the request
-  baseUrl: string;
-  
-  // Endpoint path (will be appended to baseUrl)
-  endpoint: string;
-  
-  // HTTP method
-  method: HttpMethod;
-  
-  // Request headers
-  headers?: Record<string, string>;
-  
-  // Request query parameters
-  params?: Record<string, string>;
-  
-  // Request body data
-  data?: any;
-  
-  // Request timeout in milliseconds
-  timeout?: number;
-  
-  // Whether to use client certificate
-  useCertificate?: boolean;
-  
-  // Whether to use proxy (if configured)
-  useProxy?: boolean;
-  
-  // Enhanced retry configuration
-  retry?: {
-    // Number of retry attempts
-    attempts: number;
-    
-    // Delay between retries in milliseconds
-    delayMs: number;
-    
-    // Status codes that should trigger a retry
-    statusCodes?: number[];
-    
-    // Whether to use exponential backoff for retries
-    useExponentialBackoff?: boolean;
-    
-    // Maximum backoff time in milliseconds
-    maxBackoffMs?: number;
-    
-    // Whether to add jitter to backoff times
-    jitter?: boolean;
-    
-    // Whether to retry on all errors
-    retryOnAllErrors?: boolean;
-  };
-  
-  // Whether to abort request on timeout
-  abortOnTimeout?: boolean;
-  
-  // Whether to follow redirects
-  followRedirects?: boolean;
-  
-  // Maximum number of redirects to follow
-  maxRedirects?: number;
-  
-  // Whether to use HTTP keep-alive
-  keepAlive?: boolean;
-  
-  // Whether to automatically decompress responses
-  decompress?: boolean;
-  
-  // Custom request ID for tracing/debugging
-  requestId?: string;
-}
-
-/**
- * Enhanced API response interface
- */
-export interface ApiResponse<T = any> {
-  // HTTP status code
-  status: number;
-  
-  // HTTP status text
-  statusText: string;
-  
-  // Response data
-  data: T;
-  
-  // Response headers
-  headers: Record<string, string>;
-  
-  // Response time in milliseconds
-  responseTime?: number;
-  
-  // Response received at timestamp
-  receivedAt?: string;
-  
-  // Request ID (if provided in request)
-  requestId?: string;
-  
-  // Number of redirects followed
-  redirectCount?: number;
-  
-  // Original request URL
-  requestUrl?: string;
-  
-  // Request method
-  requestMethod?: HttpMethod;
-}
-
-/**
- * Enhanced polling configuration
- */
-export interface PollingConfig {
-  // Polling interval in milliseconds
-  intervalMs: number;
-  
-  // Polling timeout in milliseconds
-  timeoutMs: number;
-  
-  // Maximum number of polling attempts
-  maxAttempts: number;
-  
-  // Condition function that determines if polling should continue
-  condition: (response: ApiResponse) => boolean;
-  
-  // Whether to use exponential backoff for polling intervals
-  useExponentialBackoff?: boolean;
-  
-  // Maximum backoff time in milliseconds
-  maxBackoffMs?: number;
-  
-  // Whether to throw an error when polling fails
-  throwOnFailure?: boolean;
-  
-  // Timeout for each individual request in milliseconds
-  requestTimeoutMs?: number;
-  
-  // Whether to add jitter to polling intervals
-  useJitter?: boolean;
-  
-  // Whether to continue polling on network errors
-  continueOnNetworkError?: boolean;
-}
-
-/**
- * Enhanced polling result
- */
-export interface PollingResult<T = any> {
-  // Whether polling was successful (condition met)
-  success: boolean;
-  
-  // Last API response
-  response: ApiResponse<T>;
-  
-  // Number of polling attempts made
-  attempts: number;
-  
-  // Total time spent polling in milliseconds
-  totalTimeMs: number;
-  
-  // Last error encountered (if polling failed)
-  error?: Error;
-  
-  // Array of response statuses from each attempt
-  attemptStatuses?: Array<{
-    attempt: number;
-    timestamp: string;
-    status: number | string;
-    success: boolean;
-  }>;
-}
-
-request-config.ts
-----------------------------
-import { config } from '../utils/config-manager';
-import { RequestConfig } from './types';
-import { logger } from '../utils/logger';
-
-/**
- * Enhanced Request Config Builder for creating API request configurations
- * Compatible with native HTTP client implementation
- */
-export class RequestConfigBuilder {
-  private requestConfig: RequestConfig;
-
-  /**
-   * Create a new request config builder
-   * @param endpoint - API endpoint path
-   * @param method - HTTP method
-   */
-  constructor(endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' = 'GET') {
-    this.requestConfig = {
-      baseUrl: config.get('api.baseUrl'),
-      endpoint,
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      timeout: config.get('api.timeout'),
-      retry: {
-        attempts: config.get('api.retry.attempts'),
-        delayMs: config.get('api.retry.delayMs'),
-        statusCodes: [408, 429, 500, 502, 503, 504],
-        useExponentialBackoff: true,
-        maxBackoffMs: 30000,
-        jitter: true
-      },
-      useCertificate: true,
-      useProxy: true,
-      // Add enhanced options for native HTTP client
-      abortOnTimeout: true,
-      followRedirects: true,
-      maxRedirects: 5,
-      keepAlive: true,
-      decompress: true
-    };
-  }
-
-  /**
-   * Set request headers
-   * @param headers - Headers object to set
-   */
-  public withHeaders(headers: Record<string, string>): RequestConfigBuilder {
-    this.requestConfig.headers = {
-      ...this.requestConfig.headers,
-      ...headers
-    };
-    return this;
-  }
-
-  /**
-   * Add a single header
-   * @param name - Header name
-   * @param value - Header value
-   */
-  public withHeader(name: string, value: string): RequestConfigBuilder {
-    if (!this.requestConfig.headers) {
-      this.requestConfig.headers = {};
-    }
-    this.requestConfig.headers[name] = value;
-    return this;
-  }
-
-  /**
-   * Set request query parameters
-   * @param params - Query parameters object
-   */
-  public withParams(params: Record<string, string>): RequestConfigBuilder {
-    this.requestConfig.params = params;
-    return this;
-  }
-
-  /**
-   * Set request body data
-   * @param data - Request body data
-   */
-  public withData(data: any): RequestConfigBuilder {
-    this.requestConfig.data = data;
-    return this;
-  }
-
-  /**
-   * Set request timeout
-   * @param timeout - Timeout in milliseconds
-   */
-  public withTimeout(timeout: number): RequestConfigBuilder {
-    this.requestConfig.timeout = timeout;
-    return this;
-  }
-
-  /**
-   * Set enhanced retry configuration
-   * @param options - Retry configuration options
-   */
-  public withRetry(options: {
-    attempts?: number;
-    delayMs?: number;
-    statusCodes?: number[];
-    useExponentialBackoff?: boolean;
-    maxBackoffMs?: number;
-    jitter?: boolean;
-    retryOnAllErrors?: boolean;
-  }): RequestConfigBuilder {
-    this.requestConfig.retry = {
-      attempts: options.attempts ?? config.get('api.retry.attempts', 3),
-      delayMs: options.delayMs ?? config.get('api.retry.delayMs', 1000),
-      statusCodes: options.statusCodes ?? [408, 429, 500, 502, 503, 504],
-      useExponentialBackoff: options.useExponentialBackoff ?? true,
-      maxBackoffMs: options.maxBackoffMs ?? 30000,
-      jitter: options.jitter ?? true,
-      retryOnAllErrors: options.retryOnAllErrors ?? false
-    };
-    return this;
-  }
-
-  /**
-   * Set whether to use client certificate
-   * @param use - Whether to use client certificate
-   */
-  public useCertificate(use: boolean): RequestConfigBuilder {
-    this.requestConfig.useCertificate = use;
-    return this;
-  }
-
-  /**
-   * Set whether to use proxy
-   * @param use - Whether to use proxy
-   */
-  public useProxy(use: boolean): RequestConfigBuilder {
-    this.requestConfig.useProxy = use;
-    return this;
-  }
-
-  /**
-   * Set base URL (overrides config default)
-   * @param baseUrl - Base URL for the request
-   */
-  public withBaseUrl(baseUrl: string): RequestConfigBuilder {
-    this.requestConfig.baseUrl = baseUrl;
-    return this;
-  }
-
-  /**
-   * Set whether to abort request on timeout
-   * @param abort - Whether to abort request on timeout
-   */
-  public abortOnTimeout(abort: boolean): RequestConfigBuilder {
-    this.requestConfig.abortOnTimeout = abort;
-    return this;
-  }
-
-  /**
-   * Set whether to follow redirects
-   * @param follow - Whether to follow redirects
-   * @param maxRedirects - Maximum number of redirects to follow
-   */
-  public followRedirects(follow: boolean, maxRedirects?: number): RequestConfigBuilder {
-    this.requestConfig.followRedirects = follow;
-    if (maxRedirects !== undefined) {
-      this.requestConfig.maxRedirects = maxRedirects;
-    }
-    return this;
-  }
-
-  /**
-   * Set whether to use HTTP keep-alive
-   * @param keepAlive - Whether to use HTTP keep-alive
-   */
-  public keepAlive(keepAlive: boolean): RequestConfigBuilder {
-    this.requestConfig.keepAlive = keepAlive;
-    return this;
-  }
-
-  /**
-   * Set whether to automatically decompress responses
-   * @param decompress - Whether to decompress responses
-   */
-  public decompress(decompress: boolean): RequestConfigBuilder {
-    this.requestConfig.decompress = decompress;
-    return this;
-  }
-
-  /**
-   * Build the request configuration
-   */
-  public build(): RequestConfig {
-    logger.debug('Built request configuration', {
-      method: this.requestConfig.method,
-      url: `${this.requestConfig.baseUrl}${this.requestConfig.endpoint}`,
-      timeout: this.requestConfig.timeout,
-      retry: this.requestConfig.retry
-    });
-    return this.requestConfig;
-  }
-
-  /**
-   * Create a new request config builder for GET request
-   * @param endpoint - API endpoint path
-   */
-  public static get(endpoint: string): RequestConfigBuilder {
-    return new RequestConfigBuilder(endpoint, 'GET');
-  }
-
-  /**
-   * Create a new request config builder for POST request
-   * @param endpoint - API endpoint path
-   */
-  public static post(endpoint: string): RequestConfigBuilder {
-    return new RequestConfigBuilder(endpoint, 'POST');
-  }
-
-  /**
-   * Create a new request config builder for PUT request
-   * @param endpoint - API endpoint path
-   */
-  public static put(endpoint: string): RequestConfigBuilder {
-    return new RequestConfigBuilder(endpoint, 'PUT');
-  }
-
-  /**
-   * Create a new request config builder for DELETE request
-   * @param endpoint - API endpoint path
-   */
-  public static delete(endpoint: string): RequestConfigBuilder {
-    return new RequestConfigBuilder(endpoint, 'DELETE');
-  }
-
-  /**
-   * Create a new request config builder for PATCH request
-   * @param endpoint - API endpoint path
-   */
-  public static patch(endpoint: string): RequestConfigBuilder {
-    return new RequestConfigBuilder(endpoint, 'PATCH');
-  }
-}
-
-async-utils.ts
---------------------
-import { logger } from '../utils/logger';
-
-/**
- * Utilities for handling asynchronous operations
- */
-export class AsyncUtils {
-  /**
-   * Execute a function with a timeout
-   * @param fn - Function to execute
-   * @param timeoutMs - Timeout in milliseconds
-   * @param errorMessage - Custom error message for timeout
-   */
-  public static async withTimeout<T>(
-    fn: () => Promise<T>,
-    timeoutMs: number = 30000,
-    errorMessage: string = `Operation timed out after ${timeoutMs}ms`
-  ): Promise<T> {
-    return Promise.race([
-      fn(),
-      new Promise<never>((_, reject) => {
-        const timeoutId = setTimeout(() => {
-          reject(new Error(errorMessage));
-        }, timeoutMs);
-        
-        if (timeoutId.unref) {
-          timeoutId.unref();
-        }
-      })
-    ]) as Promise<T>;
-  }
-
-  /**
-   * Retry a function with a maximum number of attempts
-   * @param fn - Function to retry
-   * @param options - Retry options
-   */
-  public static async retry<T>(
-    fn: () => Promise<T>,
-    options: {
-      maxAttempts?: number;
-      delayMs?: number;
-      useExponentialBackoff?: boolean;
-      maxBackoffMs?: number;
-      shouldRetry?: (error: Error, attempt: number) => boolean;
-      onRetry?: (error: Error, attempt: number) => void;
-      retryErrorMessage?: string;
-    } = {}
-  ): Promise<T> {
-    const maxAttempts = options.maxAttempts || 3;
-    const delayMs = options.delayMs || 1000;
-    const useExponentialBackoff = options.useExponentialBackoff !== undefined ? options.useExponentialBackoff : true;
-    const maxBackoffMs = options.maxBackoffMs || 30000;
-    const shouldRetry = options.shouldRetry || (() => true);
-    const onRetry = options.onRetry || (() => {});
-    const retryErrorMessage = options.retryErrorMessage || 'Operation failed after maximum retry attempts';
-    
-    let lastError: Error | null = null;
-    
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await fn();
-      } catch (error: any) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        
-        if (attempt === maxAttempts || !shouldRetry(lastError, attempt)) {
-          logger.error(`Retry failed: ${lastError.message}`, { attempt, maxAttempts });
-          throw lastError;
-        }
-        
-        onRetry(lastError, attempt);
-        
-        // Calculate backoff delay
-        let currentDelayMs = delayMs;
-        if (useExponentialBackoff) {
-          currentDelayMs = Math.min(delayMs * Math.pow(2, attempt - 1), maxBackoffMs);
-        }
-        
-        logger.debug(`Retrying operation, attempt ${attempt}/${maxAttempts} after ${currentDelayMs}ms delay`);
-        await AsyncUtils.delay(currentDelayMs);
-      }
-    }
-    
-    throw lastError || new Error(retryErrorMessage);
-  }
-
-  /**
-   * Create a promise that resolves after a delay
-   * @param ms - Delay in milliseconds
-   */
-  public static async delay(ms: number): Promise<void> {
-    return new Promise(resolve => {
-      const timeoutId = setTimeout(resolve, ms);
-      if (timeoutId.unref) {
-        timeoutId.unref();
-      }
+      // End the request
+      req.end();
     });
   }
 
   /**
-   * Execute an array of promises with concurrency control
-   * @param items - Array of items to process
-   * @param fn - Function that returns a promise for each item
-   * @param options - Concurrency options
+   * GET request method
    */
-  public static async mapWithConcurrency<T, R>(
-    items: T[],
-    fn: (item: T, index: number) => Promise<R>,
-    options: {
-      concurrency?: number;
-      stopOnError?: boolean;
-      timeoutMs?: number;
-    } = {}
-  ): Promise<R[]> {
-    const concurrency = options.concurrency || 5;
-    const stopOnError = options.stopOnError !== undefined ? options.stopOnError : false;
-    const timeoutMs = options.timeoutMs || 0;
-    
-    const results: R[] = new Array(items.length);
-    const errors: Error[] = [];
-    
-    // Create a queue of indices
-    const queue = Array.from({ length: items.length }, (_, i) => i);
-    const inProgress = new Set<number>();
-    
-    return new Promise((resolve, reject) => {
-      // Process next item in queue
-      const processNext = async () => {
-        if (queue.length === 0 && inProgress.size === 0) {
-          // All items processed
-          if (errors.length > 0 && stopOnError) {
-            reject(errors[0]);
-          } else {
-            resolve(results);
-          }
-          return;
-        }
-        
-        if (queue.length === 0 || inProgress.size >= concurrency) {
-          // No more items or at concurrency limit
-          return;
-        }
-        
-        const index = queue.shift()!;
-        inProgress.add(index);
-        
-        const executePromise = async () => {
-          try {
-            let promise = fn(items[index], index);
-            
-            // Apply timeout if specified
-            if (timeoutMs > 0) {
-              promise = AsyncUtils.withTimeout(
-                () => promise,
-                timeoutMs,
-                `Operation for item at index ${index} timed out after ${timeoutMs}ms`
-              );
-            }
-            
-            const result = await promise;
-            results[index] = result;
-          } catch (error) {
-            const actualError = error instanceof Error ? error : new Error(String(error));
-            errors.push(actualError);
-            logger.error(`Error processing item at index ${index}: ${actualError.message}`);
-            
-            if (stopOnError) {
-              // Clear queue to stop processing
-              queue.length = 0;
-              reject(actualError);
-              return;
-            }
-          } finally {
-            inProgress.delete(index);
-            processNext();
-          }
-        };
-        
-        // Start executing without awaiting
-        executePromise();
-        
-        // Start more if available
-        processNext();
-      };
-      
-      // Start initial batch of promises
-      for (let i = 0; i < Math.min(concurrency, items.length); i++) {
-        processNext();
-      }
+  public async get<T = any>(url: string, params?: Record<string, string | number | boolean>, options: Omit<RequestOptions, 'method' | 'url' | 'params'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'GET', 
+      url, 
+      params, 
+      ...options 
     });
   }
 
   /**
-   * Create a lock for synchronizing async operations
+   * POST request method
    */
-  public static createLock(): { acquire: () => Promise<() => void> } {
-    let currentLock: Promise<void> = Promise.resolve();
-    
-    return {
-      acquire: async () => {
-        let releaseFn: () => void;
-        
-        // Store the current lock
-        const oldLock = currentLock;
-        
-        // Create a new lock that will be released when releaseFn is called
-        currentLock = new Promise<void>(resolve => {
-          releaseFn = resolve;
-        });
-        
-        // Wait for the previous lock to be released
-        await oldLock;
-        
-        // Return the release function
-        return releaseFn!;
-      }
-    };
-  }
-  
-  /**
-   * Create a semaphore for limiting concurrent operations
-   * @param maxConcurrency - Maximum number of concurrent operations
-   */
-  public static createSemaphore(maxConcurrency: number = 1): { acquire: () => Promise<() => void> } {
-    let currentCount = 0;
-    const waitQueue: Array<() => void> = [];
-    
-    return {
-      acquire: async () => {
-        if (currentCount < maxConcurrency) {
-          // Semaphore is available
-          currentCount++;
-          
-          // Return release function
-          return () => {
-            currentCount--;
-            
-            // Release the next waiting operation if any
-            if (waitQueue.length > 0) {
-              const release = waitQueue.shift()!;
-              release();
-            }
-          };
-        }
-        
-        // Semaphore is full, wait
-        return new Promise<() => void>(resolve => {
-          waitQueue.push(() => {
-            currentCount++;
-            resolve(() => {
-              currentCount--;
-              
-              // Release the next waiting operation if any
-              if (waitQueue.length > 0) {
-                const release = waitQueue.shift()!;
-                release();
-              }
-            });
-          });
-        });
-      }
-    };
-  }
-}
-
-error-handler.ts
------------------
-import { logger } from '../utils/logger';
-import { report } from '../utils/report-helper';
-
-/**
- * Enhanced error types for better error classification
- */
-export enum ErrorType {
-  NETWORK = 'NETWORK',
-  TIMEOUT = 'TIMEOUT',
-  API = 'API',
-  VALIDATION = 'VALIDATION',
-  POLLING = 'POLLING',
-  ASSERTION = 'ASSERTION',
-  AUTHENTICATION = 'AUTHENTICATION',
-  PERMISSION = 'PERMISSION',
-  NOT_FOUND = 'NOT_FOUND',
-  CONFLICT = 'CONFLICT',
-  SERVER = 'SERVER',
-  UNKNOWN = 'UNKNOWN'
-}
-
-/**
- * Enhanced API error with additional context
- */
-export class ApiError extends Error {
-  public readonly type: ErrorType;
-  public readonly statusCode?: number;
-  public readonly requestUrl?: string;
-  public readonly requestMethod?: string;
-  public readonly responseBody?: any;
-  public readonly requestBody?: any;
-  public readonly causedBy?: Error;
-  public readonly timestamp: string;
-  public readonly retryable: boolean;
-
-  constructor(
-    message: string,
-    options: {
-      type?: ErrorType;
-      statusCode?: number;
-      requestUrl?: string;
-      requestMethod?: string;
-      responseBody?: any;
-      requestBody?: any;
-      causedBy?: Error;
-      retryable?: boolean;
-    } = {}
-  ) {
-    super(message);
-
-    // Set error name to match the class name
-    this.name = 'ApiError';
-    
-    // Set properties from options with defaults
-    this.type = options.type || ErrorType.UNKNOWN;
-    this.statusCode = options.statusCode;
-    this.requestUrl = options.requestUrl;
-    this.requestMethod = options.requestMethod;
-    this.responseBody = options.responseBody;
-    this.requestBody = options.requestBody;
-    this.causedBy = options.causedBy;
-    this.timestamp = new Date().toISOString();
-    this.retryable = options.retryable !== undefined ? options.retryable : this.isRetryableByDefault();
-    
-    // Capture stack trace
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, ApiError);
-    }
-  }
-
-  /**
-   * Determine if error should be retryable by default based on error type
-   */
-  private isRetryableByDefault(): boolean {
-    return [
-      ErrorType.NETWORK,
-      ErrorType.TIMEOUT,
-      ErrorType.SERVER
-    ].includes(this.type);
-  }
-
-  /**
-   * Convert error to JSON for logging
-   */
-  public toJSON(): Record<string, any> {
-    return {
-      name: this.name,
-      message: this.message,
-      type: this.type,
-      statusCode: this.statusCode,
-      requestUrl: this.requestUrl,
-      requestMethod: this.requestMethod,
-      responseBody: this.responseBody,
-      requestBody: this.requestBody,
-      causedBy: this.causedBy instanceof Error ? this.causedBy.message : this.causedBy,
-      timestamp: this.timestamp,
-      retryable: this.retryable,
-      stack: this.stack
-    };
-  }
-
-  /**
-   * Get formatted error message with context
-   */
-  public getDetailedMessage(): string {
-    let details = `[${this.type}] ${this.message}`;
-    
-    if (this.statusCode) {
-      details += ` (Status: ${this.statusCode})`;
-    }
-    
-    if (this.requestMethod && this.requestUrl) {
-      details += ` - ${this.requestMethod} ${this.requestUrl}`;
-    }
-    
-    if (this.causedBy) {
-      details += `\nCaused by: ${this.causedBy.message}`;
-    }
-    
-    return details;
-  }
-}
-
-/**
- * Error Handler for API testing
- * Provides utilities for error creation, classification, and handling
- */
-export class ErrorHandler {
-  /**
-   * Create an API error from any error or response
-   * @param errorOrResponse - Error or API response object
-   * @param defaultMessage - Default message if none can be extracted
-   */
-  public static createApiError(
-    errorOrResponse: any,
-    defaultMessage: string = 'Unknown API error occurred'
-  ): ApiError {
-    // If already an ApiError, return it
-    if (errorOrResponse instanceof ApiError) {
-      return errorOrResponse;
-    }
-
-    let message = defaultMessage;
-    let type = ErrorType.UNKNOWN;
-    let statusCode: number | undefined;
-    let requestUrl: string | undefined;
-    let requestMethod: string | undefined;
-    let responseBody: any;
-    let requestBody: any;
-    let causedBy: Error | undefined;
-    let retryable = false;
-
-    // Handle different error types
-    if (errorOrResponse instanceof Error) {
-      // Standard Error object
-      message = errorOrResponse.message;
-      causedBy = errorOrResponse;
-
-      // Extract information from error properties
-      if ('statusCode' in errorOrResponse) {
-        statusCode = (errorOrResponse as any).statusCode;
-      }
-      
-      if ('url' in errorOrResponse) {
-        requestUrl = (errorOrResponse as any).url;
-      }
-      
-      if ('method' in errorOrResponse) {
-        requestMethod = (errorOrResponse as any).method;
-      }
-      
-      if ('response' in errorOrResponse) {
-        const response = (errorOrResponse as any).response;
-        if (response) {
-          if (response.status) {
-            statusCode = response.status;
-          }
-          if (response.data) {
-            responseBody = response.data;
-          }
-        }
-      }
-      
-      if ('request' in errorOrResponse) {
-        const request = (errorOrResponse as any).request;
-        if (request) {
-          if (request.method) {
-            requestMethod = request.method;
-          }
-          if (request.path) {
-            requestUrl = request.path;
-          }
-          if (request.data) {
-            requestBody = request.data;
-          }
-        }
-      }
-      
-      // Determine error type from error properties or message
-      if (errorOrResponse.code) {
-        switch (errorOrResponse.code) {
-          case 'ECONNABORTED':
-          case 'ETIMEDOUT':
-            type = ErrorType.TIMEOUT;
-            retryable = true;
-            break;
-          case 'ECONNREFUSED':
-          case 'ECONNRESET':
-          case 'ENOTFOUND':
-          case 'ENETUNREACH':
-            type = ErrorType.NETWORK;
-            retryable = true;
-            break;
-        }
-      } else if (errorOrResponse.message) {
-        if (errorOrResponse.message.includes('timeout')) {
-          type = ErrorType.TIMEOUT;
-          retryable = true;
-        } else if (errorOrResponse.message.includes('network')) {
-          type = ErrorType.NETWORK;
-          retryable = true;
-        }
-      }
-    } else if (typeof errorOrResponse === 'object' && errorOrResponse !== null) {
-      // Response object or other object
-      if ('status' in errorOrResponse) {
-        statusCode = errorOrResponse.status as number;
-      }
-      
-      if ('statusCode' in errorOrResponse) {
-        statusCode = errorOrResponse.statusCode as number;
-      }
-      
-      if ('data' in errorOrResponse) {
-        responseBody = errorOrResponse.data;
-      }
-      
-      if ('body' in errorOrResponse) {
-        responseBody = errorOrResponse.body;
-      }
-      
-      if ('url' in errorOrResponse) {
-        requestUrl = errorOrResponse.url as string;
-      }
-      
-      if ('method' in errorOrResponse) {
-        requestMethod = errorOrResponse.method as string;
-      }
-      
-      // Extract error message from response
-      if (responseBody) {
-        if (typeof responseBody === 'object') {
-          message = responseBody.message || responseBody.error || responseBody.errorMessage || defaultMessage;
-        } else if (typeof responseBody === 'string') {
-          message = responseBody;
-        }
-      }
-    } else if (typeof errorOrResponse === 'string') {
-      // String error message
-      message = errorOrResponse;
-    }
-
-    // Determine error type from status code
-    if (statusCode) {
-      switch (true) {
-        case statusCode === 400:
-          type = ErrorType.VALIDATION;
-          retryable = false;
-          break;
-        case statusCode === 401:
-          type = ErrorType.AUTHENTICATION;
-          retryable = false;
-          break;
-        case statusCode === 403:
-          type = ErrorType.PERMISSION;
-          retryable = false;
-          break;
-        case statusCode === 404:
-          type = ErrorType.NOT_FOUND;
-          retryable = false;
-          break;
-        case statusCode === 409:
-          type = ErrorType.CONFLICT;
-          retryable = false;
-          break;
-        case statusCode === 408 || statusCode === 429:
-          type = ErrorType.TIMEOUT;
-          retryable = true;
-          break;
-        case statusCode >= 500:
-          type = ErrorType.SERVER;
-          retryable = true;
-          break;
-      }
-    }
-
-    return new ApiError(message, {
-      type,
-      statusCode,
-      requestUrl,
-      requestMethod,
-      responseBody,
-      requestBody,
-      causedBy,
-      retryable
+  public async post<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'POST', 
+      url, 
+      data, 
+      ...options 
     });
   }
 
   /**
-   * Handle an error with appropriate logging and reporting
-   * @param error - Error to handle
-   * @param context - Additional context for error
-   * @param options - Handling options
+   * PUT request method
    */
-  public static async handleError(
-    error: any,
-    context: Record<string, any> = {},
-    options: {
-      rethrow?: boolean;
-      logLevel?: 'error' | 'warn' | 'info';
-      saveToReport?: boolean;
-      errorName?: string;
-    } = {}
-  ): Promise<ApiError> {
-    const rethrow = options.rethrow !== undefined ? options.rethrow : true;
-    const logLevel = options.logLevel || 'error';
-    const saveToReport = options.saveToReport !== undefined ? options.saveToReport : true;
-    const errorName = options.errorName || 'api-error';
-    
-    // Create ApiError from any error
-    const apiError = this.createApiError(error);
-    
-    // Log error with context
-    const logContext = {
-      ...context,
-      error: apiError.toJSON()
-    };
-    
-    switch (logLevel) {
-      case 'warn':
-        logger.warn(apiError.getDetailedMessage(), logContext);
-        break;
-      case 'info':
-        logger.info(apiError.getDetailedMessage(), logContext);
-        break;
-      case 'error':
-      default:
-        logger.error(apiError.getDetailedMessage(), logContext);
-        break;
-    }
-    
-    // Save error details to report
-    if (saveToReport) {
-      try {
-        await report.saveErrorDetails(apiError, errorName);
-      } catch (reportError) {
-        logger.warn('Failed to save error details to report', { error: reportError });
-      }
-    }
-    
-    // Rethrow if configured
-    if (rethrow) {
-      throw apiError;
-    }
-    
-    return apiError;
-  }
-
-  /**
-   * Check if an error is retryable
-   * @param error - Error to check
-   */
-  public static isRetryable(error: any): boolean {
-    if (error instanceof ApiError) {
-      return error.retryable;
-    }
-    
-    // Convert to ApiError first
-    const apiError = this.createApiError(error);
-    return apiError.retryable;
-  }
-}
-
-test-runner.ts
----------------
-import { logger } from '../utils/logger';
-import { ErrorHandler, ApiError } from '../utils/error-handler';
-import { AsyncUtils } from '../utils/async-utils';
-
-/**
- * Test step function type
- */
-export type TestStepFunction = () => Promise<any>;
-
-/**
- * Test step definition 
- */
-export interface TestStep {
-  name: string;
-  fn: TestStepFunction;
-  timeout?: number;
-  retry?: {
-    attempts: number;
-    delayMs: number;
-    useExponentialBackoff?: boolean;
-  };
-  critical?: boolean;
-}
-
-/**
- * Test runner result
- */
-export interface TestRunResult {
-  success: boolean;
-  steps: Array<{
-    name: string;
-    success: boolean;
-    duration: number;
-    error?: Error;
-    skipped?: boolean;
-  }>;
-  duration: number;
-  error?: Error;
-}
-
-/**
- * Test Runner for orchestrating API test steps with proper async handling
- */
-export class TestRunner {
-  private steps: TestStep[] = [];
-  private stepResults: TestRunResult['steps'] = [];
-  private beforeAllFn?: TestStepFunction;
-  private afterAllFn?: TestStepFunction;
-  private beforeEachFn?: TestStepFunction;
-  private afterEachFn?: TestStepFunction;
-  private cleanupFns: Array<() => Promise<void>> = [];
-  private name: string;
-  private aborted = false;
-
-  /**
-   * Create a new test runner
-   * @param name - Test runner name
-   */
-  constructor(name: string) {
-    this.name = name;
-  }
-
-  /**
-   * Add a test step
-   * @param name - Step name
-   * @param fn - Step function
-   * @param options - Step options
-   */
-  public addStep(
-    name: string,
-    fn: TestStepFunction,
-    options: {
-      timeout?: number;
-      retry?: {
-        attempts: number;
-        delayMs: number;
-        useExponentialBackoff?: boolean;
-      };
-      critical?: boolean;
-    } = {}
-  ): TestRunner {
-    this.steps.push({
-      name,
-      fn,
-      timeout: options.timeout,
-      retry: options.retry,
-      critical: options.critical !== undefined ? options.critical : true
+  public async put<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PUT', 
+      url, 
+      data, 
+      ...options 
     });
-    
-    return this;
   }
 
   /**
-   * Set before all hook
-   * @param fn - Before all function
+   * DELETE request method
    */
-  public beforeAll(fn: TestStepFunction): TestRunner {
-    this.beforeAllFn = fn;
-    return this;
+  public async delete<T = any>(url: string, options: Omit<RequestOptions, 'method' | 'url'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'DELETE', 
+      url, 
+      ...options 
+    });
   }
 
   /**
-   * Set after all hook
-   * @param fn - After all function
+   * PATCH request method
    */
-  public afterAll(fn: TestStepFunction): TestRunner {
-    this.afterAllFn = fn;
-    return this;
-  }
-
-  /**
-   * Set before each hook
-   * @param fn - Before each function
-   */
-  public beforeEach(fn: TestStepFunction): TestRunner {
-    this.beforeEachFn = fn;
-    return this;
-  }
-
-  /**
-   * Set after each hook
-   * @param fn - After each function
-   */
-  public afterEach(fn: TestStepFunction): TestRunner {
-    this.afterEachFn = fn;
-    return this;
-  }
-
-  /**
-   * Add cleanup function
-   * @param fn - Cleanup function
-   */
-  public addCleanup(fn: () => Promise<void>): TestRunner {
-    this.cleanupFns.push(fn);
-    return this;
-  }
-
-  /**
-   * Run all steps
-   */
-  public async run(): Promise<TestRunResult> {
-    const startTime = Date.now();
-    let success = true;
-    let finalError: Error | undefined;
-    
-    logger.info(`Starting test run: ${this.name}`);
-    
-    try {
-      // Run before all hook
-      if (this.beforeAllFn) {
-        try {
-          logger.debug('Running beforeAll hook');
-          await this.beforeAllFn();
-        } catch (error) {
-          const apiError = ErrorHandler.createApiError(error, 'beforeAll hook failed');
-          logger.error('beforeAll hook failed', { error: apiError });
-          throw apiError;
-        }
-      }
-      
-      // Run each step
-      for (let i = 0; i < this.steps.length; i++) {
-        const step = this.steps[i];
-        
-        // Skip if aborted
-        if (this.aborted) {
-          this.stepResults.push({
-            name: step.name,
-            success: false,
-            duration: 0,
-            skipped: true
-          });
-          continue;
-        }
-        
-        logger.info(`Running step ${i + 1}/${this.steps.length}: ${step.name}`);
-        const stepStartTime = Date.now();
-        
-        try {
-          // Run before each hook
-          if (this.beforeEachFn) {
-            try {
-              await this.beforeEachFn();
-            } catch (error) {
-              const apiError = ErrorHandler.createApiError(error, `beforeEach hook failed before step "${step.name}"`);
-              logger.error('beforeEach hook failed', { error: apiError });
-              throw apiError;
-            }
-          }
-          
-          // Run step with timeout and retry if configured
-          let stepResult: any;
-          
-          if (step.retry && step.retry.attempts > 0) {
-            // Run with retry
-            stepResult = await AsyncUtils.retry(
-              () => {
-                // Apply timeout if configured
-                if (step.timeout) {
-                  return AsyncUtils.withTimeout(
-                    step.fn,
-                    step.timeout,
-                    `Step "${step.name}" timed out after ${step.timeout}ms`
-                  );
-                } else {
-                  return step.fn();
-                }
-              },
-              {
-                maxAttempts: step.retry.attempts,
-                delayMs: step.retry.delayMs,
-                useExponentialBackoff: step.retry.useExponentialBackoff !== undefined 
-                  ? step.retry.useExponentialBackoff 
-                  : true,
-                onRetry: (error, attempt) => {
-                  logger.warn(`Retrying step "${step.name}" (attempt ${attempt}/${step.retry!.attempts}): ${error.message}`);
-                }
-              }
-            );
-          } else {
-            // Run without retry
-            if (step.timeout) {
-              stepResult = await AsyncUtils.withTimeout(
-                step.fn,
-                step.timeout,
-                `Step "${step.name}" timed out after ${step.timeout}ms`
-              );
-            } else {
-              stepResult = await step.fn();
-            }
-          }
-          
-          // Run after each hook
-          if (this.afterEachFn) {
-            try {
-              await this.afterEachFn();
-            } catch (error) {
-              const apiError = ErrorHandler.createApiError(error, `afterEach hook failed after step "${step.name}"`);
-              logger.error('afterEach hook failed', { error: apiError });
-              // Don't fail the step if afterEach fails
-            }
-          }
-          
-          const stepDuration = Date.now() - stepStartTime;
-          
-          this.stepResults.push({
-            name: step.name,
-            success: true,
-            duration: stepDuration
-          });
-          
-          logger.info(`Step "${step.name}" completed successfully in ${stepDuration}ms`);
-        } catch (error) {
-          const stepDuration = Date.now() - stepStartTime;
-          const apiError = ErrorHandler.createApiError(error, `Step "${step.name}" failed`);
-          
-          this.stepResults.push({
-            name: step.name,
-            success: false,
-            duration: stepDuration,
-            error: apiError
-          });
-          
-          logger.error(`Step "${step.name}" failed after ${stepDuration}ms: ${apiError.message}`, { error: apiError });
-          
-          // Mark the test as failed
-          success = false;
-          finalError = apiError;
-          
-          // Abort the test if this is a critical step
-          if (step.critical) {
-            logger.warn(`Aborting test run due to failure in critical step: "${step.name}"`);
-            this.aborted = true;
-          }
-        }
-      }
-    } catch (error) {
-      // Catch any unhandled errors
-      const apiError = ErrorHandler.createApiError(error, 'Unhandled error in test run');
-      logger.error('Unhandled error in test run', { error: apiError });
-      
-      success = false;
-      finalError = apiError;
-    } finally {
-      // Run after all hook
-      if (this.afterAllFn) {
-        try {
-          logger.debug('Running afterAll hook');
-          await this.afterAllFn();
-        } catch (error) {
-          const apiError = ErrorHandler.createApiError(error, 'afterAll hook failed');
-          logger.error('afterAll hook failed', { error: apiError });
-          // Don't override success or error if already set
-          if (success) {
-            success = false;
-            finalError = apiError;
-          }
-        }
-      }
-      
-      // Run cleanup functions
-      for (const cleanup of this.cleanupFns) {
-        try {
-          await cleanup();
-        } catch (error) {
-          const apiError = ErrorHandler.createApiError(error, 'Cleanup function failed');
-          logger.error('Cleanup function failed', { error: apiError });
-          // Don't override success or error if already set
-        }
-      }
-    }
-    
-    const duration = Date.now() - startTime;
-    
-    const result: TestRunResult = {
-      success,
-      steps: this.stepResults,
-      duration,
-      error: finalError
-    };
-    
-    logger.info(`Test run "${this.name}" completed in ${duration}ms with status: ${success ? 'SUCCESS' : 'FAILURE'}`);
-    
-    return result;
-  }
-
-  /**
-   * Abort the test run
-   */
-  public abort(): void {
-    this.aborted = true;
-    logger.warn(`Test run "${this.name}" aborted`);
+  public async patch<T = any>(url: string, data?: any, options: Omit<RequestOptions, 'method' | 'url' | 'data'> = {}): Promise<HttpResponse<T>> {
+    return this.request<T>({ 
+      method: 'PATCH', 
+      url, 
+      data, 
+      ...options 
+    });
   }
 }
 
-native-base-api-client.ts
-----------------------------------
-import { RequestConfig, ApiResponse, PollingConfig, PollingResult } from './api/types';
-import { RequestConfigBuilder } from './api/request-config';
-import { NativeRequestExecutor } from './api/native-request-executor';
-import { EnhancedPollingHandler } from './api/enhanced-polling-handler';
-import { config } from './utils/config-manager';
-import { logger } from './utils/logger';
-import { assertResponse, ApiAssertions } from './api/assertions';
+// Export singleton instance
+export const httpClient = HttpClient.getInstance();
+
+src/clients/base-client.ts
+------------------------------
+import { httpClient } from '../framework/http/http-client';
+import { HttpResponse, RequestOptions } from '../framework/http/types';
+import { config } from '../framework/utils/config';
+import { logger } from '../framework/utils/logger';
 
 /**
- * Native Base API Client
- * Provides common functionality for making API requests using Node.js native HTTP/HTTPS
- * Should be extended by specific API clients
+ * Base API Client class
+ * All specific API clients should extend this class
  */
-export abstract class NativeBaseApiClient {
+export abstract class BaseApiClient {
   protected baseUrl: string;
   protected defaultHeaders: Record<string, string>;
 
   /**
-   * Create an API client
-   * @param baseUrl - API base URL (optional, will use config value if not provided)
+   * Create a new API client
+   * @param baseUrl - Base URL for API calls (optional, uses API_BASE_URL from config if not provided)
    */
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || config.get('api.baseUrl');
+    this.baseUrl = baseUrl || config.get('API_BASE_URL');
     this.defaultHeaders = {
       'Content-Type': 'application/json',
       'Accept': 'application/json'
@@ -2163,10 +915,9 @@ export abstract class NativeBaseApiClient {
 
   /**
    * Set base URL
-   * @param baseUrl - New base URL
    */
-  public setBaseUrl(baseUrl: string): void {
-    this.baseUrl = baseUrl;
+  public setBaseUrl(url: string): void {
+    this.baseUrl = url;
   }
 
   /**
@@ -2178,7 +929,6 @@ export abstract class NativeBaseApiClient {
 
   /**
    * Set default headers
-   * @param headers - Headers to set
    */
   public setDefaultHeaders(headers: Record<string, string>): void {
     this.defaultHeaders = {
@@ -2188,9 +938,7 @@ export abstract class NativeBaseApiClient {
   }
 
   /**
-   * Add default header
-   * @param name - Header name
-   * @param value - Header value
+   * Add a default header
    */
   public addDefaultHeader(name: string, value: string): void {
     this.defaultHeaders[name] = value;
@@ -2204,792 +952,492 @@ export abstract class NativeBaseApiClient {
   }
 
   /**
-   * Make a GET request
-   * @param endpoint - API endpoint
-   * @param params - Query parameters
-   * @param headers - Custom headers (will be merged with default headers)
+   * Resolve URL by appending endpoint to base URL
    */
-  protected async get<T = any>(
-    endpoint: string,
-    params?: Record<string, string>,
-    headers?: Record<string, string>
-  ): Promise<ApiResponse<T>> {
-    const requestConfig = this.createRequestConfig('GET', endpoint, null, params, headers);
-    return this.executeRequest<T>(requestConfig);
+  protected resolveUrl(endpoint: string): string {
+    // Ensure there's exactly one slash between baseUrl and endpoint
+    const baseWithSlash = this.baseUrl.endsWith('/') ? this.baseUrl : `${this.baseUrl}/`;
+    const endpointWithoutSlash = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+    
+    return `${baseWithSlash}${endpointWithoutSlash}`;
+  }
+
+  /**
+   * Make a GET request
+   */
+  protected async get<T = any>(endpoint: string, params?: Record<string, string | number | boolean>, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.get<T>(url, params, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
   }
 
   /**
    * Make a POST request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param params - Query parameters
-   * @param headers - Custom headers (will be merged with default headers)
    */
-  protected async post<T = any>(
-    endpoint: string,
-    data?: any,
-    params?: Record<string, string>,
-    headers?: Record<string, string>
-  ): Promise<ApiResponse<T>> {
-    const requestConfig = this.createRequestConfig('POST', endpoint, data, params, headers);
-    return this.executeRequest<T>(requestConfig);
+  protected async post<T = any>(endpoint: string, data?: any, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.post<T>(url, data, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
   }
 
   /**
    * Make a PUT request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param params - Query parameters
-   * @param headers - Custom headers (will be merged with default headers)
    */
-  protected async put<T = any>(
-    endpoint: string,
-    data?: any,
-    params?: Record<string, string>,
-    headers?: Record<string, string>
-  ): Promise<ApiResponse<T>> {
-    const requestConfig = this.createRequestConfig('PUT', endpoint, data, params, headers);
-    return this.executeRequest<T>(requestConfig);
+  protected async put<T = any>(endpoint: string, data?: any, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.put<T>(url, data, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
   }
 
   /**
    * Make a DELETE request
-   * @param endpoint - API endpoint
-   * @param params - Query parameters
-   * @param headers - Custom headers (will be merged with default headers)
    */
-  protected async delete<T = any>(
-    endpoint: string,
-    params?: Record<string, string>,
-    headers?: Record<string, string>
-  ): Promise<ApiResponse<T>> {
-    const requestConfig = this.createRequestConfig('DELETE', endpoint, null, params, headers);
-    return this.executeRequest<T>(requestConfig);
+  protected async delete<T = any>(endpoint: string, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.delete<T>(url, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
   }
 
   /**
    * Make a PATCH request
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param params - Query parameters
-   * @param headers - Custom headers (will be merged with default headers)
    */
-  protected async patch<T = any>(
-    endpoint: string,
-    data?: any,
-    params?: Record<string, string>,
-    headers?: Record<string, string>
-  ): Promise<ApiResponse<T>> {
-    const requestConfig = this.createRequestConfig('PATCH', endpoint, data, params, headers);
-    return this.executeRequest<T>(requestConfig);
+  protected async patch<T = any>(endpoint: string, data?: any, options: Partial<RequestOptions> = {}): Promise<HttpResponse<T>> {
+    const url = this.resolveUrl(endpoint);
+    return httpClient.patch<T>(url, data, {
+      headers: { ...this.defaultHeaders, ...options.headers },
+      ...options
+    });
   }
 
   /**
-   * Create request configuration
-   * @param method - HTTP method
-   * @param endpoint - API endpoint
-   * @param data - Request body
-   * @param params - Query parameters
-   * @param headers - Custom headers
-   */
-  protected createRequestConfig(
-    method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
-    endpoint: string,
-    data?: any,
-    params?: Record<string, string>,
-    headers?: Record<string, string>
-  ): RequestConfig {
-    // Create request config using builder
-    const configBuilder = new RequestConfigBuilder(endpoint, method)
-      .withBaseUrl(this.baseUrl)
-      .withHeaders({
-        ...this.defaultHeaders,
-        ...headers
-      });
-    
-    // Add data if provided
-    if (data) {
-      configBuilder.withData(data);
-    }
-    
-    // Add params if provided
-    if (params) {
-      configBuilder.withParams(params);
-    }
-    
-    return configBuilder.build();
-  }
-
-  /**
-   * Execute an API request
-   * @param requestConfig - Request configuration
-   */
-  protected async executeRequest<T = any>(requestConfig: RequestConfig): Promise<ApiResponse<T>> {
-    return NativeRequestExecutor.executeRequest<T>(requestConfig);
-  }
-
-  /**
-   * Poll an API endpoint until a condition is met
-   * @param requestFn - Function that makes the request
-   * @param condition - Condition function that returns true when polling should stop
-   * @param intervalMs - Polling interval in milliseconds
-   * @param timeoutMs - Polling timeout in milliseconds
-   * @param maxAttempts - Maximum number of polling attempts
-   * @param options - Additional polling options
+   * Wait for a condition to be met with polling
    */
   protected async pollUntil<T = any>(
-    requestFn: () => Promise<ApiResponse<T>>,
-    condition: (response: ApiResponse<T>) => boolean,
-    intervalMs: number = 1000,
-    timeoutMs: number = 30000,
-    maxAttempts: number = 30,
+    endpoint: string,
+    condition: (response: HttpResponse<T>) => boolean,
     options: {
-      useExponentialBackoff?: boolean;
-      maxBackoffMs?: number;
-      throwOnFailure?: boolean;
-      requestTimeoutMs?: number;
-    } = {}
-  ): Promise<PollingResult<T>> {
-    const pollingConfig: PollingConfig = {
-      intervalMs,
-      timeoutMs,
-      maxAttempts,
-      condition,
-      useExponentialBackoff: options.useExponentialBackoff !== undefined ? options.useExponentialBackoff : true,
-      maxBackoffMs: options.maxBackoffMs || 10000,
-      throwOnFailure: options.throwOnFailure !== undefined ? options.throwOnFailure : true,
-      requestTimeoutMs: options.requestTimeoutMs || 10000
-    };
-    
-    return EnhancedPollingHandler.pollUntilCondition<T>(requestFn, pollingConfig);
-  }
-
-  /**
-   * Wait until a specific condition is met
-   * Simplified version of pollUntil for use cases where a full API request isn't needed
-   * 
-   * @param conditionFn - Function that returns a promise resolving to a boolean
-   * @param description - Description of what we're waiting for (for logging)
-   * @param options - Wait options
-   */
-  protected async waitUntil(
-    conditionFn: () => Promise<boolean>,
-    description: string,
-    options: {
-      intervalMs?: number;
-      timeoutMs?: number;
+      interval?: number;
+      timeout?: number;
       maxAttempts?: number;
-      useExponentialBackoff?: boolean;
-      throwOnFailure?: boolean;
+      params?: Record<string, string | number | boolean>;
+      requestOptions?: Partial<RequestOptions>;
     } = {}
-  ): Promise<boolean> {
-    return EnhancedPollingHandler.waitUntil(conditionFn, description, options);
-  }
-
-  /**
-   * Create assertions for an API response
-   * @param response - API response
-   */
-  protected assert<T = any>(response: ApiResponse<T>): ApiAssertions<T> {
-    return assertResponse<T>(response);
+  ): Promise<HttpResponse<T>> {
+    const {
+      interval = 2000,
+      timeout = 60000,
+      maxAttempts = 30,
+      params = {},
+      requestOptions = {}
+    } = options;
+    
+    const startTime = Date.now();
+    let attempts = 0;
+    
+    logger.info(`Starting polling for endpoint: ${endpoint}`);
+    
+    while (true) {
+      attempts++;
+      try {
+        const response = await this.get<T>(endpoint, params, requestOptions);
+        
+        if (condition(response)) {
+          logger.info(`Polling condition met after ${attempts} attempts (${Date.now() - startTime}ms)`);
+          return response;
+        }
+        
+        logger.debug(`Polling attempt ${attempts}: condition not met yet`);
+      } catch (error) {
+        logger.warn(`Polling attempt ${attempts} failed with error`, { error });
+      }
+      
+      // Check if we've reached the maximum number of attempts
+      if (maxAttempts && attempts >= maxAttempts) {
+        throw new Error(`Polling reached maximum attempts (${maxAttempts})`);
+      }
+      
+      // Check if we've reached the timeout
+      if (Date.now() - startTime >= timeout) {
+        throw new Error(`Polling timed out after ${timeout}ms`);
+      }
+      
+      // Wait before the next attempt
+      await new Promise(resolve => {
+        const timeoutId = setTimeout(resolve, interval);
+        if (timeoutId.unref) {
+          timeoutId.unref();
+        }
+      });
+    }
   }
 }
 
-advanced-api-client.ts
--------------------------
-import { NativeBaseApiClient } from '../framework/base-api-client';
-import { ApiResponse } from '../framework/api/types';
+src/framework/utils/setup-tests.ts
+-------------------------------------
+/**
+ * Test setup file
+ * Initializes the required components before running tests
+ */
+
+import { config } from './config';
+import { logger } from './logger';
+import { certManager } from './cert-manager';
+
+// Initialize configuration
+config.initialize();
+
+// Initialize certificate manager
+certManager.initialize();
+
+// Set up global error handlers
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Promise Rejection', { reason });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', { error });
+});
+
+// Log test environment info
+logger.info('Test environment initialized', {
+  environment: process.env.NODE_ENV || 'dev',
+  baseUrl: config.get('API_BASE_URL'),
+  hasCertificate: certManager.hasCertificate()
+});
+
+src/test/asset-layout.test.ts
+---------------------------
+import { AssetApiClient } from '../clients/asset-client';
 import { logger } from '../framework/utils/logger';
-import { AsyncUtils } from '../framework/utils/async-utils';
+
+describe('Asset Layout API', () => {
+  const assetClient = new AssetApiClient();
+  
+  // Set test timeout to 2 minutes to accommodate for polling
+  jest.setTimeout(120000);
+  
+  beforeAll(() => {
+    logger.info('Starting Asset Layout API tests');
+  });
+  
+  afterAll(() => {
+    logger.info('Completed Asset Layout API tests');
+  });
+  
+  it('should retrieve asset layout successfully', async () => {
+    // Create test request
+    const request = {
+      messageId: Math.floor(Math.random() * 1000000),  // Random message ID
+      dealId: 34384,
+      reportDate: '2024-03-31'
+    };
+    
+    try {
+      // Call API
+      const response = await assetClient.getAssetLayout(request);
+      
+      // Verify response
+      expect(response.status).toBe(200);
+      expect(response.data).toBeDefined();
+      expect(response.data.messageId).toBe(request.messageId);
+      
+      // Log success
+      logger.info('Asset layout retrieved successfully', { 
+        messageId: response.data.messageId,
+        status: response.data.status 
+      });
+    } catch (error) {
+      // Log and rethrow to fail the test
+      logger.error('Asset layout test failed', { error });
+      throw error;
+    }
+  });
+  
+  it('should retrieve asset layout with polling', async () => {
+    // Create test request
+    const request = {
+      messageId: Math.floor(Math.random() * 1000000),  // Random message ID
+      dealId: 34384,
+      reportDate: '2024-03-31'
+    };
+    
+    try {
+      // Call API with polling
+      const response = await assetClient.getAssetLayoutWithPolling(request);
+      
+      // Verify response
+      expect(response.status).toBe(200);
+      expect(response.data).toBeDefined();
+      expect(response.data.status).toBe('COMPLETED');
+      
+      // Log success
+      logger.info('Asset layout with polling retrieved successfully', { 
+        messageId: response.data.messageId,
+        status: response.data.status 
+      });
+    } catch (error) {
+      // Log and rethrow to fail the test
+      logger.error('Asset layout polling test failed', { error });
+      throw error;
+    }
+  });
+});
+
+src/framework/index.ts
+-------------------------
+/**
+ * Framework index file
+ * Exports all framework components
+ */
+
+// HTTP module exports
+export { httpClient } from './http/http-client';
+export { HttpMethod, RequestOptions, HttpResponse, RetryConfig } from './http/types';
+
+// Utility exports
+export { config } from './utils/config';
+export { logger } from './utils/logger';
+export { certManager } from './utils/cert-manager';
+export { RetryHandler } from './utils/retry';
+
+src/index.ts
+-----------------
 
 /**
- * Advanced API Client Example
- * Demonstrates advanced async patterns for reliable API testing
+ * Main index file
+ * Exports all components for external use
  */
-export class AdvancedApiClient extends NativeBaseApiClient {
-  // Semaphore for limiting concurrent requests
-  private requestSemaphore = AsyncUtils.createSemaphore(5);
-  
-  // Lock for operations that need to be executed sequentially
-  private sequentialLock = AsyncUtils.createLock();
-  
-  /**
-   * Create a new Advanced API client
-   * @param baseUrl - API base URL (optional)
-   */
+
+// Export framework components
+export * from './framework';
+
+// Export client classes
+export { BaseApiClient } from './clients/base-client';
+export { AssetApiClient } from './clients/asset-client';
+
+// Initialize required components
+import { config } from './framework/utils/config';
+import { certManager } from './framework/utils/cert-manager';
+import { logger } from './framework/utils/logger';
+
+// Initialize configuration
+config.initialize();
+
+// Initialize certificate manager
+certManager.initialize();
+
+logger.info('API Testing Framework initialized');
+
+README.md
+-------------
+# Simple API Testing Framework
+
+A plug-and-play API testing framework that requires minimal configuration. This framework is designed for testing RESTful APIs that use client certificates for authentication.
+
+## Features
+
+- **Simple & Lightweight**: Built using only Node.js native HTTP modules
+- **Certificate Authentication**: Supports PFX certificates with passphrase
+- **Environment Configuration**: Easy switching between environments (dev, sit, prod)
+- **Automatic Retries**: Built-in retry mechanism for transient failures
+- **Polling Support**: Wait for long-running operations to complete
+- **Detailed Logging**: Comprehensive logging for requests and responses
+- **Type Safety**: Written in TypeScript for better developer experience
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 14+
+- npm or yarn
+
+### Installation
+
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/api-test-framework.git
+   cd api-test-framework
+   ```
+
+2. Install dependencies:
+   ```
+   npm install
+   ```
+
+3. Add your client certificate:
+   - Place your `.pfx` certificate in the `certs` directory
+   - Update the config files with the certificate path and passphrase
+
+4. Configure your API endpoints:
+   - Update the `.env` files in the `config` directory with your API base URLs
+
+### Running Tests
+
+Run tests in the default environment:
+```
+npm test
+```
+
+Run tests in a specific environment:
+```
+npm run test:dev    # Development environment
+npm run test:sit    # SIT environment
+npm run test:prod   # Production environment
+```
+
+Run in debug mode:
+```
+npm run debug
+```
+
+## Framework Structure
+
+```
+/api-test-framework
+  ├── config/               # Environment configuration
+  ├── certs/                # Client certificates
+  ├── src/                  # Source code
+  │   ├── framework/        # Core framework
+  │   ├── clients/          # API clients
+  │   └── tests/            # Test files
+  └── logs/                 # Log files (created at runtime)
+```
+
+## Creating a New API Client
+
+To add a new API client, create a new class that extends `BaseApiClient`:
+
+```typescript
+// src/clients/my-client.ts
+import { BaseApiClient } from './base-client';
+import { HttpResponse } from '../framework/http/types';
+
+export class MyApiClient extends BaseApiClient {
   constructor(baseUrl?: string) {
     super(baseUrl);
-    logger.info('AdvancedApiClient initialized');
   }
 
-  /**
-   * Get user by ID with concurrency control
-   * @param userId - User ID
-   */
-  public async getUserById(userId: string): Promise<ApiResponse<any>> {
-    // Acquire semaphore to limit concurrent requests
-    const releaseToken = await this.requestSemaphore.acquire();
-    
-    try {
-      logger.info(`Getting user with ID: ${userId}`);
-      
-      // Use AsyncUtils.withTimeout to ensure the request doesn't hang
-      return await AsyncUtils.withTimeout(
-        () => this.get(`/users/${userId}`),
-        15000,
-        `Fetching user ${userId} timed out after 15 seconds`
-      );
-    } finally {
-      // Always release the semaphore
-      releaseToken();
-    }
+  // Add your API methods
+  public async getMyResource(id: string): Promise<HttpResponse<any>> {
+    return this.get(`/my-resources/${id}`);
   }
 
-  /**
-   * Create a new user with retry logic
-   * @param userData - User data
-   */
-  public async createUser(userData: any): Promise<ApiResponse<any>> {
-    logger.info(`Creating new user`);
-    
-    // Use AsyncUtils.retry for automatic retry with exponential backoff
-    return await AsyncUtils.retry(
-      () => this.post('/users', userData),
-      {
-        maxAttempts: 5,
-        delayMs: 1000,
-        useExponentialBackoff: true,
-        maxBackoffMs: 15000,
-        // Only retry specific status codes
-        shouldRetry: (error) => {
-          const statusCode = error.response?.status || 0;
-          return [408, 429, 500, 502, 503, 504].includes(statusCode) || 
-                 error.message.includes('timeout');
-        },
-        onRetry: (error, attempt) => {
-          logger.warn(`Retry attempt ${attempt} for user creation: ${error.message}`);
-        }
-      }
-    );
-  }
-
-  /**
-   * Update user data with sequential locking
-   * Ensures that updates to the same user are processed sequentially
-   * @param userId - User ID
-   * @param userData - Updated user data
-   */
-  public async updateUser(userId: string, userData: any): Promise<ApiResponse<any>> {
-    // Acquire sequential lock to prevent race conditions
-    const releaseLock = await this.sequentialLock.acquire();
-    
-    try {
-      logger.info(`Updating user with ID: ${userId}`);
-      return await this.put(`/users/${userId}`, userData);
-    } finally {
-      // Always release the lock
-      releaseLock();
-    }
-  }
-
-  /**
-   * Process multiple users in parallel with concurrency control
-   * @param userIds - Array of user IDs to process
-   */
-  public async processUsers(userIds: string[]): Promise<ApiResponse<any>[]> {
-    logger.info(`Processing ${userIds.length} users in parallel`);
-    
-    // Use mapWithConcurrency to process multiple users with controlled concurrency
-    return await AsyncUtils.mapWithConcurrency(
-      userIds,
-      async (userId) => {
-        logger.debug(`Processing user: ${userId}`);
-        return await this.get(`/users/${userId}`);
-      },
-      {
-        concurrency: 3, // Process 3 users at a time
-        timeoutMs: 10000, // 10 second timeout per user
-        stopOnError: false // Continue processing even if some requests fail
-      }
-    );
-  }
-
-  /**
-   * Wait for user creation to complete with enhanced polling
-   * @param userId - User ID
-   * @param options - Polling options
-   */
-  public async waitForUserCreation(
-    userId: string,
-    options: {
-      timeoutMs?: number;
-      intervalMs?: number;
-      maxAttempts?: number;
-    } = {}
-  ): Promise<ApiResponse<any>> {
-    logger.info(`Waiting for user creation to complete: ${userId}`);
-    
-    const timeoutMs = options.timeoutMs || 60000; // 1 minute default
-    const intervalMs = options.intervalMs || 2000; // 2 second interval default
-    const maxAttempts = options.maxAttempts || 30;
-    
-    const pollingResult = await this.pollUntil(
-      // Request function with error handling
-      async () => {
-        try {
-          return await this.get(`/users/${userId}/status`);
-        } catch (error: any) {
-          // For 404 errors, we want to continue polling as the resource might not exist yet
-          if (error.response?.status === 404) {
-            return {
-              status: 404,
-              statusText: 'Not Found',
-              data: { status: 'pending' },
-              headers: {},
-              responseTime: 0
-            };
-          }
-          throw error;
-        }
-      },
-      // Condition function - stop polling when user status is "active"
-      (response) => {
-        if (response.status !== 200 && response.status !== 404) return false;
-        return response.data?.status === 'active';
-      },
-      // Polling configuration
-      intervalMs,
-      timeoutMs,
-      maxAttempts,
-      {
-        useExponentialBackoff: true,
-        maxBackoffMs: 15000,
-        requestTimeoutMs: 10000, // 10 second timeout for each request
-        throwOnFailure: true
-      }
-    );
-    
-    if (!pollingResult.success) {
-      throw new Error(`User creation polling failed after ${timeoutMs}ms`);
-    }
-    
-    logger.info(`User creation completed for user ${userId}`);
-    return pollingResult.response;
-  }
-
-  /**
-   * Check if a user exists with a simplified wait utility
-   * @param userId - User ID
-   * @param timeoutMs - Maximum time to wait for user to exist
-   */
-  public async waitForUserExists(userId: string, timeoutMs: number = 30000): Promise<boolean> {
-    logger.info(`Waiting for user ${userId} to exist`);
-    
-    return await this.waitUntil(
-      // Condition function - checks if user exists
-      async () => {
-        try {
-          const response = await this.get(`/users/${userId}`);
-          return response.status === 200;
-        } catch (error: any) {
-          // Return false for 404 errors, but throw other errors
-          if (error.response?.status === 404) {
-            return false;
-          }
-          throw error;
-        }
-      },
-      `User ${userId} to exist`,
-      {
-        intervalMs: 1000,
-        timeoutMs,
-        useExponentialBackoff: true,
-        throwOnFailure: false // Return false instead of throwing
-      }
-    );
+  public async createMyResource(data: any): Promise<HttpResponse<any>> {
+    return this.post('/my-resources', data);
   }
 }
+```
 
-enhanced-api-steps.ts
-----------------------------------------------------------------------
-When('I update user {string} with async handling:', async function(userId: string, dataTable) {
-  // Convert data table to user object
-  const userData = dataTable.rowsHash();
+## Writing Tests
+
+Create test files in the `src/tests` directory:
+
+```typescript
+// src/tests/my-resource.test.ts
+import { MyApiClient } from '../clients/my-client';
+import { logger } from '../framework/utils/logger';
+
+describe('My Resource API', () => {
+  const client = new MyApiClient();
   
-  testRunner.addStep(`Update user ${userId}`, async () => {
-    logger.info(`Updating user ${userId}`, { userData });
-    
-    try {
-      const response = await apiClient.updateUser(userId, userData);
-      testContext.setApiResponse(response);
-      return response;
-    } catch (error) {
-      const apiError = ErrorHandler.createApiError(error, `Failed to update user ${userId}`);
-      logger.error('Error updating user', { error: apiError, userId, userData });
-      throw apiError;
-    }
-  }, {
-    retry: {
-      attempts: 2,
-      delayMs: 1000
-    },
-    timeout: 15000
+  it('should get a resource', async () => {
+    const response = await client.getMyResource('123');
+    expect(response.status).toBe(200);
+    expect(response.data).toBeDefined();
   });
   
-  // Execute the test runner
-  const result = await testRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error(`Failed to update user ${userId}`);
-  }
-});
-
-When('I delete user with ID {string} with async handling', async function(userId: string) {
-  testRunner.addStep(`Delete user ${userId}`, async () => {
-    logger.info(`Deleting user with ID: ${userId}`);
-    
-    try {
-      const response = await apiClient.deleteUser(userId);
-      testContext.setApiResponse(response);
-      return response;
-    } catch (error) {
-      const apiError = ErrorHandler.createApiError(error, `Failed to delete user ${userId}`);
-      logger.error('Error deleting user', { error: apiError, userId });
-      throw apiError;
-    }
-  }, {
-    retry: {
-      attempts: 1,
-      delayMs: 1000
-    },
-    timeout: 10000
+  it('should create a resource', async () => {
+    const data = { name: 'Test Resource' };
+    const response = await client.createMyResource(data);
+    expect(response.status).toBe(201);
   });
-  
-  // Execute the test runner
-  const result = await testRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error(`Failed to delete user ${userId}`);
+});
+```
+
+## Environment Configuration
+
+Configure different environments by updating the `.env` files in the `config` directory:
+
+```properties
+# config/.env.sit
+API_BASE_URL=https://api-sit.example.com/v1
+CERTIFICATE_PATH=./certs/my-cert.pfx
+CERTIFICATE_PASSPHRASE=mypassphrase
+REQUEST_TIMEOUT_MS=30000
+RETRY_ATTEMPTS=3
+RETRY_DELAY_MS=1000
+LOG_LEVEL=info
+```
+
+## Advanced Features
+
+### Polling for Long-Running Operations
+
+```typescript
+// Wait for a resource to be in "COMPLETED" status
+const response = await client.pollUntil(
+  `/resources/${id}/status`,
+  (response) => response.data.status === 'COMPLETED',
+  {
+    interval: 5000,    // Check every 5 seconds
+    timeout: 300000,   // Timeout after 5 minutes
+    maxAttempts: 60    // Maximum 60 attempts
+  }
+);
+```
+
+### Custom Retry Configuration
+
+```typescript
+// Custom retry configuration for a specific request
+const response = await client.get('/flaky-endpoint', {}, {
+  retryConfig: {
+    attempts: 5,
+    delayMs: 2000,
+    statusCodes: [429, 500, 502, 503, 504],
+    useExponentialBackoff: true,
+    maxBackoffMs: 60000
   }
 });
+```
 
-When('I wait for user creation to complete with enhanced polling for user {string}', async function(userId: string) {
-  testRunner.addStep(`Wait for user creation to complete: ${userId}`, async () => {
-    logger.info(`Waiting for user creation to complete: ${userId}`);
-    
-    try {
-      const response = await apiClient.waitForUserCreation(userId, {
-        timeoutMs: 60000,  // 1 minute timeout
-        intervalMs: 2000,  // 2 second interval
-        maxAttempts: 30
-      });
-      
-      testContext.setApiResponse(response);
-      return response;
-    } catch (error) {
-      const apiError = ErrorHandler.createApiError(error, `Failed waiting for user creation: ${userId}`);
-      logger.error('Error waiting for user creation', { error: apiError, userId });
-      throw apiError;
-    }
-  }, {
-    // No retry for polling operations as they already have built-in retry
-    timeout: 70000  // Allow extra time above the internal polling timeout
-  });
-  
-  // Execute the test runner
-  const result = await testRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error(`Failed waiting for user creation: ${userId}`);
+### Custom Headers
+
+```typescript
+// Add custom headers for a specific request
+const response = await client.post('/secure-endpoint', data, {
+  headers: {
+    'X-Custom-Header': 'custom-value',
+    'Authorization': 'Bearer token123'
   }
 });
+```
 
-When('I process multiple users in parallel', async function(dataTable) {
-  // Extract user IDs from data table
-  const userIds = dataTable.raw().map(row => row[0]);
-  
-  testRunner.addStep(`Process ${userIds.length} users in parallel`, async () => {
-    logger.info(`Processing ${userIds.length} users in parallel`, { userIds });
-    
-    try {
-      const responses = await apiClient.processUsers(userIds);
-      
-      // Store the responses by user ID
-      responses.forEach((response, index) => {
-        testContext.set(`user_${userIds[index]}_response`, response);
-      });
-      
-      // Store the first response as the main API response
-      if (responses.length > 0) {
-        testContext.setApiResponse(responses[0]);
-      }
-      
-      return responses;
-    } catch (error) {
-      const apiError = ErrorHandler.createApiError(error, 'Failed to process users in parallel');
-      logger.error('Error processing users in parallel', { error: apiError, userIds });
-      throw apiError;
-    }
-  }, {
-    timeout: 30000
-  });
-  
-  // Execute the test runner
-  const result = await testRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error('Failed to process users in parallel');
-  }
-});
+## Troubleshooting
 
-// Response validation steps with enhanced error handling
-Then('the response status code should be {int} with validation', function(statusCode: number) {
-  const response = testContext.getApiResponse();
-  if (!response) {
-    throw new ApiError('No API response found in test context', {
-      critical: true
-    });
-  }
-  
-  try {
-    assertResponse(response).hasStatus(statusCode);
-    logger.info(`Response status code validated: ${statusCode}`);
-  } catch (error) {
-    const apiError = ErrorHandler.createApiError(
-      error, 
-      `Expected status code ${statusCode} but got ${response.status}`
-    );
-    throw apiError;
-  }
-});
+### Certificate Issues
+- Ensure your certificate file exists in the specified path
+- Verify the passphrase is correct
+- Check that the certificate is valid for the target environment
 
-Then('the response should contain fields:', function(dataTable) {
-  const response = testContext.getApiResponse<any>();
-  if (!response) {
-    throw new ApiError('No API response found in test context', {
-      critical: true
-    });
-  }
-  
-  // Convert data table to expected fields and values
-  const expectedFields = dataTable.rowsHash();
-  
-  try {
-    // Validate each field
-    Object.entries(expectedFields).forEach(([field, expectedValue]) => {
-      assertResponse(response).hasProperty(field, expectedValue);
-      logger.debug(`Validated field ${field} = ${expectedValue}`);
-    });
-    
-    logger.info('All response fields validated successfully');
-  } catch (error) {
-    const apiError = ErrorHandler.createApiError(
-      error, 
-      'Response field validation failed'
-    );
-    
-    // Enhance with response data for debugging
-    apiError.responseBody = response.data;
-    
-    throw apiError;
-  }
-});
+### Connection Issues
+- Verify the API base URL is correct
+- Check network connectivity to the API server
+- Ensure no proxy or firewall is blocking the connection
 
-// Complex async scenario combining multiple operations
-When('I perform a complete user lifecycle with async handling', async function() {
-  // Create test runner with multiple steps
-  const userLifecycleRunner = new TestRunner('User Lifecycle')
-    .beforeAll(async () => {
-      logger.info('Starting user lifecycle test');
-    })
-    .afterAll(async () => {
-      logger.info('Completed user lifecycle test');
-    });
-  
-  // Step 1: Create user
-  userLifecycleRunner.addStep('Create new user', async () => {
-    const userData = {
-      name: `Test User ${Date.now()}`,
-      email: `test.${Date.now()}@example.com`,
-      role: 'user'
-    };
-    
-    const response = await apiClient.createUser(userData);
-    testContext.set('user', response.data);
-    testContext.set('userId', response.data.id);
-    return response;
-  }, { 
-    retry: { attempts: 2, delayMs: 1000 },
-    critical: true
-  });
-  
-  // Step 2: Wait for user creation
-  userLifecycleRunner.addStep('Wait for user provisioning', async () => {
-    const userId = testContext.get<string>('userId');
-    if (!userId) {
-      throw new Error('No userId found in context');
-    }
-    
-    return await apiClient.waitForUserExists(userId, 30000);
-  });
-  
-  // Step 3: Update user
-  userLifecycleRunner.addStep('Update user', async () => {
-    const userId = testContext.get<string>('userId');
-    if (!userId) {
-      throw new Error('No userId found in context');
-    }
-    
-    const updateData = {
-      role: 'admin'
-    };
-    
-    return await apiClient.updateUser(userId, updateData);
-  });
-  
-  // Step 4: Get user
-  userLifecycleRunner.addStep('Get updated user', async () => {
-    const userId = testContext.get<string>('userId');
-    if (!userId) {
-      throw new Error('No userId found in context');
-    }
-    
-    const response = await apiClient.getUserById(userId);
-    testContext.setApiResponse(response);
-    return response;
-  });
-  
-  // Execute all steps
-  const result = await userLifecycleRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error('User lifecycle test failed');
-  }
-  
-  logger.info('User lifecycle test completed successfully');
-});
+### Debugging
+- Set `LOG_LEVEL=debug` in the environment config for detailed logs
+- Use `npm run debug` to run with Node.js inspector
+- Check the `logs` directory for detailed log files
 
-// After hook to clean up any resources
-After('@api', async function() {
-  try {
-    // Perform any necessary cleanup
-    const userId = testContext.get<string>('userId');
-    if (userId) {
-      logger.info(`Cleaning up: deleting user ${userId}`);
-      try {
-        await apiClient.deleteUser(userId);
-      } catch (error) {
-        logger.warn(`Failed to delete user ${userId} during cleanup`, { error });
-        // Don't fail the test for cleanup errors
-      }
-    }
-  } catch (error) {
-    logger.warn('Error during API test cleanup', { error });
-  }
-});
-import { Given, When, Then, Before, After } from '@cucumber/cucumber';
-import { AdvancedApiClient } from '../clients/advanced-api-client';
-import { testContext } from '../support/test-context';
-import { logger } from '../utils/logger';
-import { config } from '../utils/config-manager';
-import { ApiResponse } from '../api/types';
-import { assertResponse } from '../api/assertions';
-import { TestRunner } from '../utils/test-runner';
-import { ErrorHandler, ApiError } from '../utils/error-handler';
+## License
 
-// Initialize API client
-const apiClient = new AdvancedApiClient(config.get('api.baseUrl'));
-
-// Test runner for sequential operations
-let testRunner: TestRunner;
-
-// Initialize test runner for each scenario
-Before('@api', function() {
-  const scenarioName = this.pickle?.name || 'Unknown API Scenario';
-  logger.info(`Initializing test runner for scenario: ${scenarioName}`);
-  
-  testRunner = new TestRunner(scenarioName)
-    .beforeAll(async () => {
-      // Initialize any resources needed for the test
-      logger.info('Setting up API test environment');
-      testContext.set('apiClient', apiClient);
-    })
-    .afterAll(async () => {
-      // Clean up resources
-      logger.info('Cleaning up API test environment');
-    });
-});
-
-// Background steps
-Given('I am using the API client', function() {
-  logger.info('Initializing API client for testing');
-  testContext.set('apiClient', apiClient);
-});
-
-// Enhanced user-related steps
-When('I request user with ID {string} with retry', async function(userId: string) {
-  testRunner.addStep(`Request user with ID: ${userId}`, async () => {
-    logger.info(`Requesting user with ID: ${userId}`);
-    const response = await apiClient.getUserById(userId);
-    testContext.setApiResponse(response);
-    testContext.set('userId', userId);
-    return response;
-  }, {
-    // Configure retry for this step
-    retry: {
-      attempts: 3,
-      delayMs: 1000,
-      useExponentialBackoff: true
-    },
-    // Set timeout for this step
-    timeout: 15000,
-    // Mark as critical step
-    critical: true
-  });
-  
-  // Execute the test runner
-  const result = await testRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error('Failed to request user');
-  }
-});
-
-When('I create a new user with async handling:', async function(dataTable) {
-  // Convert data table to user object
-  const userData = dataTable.rowsHash();
-  
-  testRunner.addStep(`Create new user`, async () => {
-    logger.info('Creating new user', { userData });
-    
-    try {
-      const response = await apiClient.createUser(userData);
-      testContext.setApiResponse(response);
-      
-      // Store user ID for later steps
-      if (response.data && response.data.id) {
-        testContext.set('userId', response.data.id);
-      }
-      
-      return response;
-    } catch (error) {
-      // Enhanced error handling
-      const apiError = ErrorHandler.createApiError(error, 'Failed to create user');
-      logger.error('Error creating user', { error: apiError, userData });
-      throw apiError;
-    }
-  }, {
-    retry: {
-      attempts: 2,
-      delayMs: 2000
-    },
-    timeout: 20000
-  });
-  
-  // Execute the test runner
-  const result = await testRunner.run();
-  
-  if (!result.success) {
-    throw result.error || new Error('Failed to create user');
-  }
-
+This project is licensed under the ISC License.
