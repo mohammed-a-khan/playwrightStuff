@@ -52,13 +52,15 @@ playwright-api-framework/
   "description": "Enterprise-level API test automation framework using Playwright, TypeScript, and Cucumber BDD",
   "main": "index.js",
   "scripts": {
-    "test": "cucumber-js --require cucumber.js",
-    "test:sit": "cross-env NODE_ENV=sit cucumber-js --require cucumber.js",
-    "test:uat": "cross-env NODE_ENV=uat cucumber-js --require cucumber.js",
-    "test:prod": "cross-env NODE_ENV=prod cucumber-js --require cucumber.js",
-    "test:debug": "cross-env DEBUG=true cucumber-js --require cucumber.js",
-    "report": "node ./src/helpers/reportHelper.js",
-    "clean": "rimraf reports/json/* reports/html/*"
+    "build": "tsc",
+    "pretest": "npm run build",
+    "test": "cucumber-js",
+    "test:sit": "cross-env NODE_ENV=sit cucumber-js",
+    "test:uat": "cross-env NODE_ENV=uat cucumber-js",
+    "test:prod": "cross-env NODE_ENV=prod cucumber-js",
+    "test:debug": "cross-env DEBUG=true cucumber-js",
+    "report": "node ./dist/src/helpers/reportHelper.js",
+    "clean": "rimraf reports/json/* reports/html/* dist/*"
   },
   "keywords": [
     "playwright",
@@ -94,9 +96,9 @@ playwright-api-framework/
 // tsconfig.json
 {
   "compilerOptions": {
-    "target": "ES2021",
+    "target": "ES2018",
     "module": "commonjs",
-    "lib": ["es2021", "dom"],
+    "lib": ["es2018", "dom"],
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "moduleResolution": "node",
@@ -108,9 +110,11 @@ playwright-api-framework/
       "@src/*": ["./src/*"],
       "@tests/*": ["./tests/*"]
     },
-    "strict": true
+    "allowJs": true,
+    "strict": false,
+    "noImplicitAny": false
   },
-  "include": ["**/*.ts"],
+  "include": ["**/*.ts", "**/*.js"],
   "exclude": ["node_modules", "dist"]
 }
 
@@ -118,8 +122,8 @@ playwright-api-framework/
 const common = {
   require: [
     'ts-node/register',
-    'src/hooks/hooks.ts',
-    'tests/step-definitions/**/*.ts'
+    './src/hooks/hooks.js',
+    './tests/step-definitions/**/*.js'
   ],
   paths: ['tests/features/'],
   format: [
@@ -849,12 +853,12 @@ export interface ApiResponse<T> {
 }
 
 // src/hooks/hooks.ts
-import { BeforeAll, AfterAll, Before, After, Status, World } from '@cucumber/cucumber';
-import apiClient from '../api/apiClient';
-import logger from '../helpers/loggerHelper';
-import reportHelper from '../helpers/reportHelper';
-import * as fs from 'fs-extra';
-import * as path from 'path';
+const { BeforeAll, AfterAll, Before, After, Status } = require('@cucumber/cucumber');
+const apiClient = require('../api/apiClient').default;
+const logger = require('../helpers/loggerHelper').default;
+const reportHelper = require('../helpers/reportHelper').default;
+const fs = require('fs-extra');
+const path = require('path');
 
 // Ensure reports directory exists
 const reportsDir = path.join(process.cwd(), 'reports');
@@ -878,7 +882,7 @@ AfterAll(async function() {
 
 Before(async function(scenario) {
   logger.info(`Starting scenario: ${scenario.pickle.name}`);
-  const world = this as World;
+  const world = this;
   world.context = {
     scenarioName: scenario.pickle.name,
     scenarioId: scenario.pickle.id,
@@ -888,7 +892,7 @@ Before(async function(scenario) {
 });
 
 After(async function(scenario) {
-  const world = this as World;
+  const world = this;
   const duration = new Date().getTime() - world.context.startTime.getTime();
   
   logger.info(`Completed scenario: ${scenario.pickle.name} with status: ${scenario.result?.status}`);
@@ -1069,25 +1073,10 @@ Feature: Asset Layout API Tests
     And the response should contain a validation error
 
 // tests/step-definitions/assetLayoutSteps.ts
-import { Given, When, Then, DataTable } from '@cucumber/cucumber';
-import { expect } from 'chai';
-import AssetLayoutService from '../../src/api/services/assetLayoutService';
-import { AssetLayoutRequest, AssetLayoutResponse } from '../../src/models/assetLayout.model';
-import { ApiResponse } from '../../src/models/response.model';
-import logger from '../../src/helpers/loggerHelper';
-
-// Define world context for TypeScript
-declare module '@cucumber/cucumber' {
-  interface World {
-    context: {
-      scenarioName: string;
-      scenarioId: string;
-      startTime: Date;
-      responses: Record<string, any>;
-      assetLayoutResponse?: ApiResponse<AssetLayoutResponse>;
-    };
-  }
-}
+const { Given, When, Then, DataTable } = require('@cucumber/cucumber');
+const { expect } = require('chai');
+const AssetLayoutService = require('../../src/api/services/assetLayoutService').default;
+const logger = require('../../src/helpers/loggerHelper').default;
 
 Given('the API is available', async function() {
   // This step is a placeholder to verify the API is accessible
@@ -1095,7 +1084,7 @@ Given('the API is available', async function() {
   logger.info('Verifying API availability');
 });
 
-When('I send a request to get asset layout with the following data:', async function(dataTable: DataTable) {
+When('I send a request to get asset layout with the following data:', async function(dataTable) {
   try {
     // Convert the data table to our request object
     const rows = dataTable.hashes();
@@ -1104,7 +1093,7 @@ When('I send a request to get asset layout with the following data:', async func
     }
 
     const row = rows[0];
-    const request: AssetLayoutRequest = {
+    const request = {
       messageId: parseInt(row.messageId),
       dealId: parseInt(row.dealId),
       reportDate: row.reportDate
@@ -1121,7 +1110,7 @@ When('I send a request to get asset layout with the following data:', async func
   }
 });
 
-Then('the response status code should be {int}', function(expectedStatusCode: number) {
+Then('the response status code should be {int}', function(expectedStatusCode) {
   expect(this.context.assetLayoutResponse).to.not.be.undefined;
   expect(this.context.assetLayoutResponse?.statusCode).to.equal(expectedStatusCode);
 });
