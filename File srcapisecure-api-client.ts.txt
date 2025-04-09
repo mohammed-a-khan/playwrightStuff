@@ -1078,8 +1078,8 @@ export class TemplateEngine {
                   tooltip: {
                     callbacks: {
                       label: function(context) {
-                        const pointData = context.raw;
-                        return `${pointData.y} - ${pointData.status} at ${new Date(pointData.x).toLocaleTimeString()}`;
+                        const item = context.raw;
+                        return `${item.y} - ${item.status} at ${new Date(item.x).toLocaleTimeString()}`;
                       }
                     }
                   }
@@ -1172,3 +1172,5 @@ export class TemplateEngine {
     </body>
     </html>
     `;
+  }
+}
