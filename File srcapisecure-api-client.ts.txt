@@ -1,166 +1,7 @@
-hooks.ts
--------------
-
-import { BeforeAll, AfterAll, Before, After, Status } from '@cucumber/cucumber';
-import apiClient from '../api/apiClient';
-import { logger } from '../helpers/loggerHelper';
-import reportHelper from '../helpers/reportHelper';
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import { configHelper } from '../../config/config';
-import { TimeoutUtils } from '../utils/timeoutUtils';
-import { World, ScenarioContext } from '../models/worldModels';
-
-// Ensure reports directories exist
-const reportsDir = path.join(process.cwd(), 'reports');
-const jsonReportsDir = path.join(reportsDir, 'json');
-const htmlReportsDir = path.join(reportsDir, 'html');
-const screenshotsDir = path.join(reportsDir, 'screenshots');
-const logsDir = path.join(reportsDir, 'logs');
-
-fs.ensureDirSync(jsonReportsDir);
-fs.ensureDirSync(htmlReportsDir);
-fs.ensureDirSync(screenshotsDir);
-fs.ensureDirSync(logsDir);
-
-// Store test context in module-level variable to avoid global variable issues
-const testContextMap: Record<string, ScenarioContext> = {};
-
-BeforeAll(async function() {
-  logger.info('🚀 Test execution started');
-  reportHelper.startTestRun();
-  
-  // Initialize API client and wait for completion
-  await apiClient.initialize();
-  
-  // Log environment information
-  logger.info(`Environment: ${configHelper.getEnvironment()}`);
-  logger.info(`Base URL: ${configHelper.getBaseUrl()}`);
-  logger.info(`Debug Mode: ${configHelper.isDebugMode()}`);
-  logger.info(`Timeout: ${configHelper.getTimeout()}ms`);
-  logger.info(`Retry Attempts: ${configHelper.getRetryAttempts()}`);
-});
-
-AfterAll(async function() {
-  logger.info('🏁 Test execution completed');
-  
-  // Wait for any pending operations to complete
-  await TimeoutUtils.sleep(1000);
-  
-  // Cleanup
-  await apiClient.dispose();
-  
-  // Generate report
-  reportHelper.endTestRun();
-  await reportHelper.generateReport();
-  
-  // Clear test context
-  Object.keys(testContextMap).forEach(key => delete testContextMap[key]);
-});
-
-Before(async function(this: World, scenario) {
-  const featureName = scenario.pickle.uri?.split('/').pop()?.replace('.feature', '') || 'Unknown';
-  const scenarioName = scenario.pickle.name;
-  
-  logger.info(`▶️ Starting scenario: ${scenarioName} [${featureName}]`);
-  
-  // Initialize scenario context
-  this.context = {
-    scenarioName,
-    scenarioId: scenario.pickle.id,
-    featureName,
-    startTime: new Date(),
-    responses: {},
-    data: {},
-    screenshots: []
-  };
-  
-  // Add to test context map
-  testContextMap[scenarioName] = this.context;
-});
-
-After(async function(this: World, scenario) {
-  const duration = new Date().getTime() - this.context.startTime.getTime();
-  const status = scenario.result?.status || 'unknown';
-  
-  logger.info(`⏹️ Completed scenario: ${this.context.scenarioName} with status: ${status.toUpperCase()} (${duration}ms)`);
-  
-  let error = undefined;
-  const screenshots: string[] = this.context.screenshots || [];
-  
-  if (scenario.result?.status === Status.FAILED) {
-    error = scenario.result.message;
-    logger.error(`Scenario failed: ${error}`);
-    
-    // Take screenshot on failure if configured
-    if (configHelper.shouldTakeScreenshotOnFailure()) {
-      try {
-        const screenshotName = `${this.context.featureName}_${this.context.scenarioName}_failure`;
-        const screenshotPath = path.join(screenshotsDir, `${screenshotName}.png`);
-        
-        // For API testing, save error details as a text file instead of screenshot
-        await fs.writeFile(
-          screenshotPath,
-          `Error: ${error}\n\nContext: ${JSON.stringify(this.context, null, 2)}`,
-          'utf8'
-        );
-        
-        screenshots.push(screenshotPath);
-        logger.info(`Error details saved to: ${screenshotPath}`);
-      } catch (screenshotError) {
-        logger.error(`Failed to save error details: ${screenshotError}`);
-      }
-    }
-  }
-  
-  // Add test result to the report
-  reportHelper.addTestResult(
-    this.context.featureName,
-    this.context.scenarioName,
-    status,
-    duration,
-    error,
-    { 
-      scenarioId: this.context.scenarioId,
-      responses: Object.keys(this.context.responses)
-    },
-    screenshots
-  );
-  
-  // Remove from test context map
-  delete testContextMap[this.context.scenarioName];
-});
-
-worldmodel.ts
---------------
-import { World as CucumberWorld } from '@cucumber/cucumber';
-import { ApiResponse, AssetLayoutResponse } from './apiModels';
-
-export interface ScenarioContext {
-  scenarioName: string;
-  scenarioId: string;
-  featureName: string;
-  startTime: Date;
-  requestStartTime?: number;
-  responseTime?: number;
-  responses: Record<string, any>;
-  data: Record<string, any>;
-  screenshots: string[];
-  assetLayoutResponse?: ApiResponse<AssetLayoutResponse>;
-  [key: string]: any; // Allow any other properties
-}
-
-// Extend the Cucumber World type to include our custom context
-export interface World extends CucumberWorld {
-  context: ScenarioContext;
-}
-
-assetlayoutsteps.ts
--------------------
 import { Given, When, Then } from '@cucumber/cucumber';
 import assertionUtils from '../../src/utils/assertionUtils';
 import AssetLayoutService from '../../src/api/services/assetLayoutService';
-import { AssetLayoutRequest } from '../../src/models/apiModels';
+import { AssetLayoutRequest, ApiResponse, AssetLayoutResponse } from '../../src/models/apiModels';
 import { logger } from '../../src/helpers/loggerHelper';
 import { World } from '../../src/models/worldModels';
 import { expect } from 'chai';
@@ -205,10 +46,19 @@ When('I send a request to get asset layout with the following data:', async func
 });
 
 Then('the response status code should be {int}', function(this: World, expectedStatusCode) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
   assertionUtils.assertStatusCode(this.context.assetLayoutResponse, expectedStatusCode);
 });
 
 Then('the response should contain valid asset layout data', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
+  
   // Verify response structure
   assertionUtils.assertFieldExists(this.context.assetLayoutResponse, 'data');
   assertionUtils.assertFieldExists(this.context.assetLayoutResponse.data, 'assetLayouts');
@@ -223,18 +73,34 @@ Then('the response should contain valid asset layout data', function(this: World
 });
 
 Then('the response should not contain any errors', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
   assertionUtils.assertNoError(this.context.assetLayoutResponse);
 });
 
 Then('the response should contain an error message', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
   assertionUtils.assertHasError(this.context.assetLayoutResponse, 'errorMessage');
 });
 
 Then('the response should contain a validation error', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
   assertionUtils.assertHasError(this.context.assetLayoutResponse, 'validationErrorMessage');
 });
 
 Then('the response time should be less than {int} seconds', function(this: World, expectedSeconds) {
+  // Check if response time exists
+  if (this.context.responseTime === undefined) {
+    throw new Error('Response time not measured. API request may have failed.');
+  }
   const expectedMs = expectedSeconds * 1000;
   assertionUtils.assertResponseTime(this.context.responseTime, expectedMs);
 });
