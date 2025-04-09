@@ -1,502 +1,240 @@
-loggerHelper.ts
----------------------
+hooks.ts
+-------------
 
-import winston from 'winston';
-import 'winston-daily-rotate-file';
-import * as path from 'path';
+import { BeforeAll, AfterAll, Before, After, Status } from '@cucumber/cucumber';
+import apiClient from '../api/apiClient';
+import { logger } from '../helpers/loggerHelper';
+import reportHelper from '../helpers/reportHelper';
 import * as fs from 'fs-extra';
-import chalk from 'chalk';
+import * as path from 'path';
+import { configHelper } from '../../config/config';
+import { TimeoutUtils } from '../utils/timeoutUtils';
+import { World, ScenarioContext } from '../models/worldModels';
 
-// Create logs directory
-const logsDir = path.join(process.cwd(), 'reports', 'logs');
+// Ensure reports directories exist
+const reportsDir = path.join(process.cwd(), 'reports');
+const jsonReportsDir = path.join(reportsDir, 'json');
+const htmlReportsDir = path.join(reportsDir, 'html');
+const screenshotsDir = path.join(reportsDir, 'screenshots');
+const logsDir = path.join(reportsDir, 'logs');
+
+fs.ensureDirSync(jsonReportsDir);
+fs.ensureDirSync(htmlReportsDir);
+fs.ensureDirSync(screenshotsDir);
 fs.ensureDirSync(logsDir);
 
-// Custom log format with colors and detailed information
-const customFormat = winston.format.printf(({ level, message, timestamp, ...metadata }) => {
-  const metaStr = Object.keys(metadata).length ? 
-    `\n${JSON.stringify(metadata, null, 2)}` : '';
+// Store test context in module-level variable to avoid global variable issues
+const testContextMap: Record<string, ScenarioContext> = {};
+
+BeforeAll(async function() {
+  logger.info('🚀 Test execution started');
+  reportHelper.startTestRun();
   
-  let colorizedLevel;
-  switch (level) {
-    case 'error':
-      colorizedLevel = chalk.red.bold(level.toUpperCase());
-      break;
-    case 'warn':
-      colorizedLevel = chalk.yellow.bold(level.toUpperCase());
-      break;
-    case 'info':
-      colorizedLevel = chalk.green.bold(level.toUpperCase());
-      break;
-    case 'debug':
-      colorizedLevel = chalk.blue.bold(level.toUpperCase());
-      break;
-    default:
-      colorizedLevel = chalk.white.bold(level.toUpperCase());
-  }
+  // Initialize API client and wait for completion
+  await apiClient.initialize();
   
-  return `${timestamp} [${colorizedLevel}]: ${message}${metaStr}`;
+  // Log environment information
+  logger.info(`Environment: ${configHelper.getEnvironment()}`);
+  logger.info(`Base URL: ${configHelper.getBaseUrl()}`);
+  logger.info(`Debug Mode: ${configHelper.isDebugMode()}`);
+  logger.info(`Timeout: ${configHelper.getTimeout()}ms`);
+  logger.info(`Retry Attempts: ${configHelper.getRetryAttempts()}`);
 });
 
-// Create daily rotating file transports
-const fileRotateTransport = new winston.transports.DailyRotateFile({
-  filename: path.join(logsDir, 'application-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  maxSize: '20m',
-  maxFiles: '14d',
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-    winston.format.json()
-  )
+AfterAll(async function() {
+  logger.info('🏁 Test execution completed');
+  
+  // Wait for any pending operations to complete
+  await TimeoutUtils.sleep(1000);
+  
+  // Cleanup
+  await apiClient.dispose();
+  
+  // Generate report
+  reportHelper.endTestRun();
+  await reportHelper.generateReport();
+  
+  // Clear test context
+  Object.keys(testContextMap).forEach(key => delete testContextMap[key]);
 });
 
-const errorFileRotateTransport = new winston.transports.DailyRotateFile({
-  filename: path.join(logsDir, 'error-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  maxSize: '20m',
-  maxFiles: '14d',
-  level: 'error',
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-    winston.format.json()
-  )
-});
-
-// Create the logger instance
-export const logger = winston.createLogger({
-  // Default to info level, can be updated later
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-    winston.format.metadata({ fillExcept: ['message', 'level', 'timestamp'] }),
-    winston.format.json()
-  ),
-  defaultMeta: { service: 'api-automation' },
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-        winston.format.metadata({ fillExcept: ['message', 'level', 'timestamp'] }),
-        customFormat
-      )
-    }),
-    fileRotateTransport,
-    errorFileRotateTransport
-  ]
-});
-
-// Functions to log HTTP requests and responses
-export const logHttpDetails = (
-  method: string,
-  url: string,
-  requestHeaders?: Record<string, string>,
-  requestData?: any,
-  responseStatus?: number,
-  responseHeaders?: Record<string, string>,
-  responseData?: any,
-  error?: any
-) => {
-  const logObj: any = {
-    request: {
-      method,
-      url
-    }
+Before(async function(this: World, scenario) {
+  const featureName = scenario.pickle.uri?.split('/').pop()?.replace('.feature', '') || 'Unknown';
+  const scenarioName = scenario.pickle.name;
+  
+  logger.info(`▶️ Starting scenario: ${scenarioName} [${featureName}]`);
+  
+  // Initialize scenario context
+  this.context = {
+    scenarioName,
+    scenarioId: scenario.pickle.id,
+    featureName,
+    startTime: new Date(),
+    responses: {},
+    data: {},
+    screenshots: []
   };
-
-  if (requestHeaders) {
-    logObj.request.headers = { ...requestHeaders };
-    // Mask sensitive headers
-    if (logObj.request.headers.Authorization) {
-      logObj.request.headers.Authorization = '[REDACTED]';
-    }
-  }
-
-  if (requestData) {
-    logObj.request.data = requestData;
-  }
-
-  if (responseStatus !== undefined) {
-    logObj.response = {
-      status: responseStatus
-    };
-
-    if (responseHeaders) {
-      logObj.response.headers = responseHeaders;
-    }
-
-    if (responseData) {
-      logObj.response.data = responseData;
-    }
-  }
-
-  if (error) {
-    logObj.error = error.message || error;
-    logger.error(`HTTP Request Failed: ${method} ${url}`, logObj);
-  } else {
-    logger.debug(`HTTP Transaction: ${method} ${url}`, logObj);
-  }
-};
-
-config.ts
-------------
-
-import * as dotenv from 'dotenv';
-import * as path from 'path';
-import * as fs from 'fs-extra';
-import { logger } from '../src/helpers/loggerHelper';
-
-export class ConfigHelper {
-  private static instance: ConfigHelper;
-  private config: Record<string, string> = {};
   
-  private constructor() {
-    this.initializeConfig();
-  }
+  // Add to test context map
+  testContextMap[scenarioName] = this.context;
+});
 
-  private initializeConfig(): void {
-    try {
-      // Load environment variables based on NODE_ENV
-      const env = process.env.NODE_ENV || 'sit';
-      const envPath = path.join(__dirname, `environments/.env.${env}`);
-      
-      if (fs.existsSync(envPath)) {
-        const result = dotenv.config({ path: envPath });
-        if (result.error) {
-          throw new Error(`Error loading environment variables: ${result.error.message}`);
-        }
-        this.config = { ...process.env } as Record<string, string>;
-        
-        // Set logger level based on DEBUG setting
-        if (this.isDebugMode()) {
-          logger.level = 'debug';
-        }
-        
-        logger.info(`Environment loaded: ${env} from ${envPath}`);
-      } else {
-        throw new Error(`Environment file not found: ${envPath}`);
-      }
-    } catch (error) {
-      logger.error(`Config initialization error: ${error}`);
-      throw error;
-    }
-  }
-
-  public static getInstance(): ConfigHelper {
-    if (!ConfigHelper.instance) {
-      ConfigHelper.instance = new ConfigHelper();
-    }
-    return ConfigHelper.instance;
-  }
-
-  public get(key: string): string {
-    const value = this.config[key];
-    if (value === undefined) {
-      logger.warn(`Configuration key not found: ${key}`);
-      return '';
-    }
-    return value;
-  }
-
-  public getBaseUrl(): string {
-    return this.get('API_BASE_URL');
-  }
-
-  public getCertPath(): string {
-    return this.get('CERT_PATH');
-  }
-
-  public getCertPassphrase(): string {
-    return this.get('CERT_PASSPHRASE');
-  }
-
-  public getEnvironment(): string {
-    return this.get('NODE_ENV') || 'sit';
-  }
+After(async function(this: World, scenario) {
+  const duration = new Date().getTime() - this.context.startTime.getTime();
+  const status = scenario.result?.status || 'unknown';
   
-  public isDebugMode(): boolean {
-    return this.get('DEBUG') === 'true';
-  }
-
-  public getTimeout(): number {
-    const timeout = parseInt(this.get('TIMEOUT'), 10);
-    return isNaN(timeout) ? 30000 : timeout;
-  }
-
-  public getRetryAttempts(): number {
-    const retries = parseInt(this.get('RETRY_ATTEMPTS'), 10);
-    return isNaN(retries) ? 2 : retries;
-  }
-
-  public getRequestTimeout(): number {
-    const timeout = parseInt(this.get('REQUEST_TIMEOUT'), 10);
-    return isNaN(timeout) ? 30000 : timeout;
-  }
-
-  public getMaxConcurrentRequests(): number {
-    const maxRequests = parseInt(this.get('MAX_CONCURRENT_REQUESTS'), 10);
-    return isNaN(maxRequests) ? 1 : maxRequests; // Default to 1 for sequential execution
-  }
-
-  public shouldTakeScreenshotOnFailure(): boolean {
-    return this.get('SCREENSHOT_ON_FAILURE') !== 'false';
-  }
-
-  public getProxyUrl(): string | undefined {
-    const proxyUrl = this.get('PROXY_URL');
-    return proxyUrl === '' ? undefined : proxyUrl;
-  }
+  logger.info(`⏹️ Completed scenario: ${this.context.scenarioName} with status: ${status.toUpperCase()} (${duration}ms)`);
   
-  public isDetailedLogging(): boolean {
-    return this.get('DETAILED_LOGGING') !== 'false';
-  }
-}
-
-export const configHelper = ConfigHelper.getInstance();
-
-apiclient.ts
-----------------
-
-import { request, APIRequestContext, APIResponse } from '@playwright/test';
-import { configHelper } from '../../config/config';
-import { logger, logHttpDetails } from '../helpers/loggerHelper';
-import { certificateHelper } from '../helpers/certificateHelper';
-import { RetryHelper } from '../helpers/retryHelper';
-import { TimeoutUtils } from '../utils/timeoutUtils';
-import { ProxyAgent } from 'https-proxy-agent';
-
-export interface RequestOptions {
-  headers?: Record<string, string>;
-  timeout?: number;
-  retries?: number;
-  retryDelay?: number;
-  retryCondition?: (response: APIResponse) => boolean;
-}
-
-export class ApiClient {
-  private static instance: ApiClient;
-  private context: APIRequestContext | null = null;
-  private isInitializing: boolean = false;
-  private initializePromise: Promise<void> | null = null;
-
-  private constructor() {}
-
-  public static getInstance(): ApiClient {
-    if (!ApiClient.instance) {
-      ApiClient.instance = new ApiClient();
-    }
-    return ApiClient.instance;
-  }
-
-  /**
-   * Initialize the API client
-   * @returns Promise resolving when initialization is complete
-   */
-  public async initialize(): Promise<void> {
-    // If already initializing, return the existing promise
-    if (this.isInitializing && this.initializePromise) {
-      return this.initializePromise;
-    }
-
-    // If already initialized, return immediately
-    if (this.context) {
-      return Promise.resolve();
-    }
-
-    this.isInitializing = true;
-    this.initializePromise = this.doInitialize();
+  let error = undefined;
+  const screenshots: string[] = this.context.screenshots || [];
+  
+  if (scenario.result?.status === Status.FAILED) {
+    error = scenario.result.message;
+    logger.error(`Scenario failed: ${error}`);
     
-    try {
-      await this.initializePromise;
-    } finally {
-      this.isInitializing = false;
-      this.initializePromise = null;
-    }
-  }
-
-  private async doInitialize(): Promise<void> {
-    try {
-      const baseURL = configHelper.getBaseUrl();
-      const certOptions = await certificateHelper.getCertificateOptions();
-      const proxyUrl = configHelper.getProxyUrl();
-      
-      const requestOptions: any = {
-        baseURL,
-        extraHTTPHeaders: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        ignoreHTTPSErrors: true,
-        timeout: configHelper.getTimeout(),
-        ...certOptions
-      };
-      
-      // Add proxy if configured
-      if (proxyUrl) {
-        requestOptions.proxy = {
-          server: proxyUrl
-        };
-      }
-      
-      this.context = await request.newContext(requestOptions);
-      
-      logger.info(`API Client initialized with base URL: ${baseURL}`);
-    } catch (error) {
-      logger.error(`Failed to initialize API client: ${error}`);
-      this.context = null;
-      throw error;
-    }
-  }
-
-  private async ensureContext(): Promise<APIRequestContext> {
-    if (!this.context) {
-      await this.initialize();
-    }
-    return this.context!;
-  }
-
-  /**
-   * Perform a GET request
-   * @param url The URL to request
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async get(url: string, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('GET', url, undefined, options);
-  }
-
-  /**
-   * Perform a POST request
-   * @param url The URL to request
-   * @param data The data to send
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async post(url: string, data: any, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('POST', url, data, options);
-  }
-
-  /**
-   * Perform a PUT request
-   * @param url The URL to request
-   * @param data The data to send
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async put(url: string, data: any, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('PUT', url, data, options);
-  }
-
-  /**
-   * Perform a DELETE request
-   * @param url The URL to request
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async delete(url: string, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('DELETE', url, undefined, options);
-  }
-
-  /**
-   * Perform a PATCH request
-   * @param url The URL to request
-   * @param data The data to send
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async patch(url: string, data: any, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('PATCH', url, data, options);
-  }
-
-  /**
-   * Execute a request with retries and timeouts
-   * @param method The HTTP method
-   * @param url The URL to request
-   * @param data The data to send (for POST, PUT, PATCH)
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  private async executeRequest(
-    method: string,
-    url: string,
-    data?: any,
-    options: RequestOptions = {}
-  ): Promise<APIResponse> {
-    const headers = options.headers || {};
-    const timeout = options.timeout || configHelper.getRequestTimeout();
-    const retries = options.retries || parseInt(configHelper.get('REQUEST_RETRY_COUNT'), 10) || 3;
-    const retryDelay = options.retryDelay || parseInt(configHelper.get('REQUEST_RETRY_DELAY'), 10) || 1000;
-    
-    // Only log if detailed logging is enabled
-    if (configHelper.isDetailedLogging()) {
-      logHttpDetails(method, url, headers, data);
-    }
-    
-    return RetryHelper.withRetry(
-      async () => {
-        const context = await this.ensureContext();
+    // Take screenshot on failure if configured
+    if (configHelper.shouldTakeScreenshotOnFailure()) {
+      try {
+        const screenshotName = `${this.context.featureName}_${this.context.scenarioName}_failure`;
+        const screenshotPath = path.join(screenshotsDir, `${screenshotName}.png`);
         
-        // Execute request with timeout
-        const response = await TimeoutUtils.withTimeout(
-          async () => {
-            let requestConfig: any = { headers };
-            
-            switch (method.toUpperCase()) {
-              case 'GET':
-                return await context.get(url, requestConfig);
-              case 'POST':
-                return await context.post(url, { ...requestConfig, data });
-              case 'PUT':
-                return await context.put(url, { ...requestConfig, data });
-              case 'DELETE':
-                return await context.delete(url, requestConfig);
-              case 'PATCH':
-                return await context.patch(url, { ...requestConfig, data });
-              default:
-                throw new Error(`Unsupported HTTP method: ${method}`);
-            }
-          },
-          timeout,
-          `Request ${method} ${url} timed out after ${timeout}ms`
+        // For API testing, save error details as a text file instead of screenshot
+        await fs.writeFile(
+          screenshotPath,
+          `Error: ${error}\n\nContext: ${JSON.stringify(this.context, null, 2)}`,
+          'utf8'
         );
         
-        // Only log if detailed logging is enabled
-        if (configHelper.isDetailedLogging()) {
-          logHttpDetails(
-            method,
-            url,
-            headers,
-            data,
-            response.status(),
-            response.headers(),
-            await response.json().catch(() => null)
-          );
-        }
-        
-        // Check if retry is needed based on status code
-        const shouldRetryStatus = options.retryCondition ? 
-          options.retryCondition(response) : 
-          response.status() >= 500;
-        
-        if (shouldRetryStatus) {
-          throw new Error(`Request failed with status: ${response.status()}`);
-        }
-        
-        return response;
-      },
-      retries,
-      retryDelay
-    );
-  }
-
-  /**
-   * Dispose the API client
-   */
-  public async dispose(): Promise<void> {
-    if (this.context) {
-      await this.context.dispose();
-      this.context = null;
-      logger.info('API Client disposed');
+        screenshots.push(screenshotPath);
+        logger.info(`Error details saved to: ${screenshotPath}`);
+      } catch (screenshotError) {
+        logger.error(`Failed to save error details: ${screenshotError}`);
+      }
     }
   }
+  
+  // Add test result to the report
+  reportHelper.addTestResult(
+    this.context.featureName,
+    this.context.scenarioName,
+    status,
+    duration,
+    error,
+    { 
+      scenarioId: this.context.scenarioId,
+      responses: Object.keys(this.context.responses)
+    },
+    screenshots
+  );
+  
+  // Remove from test context map
+  delete testContextMap[this.context.scenarioName];
+});
+
+worldmodel.ts
+--------------
+import { World as CucumberWorld } from '@cucumber/cucumber';
+import { ApiResponse, AssetLayoutResponse } from './apiModels';
+
+export interface ScenarioContext {
+  scenarioName: string;
+  scenarioId: string;
+  featureName: string;
+  startTime: Date;
+  requestStartTime?: number;
+  responseTime?: number;
+  responses: Record<string, any>;
+  data: Record<string, any>;
+  screenshots: string[];
+  assetLayoutResponse?: ApiResponse<AssetLayoutResponse>;
+  [key: string]: any; // Allow any other properties
 }
 
-export default ApiClient.getInstance();
+// Extend the Cucumber World type to include our custom context
+export interface World extends CucumberWorld {
+  context: ScenarioContext;
+}
+
+assetlayoutsteps.ts
+-------------------
+import { Given, When, Then } from '@cucumber/cucumber';
+import assertionUtils from '../../src/utils/assertionUtils';
+import AssetLayoutService from '../../src/api/services/assetLayoutService';
+import { AssetLayoutRequest } from '../../src/models/apiModels';
+import { logger } from '../../src/helpers/loggerHelper';
+import { World } from '../../src/models/worldModels';
+import { expect } from 'chai';
+
+Given('the API is available', async function(this: World) {
+  logger.info('Verifying API availability');
+  // In a real implementation, we might do a health check here
+  // For now, we'll assume the API is available
+});
+
+When('I send a request to get asset layout with the following data:', async function(this: World, dataTable) {
+  try {
+    // Convert the data table to our request object
+    const rows = dataTable.hashes();
+    if (rows.length === 0) {
+      throw new Error('No data provided in the data table');
+    }
+
+    const row = rows[0];
+    const request: AssetLayoutRequest = {
+      messageId: parseInt(row.messageId),
+      dealId: parseInt(row.dealId),
+      reportDate: row.reportDate
+    };
+
+    logger.info(`Sending asset layout request with dealId: ${request.dealId}`);
+    
+    // Record the start time for performance measurements
+    this.context.requestStartTime = Date.now();
+    
+    // Send the request and store the response in the world context
+    this.context.assetLayoutResponse = await AssetLayoutService.getAssetLayout(request);
+    
+    // Calculate and store the response time
+    this.context.responseTime = Date.now() - this.context.requestStartTime;
+    
+    logger.info(`Received response with status: ${this.context.assetLayoutResponse.statusCode} in ${this.context.responseTime}ms`);
+  } catch (error) {
+    logger.error(`Error during asset layout request: ${error}`);
+    throw error;
+  }
+});
+
+Then('the response status code should be {int}', function(this: World, expectedStatusCode) {
+  assertionUtils.assertStatusCode(this.context.assetLayoutResponse, expectedStatusCode);
+});
+
+Then('the response should contain valid asset layout data', function(this: World) {
+  // Verify response structure
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse, 'data');
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse.data, 'assetLayouts');
+  assertionUtils.assertArrayHasItems(this.context.assetLayoutResponse.data, 'assetLayouts');
+  
+  // Verify first asset layout
+  const firstAssetLayout = this.context.assetLayoutResponse.data.assetLayouts[0];
+  expect(firstAssetLayout).to.have.property('dealId');
+  expect(firstAssetLayout).to.have.property('entityId');
+  expect(firstAssetLayout.dealId).to.be.a('number');
+  expect(firstAssetLayout.entityId).to.be.a('number');
+});
+
+Then('the response should not contain any errors', function(this: World) {
+  assertionUtils.assertNoError(this.context.assetLayoutResponse);
+});
+
+Then('the response should contain an error message', function(this: World) {
+  assertionUtils.assertHasError(this.context.assetLayoutResponse, 'errorMessage');
+});
+
+Then('the response should contain a validation error', function(this: World) {
+  assertionUtils.assertHasError(this.context.assetLayoutResponse, 'validationErrorMessage');
+});
+
+Then('the response time should be less than {int} seconds', function(this: World, expectedSeconds) {
+  const expectedMs = expectedSeconds * 1000;
+  assertionUtils.assertResponseTime(this.context.responseTime, expectedMs);
+});
