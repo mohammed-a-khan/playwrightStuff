@@ -1,154 +1,5 @@
-src/utils/test-request.ts
--------------------
-/**
- * Simple script to test API request directly
- * This bypasses the Playwright request API to use Node's https module
- */
-
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import * as https from 'https';
-import { configHelper } from '../../config/config';
-
-// Function to make a direct HTTPS request with certificate
-async function makeDirectRequest() {
-  try {
-    console.log('Starting direct HTTPS request test...');
-    
-    // Get config values
-    const baseUrl = configHelper.getBaseUrl();
-    const certPath = configHelper.getCertPath();
-    const passphrase = configHelper.getCertPassphrase();
-    
-    console.log(`Base URL: ${baseUrl}`);
-    console.log(`Certificate Path: ${certPath}`);
-    console.log(`Has Passphrase: ${passphrase ? 'Yes' : 'No'}`);
-    
-    // Extract host and path from baseUrl
-    const url = new URL(baseUrl);
-    const host = url.hostname;
-    const port = url.port ? parseInt(url.port) : 443;
-    
-    console.log(`Host: ${host}`);
-    console.log(`Port: ${port}`);
-    
-    // Load certificate
-    let cert = null;
-    if (certPath && fs.existsSync(path.resolve(certPath))) {
-      cert = fs.readFileSync(path.resolve(certPath));
-      console.log(`Certificate loaded: ${cert.length} bytes`);
-    } else {
-      console.log('No certificate found or path is invalid');
-    }
-    
-    // Load test payload from test data
-    const payloadPath = path.resolve('tests/testData/payloads/assetLayoutPayload.json');
-    let payload = {};
-    
-    if (fs.existsSync(payloadPath)) {
-      const payloadContent = fs.readFileSync(payloadPath, 'utf8');
-      payload = JSON.parse(payloadContent);
-      console.log(`Payload loaded: ${JSON.stringify(payload)}`);
-    } else {
-      console.log('Payload file not found, using sample payload');
-      payload = {
-        messageId: 1234,
-        dealId: 34384,
-        reportDate: "2024-03-31"
-      };
-    }
-    
-    // Convert payload to string
-    const postData = JSON.stringify(payload);
-    
-    // Create request options
-    const options = {
-      hostname: host,
-      port: port,
-      path: '/v1/assets/assetlayout', // Endpoint from your code
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Content-Length': postData.length
-      },
-      rejectUnauthorized: false // Important for self-signed certs
-    };
-    
-    // Add certificate if available
-    if (cert) {
-      options['pfx'] = cert;
-      if (passphrase) {
-        options['passphrase'] = passphrase;
-      }
-    }
-    
-    console.log('Request options prepared (without sensitive data)');
-    
-    // Make the request
-    return new Promise((resolve, reject) => {
-      const req = https.request(options, (res) => {
-        console.log(`STATUS: ${res.statusCode}`);
-        console.log(`HEADERS: ${JSON.stringify(res.headers)}`);
-        
-        let data = '';
-        
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        res.on('end', () => {
-          console.log('Response received');
-          try {
-            const jsonData = JSON.parse(data);
-            console.log(`Response data: ${JSON.stringify(jsonData, null, 2)}`);
-            resolve({ status: res.statusCode, data: jsonData });
-          } catch (e) {
-            console.log(`Raw response: ${data}`);
-            resolve({ status: res.statusCode, data: data });
-          }
-        });
-      });
-      
-      req.on('error', (e) => {
-        console.error(`Request error: ${e.message}`);
-        if (e.message.includes('ECONNRESET')) {
-          console.error('ECONNRESET error detected - this might be due to a certificate issue or network problem');
-        }
-        reject(e);
-      });
-      
-      // Write data to request body
-      console.log('Sending request...');
-      req.write(postData);
-      req.end();
-      console.log('Request sent');
-    });
-  } catch (error) {
-    console.error(`Error in makeDirectRequest: ${error}`);
-    throw error;
-  }
-}
-
-// Execute the function when script is run directly
-if (require.main === module) {
-  console.log('Starting direct request test script...');
-  
-  makeDirectRequest()
-    .then(result => {
-      console.log(`Test completed successfully with status: ${result.status}`);
-      process.exit(0);
-    })
-    .catch(error => {
-      console.error(`Test failed: ${error}`);
-      process.exit(1);
-    });
-}
-
-export default makeDirectRequest;
-
-src/utils/axios-client.ts
-----------------------------
+axios.ts
+------------
 
 /**
  * Alternative API client using axios instead of Playwright
@@ -258,9 +109,10 @@ export class AxiosApiClient {
         async () => {
           try {
             return await axios.post(url, data);
-          } catch (error) {
-            logger.error(`Request error: ${error}`);
-            if (error.message?.includes('ECONNRESET')) {
+          } catch (error: unknown) {
+            const err = error as Error;
+            logger.error(`Request error: ${err.message}`);
+            if (err.message?.includes('ECONNRESET')) {
               logger.error('ECONNRESET error detected - retrying...');
             }
             throw error;
@@ -347,135 +199,34 @@ export default {
   test: testAxiosRequest
 };
 
-src/utils/cert-checker.ts
-------------------------
+direct request.ts
+-----------------------
+
 /**
- * Script to check certificate details and validate them
- * This helps diagnose certificate-related issues
+ * Simple script to test API request directly
+ * This bypasses the Playwright request API to use Node's https module
  */
 
 import * as fs from 'fs-extra';
 import * as path from 'path';
-import * as crypto from 'crypto';
+import * as https from 'https';
 import { configHelper } from '../../config/config';
 
-// Function to analyze and validate the certificate
-async function analyzeCertificate() {
+// Function to make a direct HTTPS request with certificate
+async function makeDirectRequest() {
   try {
-    console.log('Starting certificate analysis...');
+    console.log('Starting direct HTTPS request test...');
     
-    // Get certificate path and passphrase from config
+    // Get config values
+    const baseUrl = configHelper.getBaseUrl();
     const certPath = configHelper.getCertPath();
     const passphrase = configHelper.getCertPassphrase();
     
+    console.log(`Base URL: ${baseUrl}`);
     console.log(`Certificate Path: ${certPath}`);
     console.log(`Has Passphrase: ${passphrase ? 'Yes' : 'No'}`);
     
-    if (!certPath) {
-      console.error('No certificate path configured in config');
-      return false;
-    }
-    
-    const resolvedPath = path.resolve(certPath);
-    console.log(`Resolved Certificate Path: ${resolvedPath}`);
-    
-    // Check if file exists
-    if (!fs.existsSync(resolvedPath)) {
-      console.error(`Certificate file does not exist at path: ${resolvedPath}`);
-      return false;
-    }
-    
-    // Read certificate
-    const certBuffer = fs.readFileSync(resolvedPath);
-    console.log(`Certificate file size: ${certBuffer.length} bytes`);
-    console.log(`Certificate file MD5 hash: ${crypto.createHash('md5').update(certBuffer).digest('hex')}`);
-    
-    // Check if it's a PFX file (PKCS#12)
-    const isPfxFile = resolvedPath.toLowerCase().endsWith('.pfx') || resolvedPath.toLowerCase().endsWith('.p12');
-    console.log(`Is PFX file (by extension): ${isPfxFile}`);
-    
-    // Try to verify PFX file if it has that extension
-    if (isPfxFile) {
-      try {
-        // Try to load the PFX and extract info
-        const pfx = crypto.createPrivateKey({
-          key: certBuffer,
-          format: 'der',
-          type: 'pkcs12',
-          passphrase: passphrase
-        });
-        
-        console.log('Successfully loaded PFX certificate!');
-        console.log(`PFX type: ${pfx.asymmetricKeyType}`);
-        console.log(`PFX algorithm: ${pfx.asymmetricKeyDetails?.namedCurve || pfx.asymmetricKeyDetails?.modulusLength || 'unknown'}`);
-        
-        return true;
-      } catch (pfxError) {
-        console.error(`Failed to parse PFX certificate: ${pfxError}`);
-        console.log('This usually indicates an incorrect passphrase or corrupted certificate file');
-        
-        // If the error mentions "mac verify failure", it's likely a passphrase issue
-        if (pfxError.message && pfxError.message.includes('mac verify failure')) {
-          console.error('MAC verify failure detected - this usually means the passphrase is incorrect');
-        }
-        
-        return false;
-      }
-    } else {
-      console.log('Certificate does not appear to be a PFX file based on extension');
-      console.log('Make sure you are using the correct certificate format (PFX/PKCS#12)');
-      return false;
-    }
-  } catch (error) {
-    console.error(`Error analyzing certificate: ${error}`);
-    return false;
-  }
-}
-
-// Execute the function when script is run directly
-if (require.main === module) {
-  console.log('Starting certificate analysis script...');
-  
-  analyzeCertificate()
-    .then(isValid => {
-      console.log(`Certificate analysis completed. Certificate is ${isValid ? 'valid' : 'invalid'}.`);
-      process.exit(isValid ? 0 : 1);
-    })
-    .catch(error => {
-      console.error(`Certificate analysis failed with error: ${error}`);
-      process.exit(1);
-    });
-}
-
-export default analyzeCertificate;
-
-src/utils/connection-tester.ts
------------------------------
-/**
- * Script to test connectivity to the API endpoint
- * This helps diagnose network and connection issues
- */
-
-import * as https from 'https';
-import * as net from 'net';
-import * as dns from 'dns';
-import { configHelper } from '../../config/config';
-
-// Function to test basic connectivity
-async function testConnectivity() {
-  try {
-    console.log('Starting connectivity tests...');
-    
-    // Get base URL from config
-    const baseUrl = configHelper.getBaseUrl();
-    console.log(`Base URL: ${baseUrl}`);
-    
-    if (!baseUrl) {
-      console.error('No base URL configured in config');
-      return false;
-    }
-    
-    // Parse the URL
+    // Extract host and path from baseUrl
     const url = new URL(baseUrl);
     const host = url.hostname;
     const port = url.port ? parseInt(url.port) : 443;
@@ -483,99 +234,117 @@ async function testConnectivity() {
     console.log(`Host: ${host}`);
     console.log(`Port: ${port}`);
     
-    // Test DNS resolution
-    console.log(`Testing DNS resolution for ${host}...`);
-    try {
-      const addresses = await new Promise<string[]>((resolve, reject) => {
-        dns.resolve4(host, (err, addresses) => {
-          if (err) reject(err);
-          else resolve(addresses);
+    // Load certificate
+    let cert = null;
+    if (certPath && fs.existsSync(path.resolve(certPath))) {
+      cert = fs.readFileSync(path.resolve(certPath));
+      console.log(`Certificate loaded: ${cert.length} bytes`);
+    } else {
+      console.log('No certificate found or path is invalid');
+    }
+    
+    // Load test payload from test data
+    const payloadPath = path.resolve('tests/testData/payloads/assetLayoutPayload.json');
+    let payload = {};
+    
+    if (fs.existsSync(payloadPath)) {
+      const payloadContent = fs.readFileSync(payloadPath, 'utf8');
+      payload = JSON.parse(payloadContent);
+      console.log(`Payload loaded: ${JSON.stringify(payload)}`);
+    } else {
+      console.log('Payload file not found, using sample payload');
+      payload = {
+        messageId: 1234,
+        dealId: 34384,
+        reportDate: "2024-03-31"
+      };
+    }
+    
+    // Convert payload to string
+    const postData = JSON.stringify(payload);
+    
+    // Create request options
+    const options: https.RequestOptions = {
+      hostname: host,
+      port: port,
+      path: '/v1/assets/assetlayout', // Endpoint from your code
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      rejectUnauthorized: false // Important for self-signed certs
+    };
+    
+    // Add certificate if available
+    if (cert) {
+      options.pfx = cert;
+      if (passphrase) {
+        options.passphrase = passphrase;
+      }
+    }
+    
+    console.log('Request options prepared (without sensitive data)');
+    
+    // Make the request
+    return new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        console.log(`STATUS: ${res.statusCode}`);
+        console.log(`HEADERS: ${JSON.stringify(res.headers)}`);
+        
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          console.log('Response received');
+          try {
+            const jsonData = JSON.parse(data);
+            console.log(`Response data: ${JSON.stringify(jsonData, null, 2)}`);
+            resolve({ status: res.statusCode, data: jsonData });
+          } catch (e) {
+            console.log(`Raw response: ${data}`);
+            resolve({ status: res.statusCode, data: data });
+          }
         });
       });
       
-      console.log(`DNS resolution successful. IP addresses: ${addresses.join(', ')}`);
-    } catch (dnsError) {
-      console.error(`DNS resolution failed: ${dnsError}`);
-      return false;
-    }
-    
-    // Test TCP connection
-    console.log(`Testing TCP connection to ${host}:${port}...`);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const socket = net.createConnection({ host, port }, () => {
-          console.log('TCP connection successful');
-          socket.end();
-          resolve();
-        });
-        
-        socket.on('error', (err) => {
-          reject(err);
-        });
-        
-        socket.setTimeout(5000, () => {
-          socket.destroy();
-          reject(new Error('Connection timeout'));
-        });
+      req.on('error', (e) => {
+        console.error(`Request error: ${e.message}`);
+        if (e.message.includes('ECONNRESET')) {
+          console.error('ECONNRESET error detected - this might be due to a certificate issue or network problem');
+        }
+        reject(e);
       });
-    } catch (tcpError) {
-      console.error(`TCP connection failed: ${tcpError}`);
-      return false;
-    }
-    
-    // Test HTTPS connection (without certificate)
-    console.log(`Testing HTTPS connection to ${host}:${port}...`);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const req = https.request({
-          hostname: host,
-          port: port,
-          path: '/',
-          method: 'HEAD',
-          rejectUnauthorized: false,
-          timeout: 5000
-        }, (res) => {
-          console.log(`HTTPS connection successful. Status code: ${res.statusCode}`);
-          resolve();
-        });
-        
-        req.on('error', (err) => {
-          reject(err);
-        });
-        
-        req.on('timeout', () => {
-          req.destroy();
-          reject(new Error('HTTPS request timeout'));
-        });
-        
-        req.end();
-      });
-    } catch (httpsError) {
-      console.error(`HTTPS connection failed: ${httpsError}`);
-      return false;
-    }
-    
-    console.log('All connectivity tests passed successfully');
-    return true;
+      
+      // Write data to request body
+      console.log('Sending request...');
+      req.write(postData);
+      req.end();
+      console.log('Request sent');
+    });
   } catch (error) {
-    console.error(`Error in connectivity tests: ${error}`);
-    return false;
+    console.error(`Error in makeDirectRequest: ${error}`);
+    throw error;
   }
 }
 
 // Execute the function when script is run directly
 if (require.main === module) {
-  console.log('Starting connectivity test script...');
+  console.log('Starting direct request test script...');
   
-  testConnectivity()
-    .then(isConnected => {
-      console.log(`Connectivity test completed. Connection is ${isConnected ? 'successful' : 'failed'}.`);
-      process.exit(isConnected ? 0 : 1);
+  makeDirectRequest()
+    .then((result: any) => {
+      console.log(`Test completed successfully with status: ${result.status}`);
+      process.exit(0);
     })
     .catch(error => {
-      console.error(`Connectivity test failed with error: ${error}`);
+      console.error(`Test failed: ${error}`);
       process.exit(1);
     });
 }
 
-export default testConnectivity;
+export default makeDirectRequest;
