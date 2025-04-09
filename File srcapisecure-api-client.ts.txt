@@ -1,313 +1,135 @@
-axios.ts
-------------
-
 /**
- * Alternative API client using axios instead of Playwright
- * This may handle certificates differently
+ * Super simplified test script that uses minimal dependencies
  */
 
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import * as https from 'https';
-import { configHelper } from '../../config/config';
-import { logger } from '../helpers/loggerHelper';
-import { RetryHelper } from '../helpers/retryHelper';
-import { ApiResponse } from '../models/apiModels';
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const { promisify } = require('util');
 
-export class AxiosApiClient {
-  private static instance: AxiosApiClient;
-  private axiosInstance: AxiosInstance | null = null;
-
-  private constructor() {}
-
-  public static getInstance(): AxiosApiClient {
-    if (!AxiosApiClient.instance) {
-      AxiosApiClient.instance = new AxiosApiClient();
-    }
-    return AxiosApiClient.instance;
+// Get configuration from environment file
+function loadConfig() {
+  const envPath = path.resolve('config/environments/.env.sit');
+  if (!fs.existsSync(envPath)) {
+    console.error(`Environment file not found: ${envPath}`);
+    return { baseUrl: '', certPath: '', passphrase: '' };
   }
-
-  /**
-   * Initialize the Axios API client
-   */
-  public async initialize(): Promise<void> {
-    try {
-      const baseURL = configHelper.getBaseUrl();
-      logger.info(`Initializing Axios API client with base URL: ${baseURL}`);
-      
-      // Handle certificates
-      const certPath = configHelper.getCertPath();
-      const passphrase = configHelper.getCertPassphrase();
-      
-      // Create HTTPS agent with certificate if available
-      let httpsAgent;
-      if (certPath && fs.existsSync(path.resolve(certPath))) {
-        const cert = fs.readFileSync(path.resolve(certPath));
-        logger.info(`Certificate loaded: ${cert.length} bytes`);
-        
-        httpsAgent = new https.Agent({
-          pfx: cert,
-          passphrase: passphrase,
-          rejectUnauthorized: false // Important for self-signed certs
-        });
-      } else {
-        logger.warn('No certificate found or path is invalid');
-        httpsAgent = new https.Agent({
-          rejectUnauthorized: false
-        });
-      }
-      
-      // Create axios instance
-      const config: AxiosRequestConfig = {
-        baseURL,
-        timeout: configHelper.getTimeout(),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        httpsAgent,
-        validateStatus: () => true // Don't throw on any status code
-      };
-      
-      this.axiosInstance = axios.create(config);
-      logger.info('Axios API client initialized successfully');
-    } catch (error) {
-      logger.error(`Failed to initialize Axios API client: ${error}`);
-      this.axiosInstance = null;
-      throw error;
-    }
-  }
-
-  /**
-   * Get Axios instance, initializing if needed
-   */
-  private async getAxiosInstance(): Promise<AxiosInstance> {
-    if (!this.axiosInstance) {
-      await this.initialize();
-    }
-    return this.axiosInstance!;
-  }
-
-  /**
-   * Make a POST request
-   * @param url Endpoint URL
-   * @param data Request data
-   * @returns API response
-   */
-  public async post<T>(url: string, data: any): Promise<ApiResponse<T>> {
-    try {
-      logger.info(`Making POST request to ${url}`);
-      
-      const axios = await this.getAxiosInstance();
-      
-      // Use retry for robustness
-      const retries = parseInt(configHelper.get('REQUEST_RETRY_COUNT'), 10) || 3;
-      const retryDelay = parseInt(configHelper.get('REQUEST_RETRY_DELAY'), 10) || 1000;
-      
-      const response = await RetryHelper.withRetry<AxiosResponse>(
-        async () => {
-          try {
-            return await axios.post(url, data);
-          } catch (error: unknown) {
-            const err = error as Error;
-            logger.error(`Request error: ${err.message}`);
-            if (err.message?.includes('ECONNRESET')) {
-              logger.error('ECONNRESET error detected - retrying...');
-            }
-            throw error;
-          }
-        },
-        retries,
-        retryDelay
-      );
-      
-      logger.info(`Received response with status: ${response.status}`);
-      
-      // Convert to API response format
-      const apiResponse: ApiResponse<T> = {
-        statusCode: response.status,
-        headers: response.headers as Record<string, string>,
-        data: response.data as T,
-        ok: response.status >= 200 && response.status < 300
-      };
-      
-      return apiResponse;
-    } catch (error) {
-      logger.error(`POST request failed: ${error}`);
-      throw error;
-    }
-  }
-}
-
-// Create a test function to make a request
-async function testAxiosRequest() {
-  try {
-    console.log('Starting Axios API request test...');
-    
-    const client = AxiosApiClient.getInstance();
-    await client.initialize();
-    
-    // Load test payload from test data
-    const payloadPath = path.resolve('tests/testData/payloads/assetLayoutPayload.json');
-    let payload = {};
-    
-    if (fs.existsSync(payloadPath)) {
-      const payloadContent = fs.readFileSync(payloadPath, 'utf8');
-      payload = JSON.parse(payloadContent);
-      console.log(`Payload loaded: ${JSON.stringify(payload)}`);
-    } else {
-      console.log('Payload file not found, using sample payload');
-      payload = {
-        messageId: 1234,
-        dealId: 34384,
-        reportDate: "2024-03-31"
-      };
-    }
-    
-    // Make the request
-    console.log('Sending request...');
-    const response = await client.post('/v1/assets/assetlayout', payload);
-    
-    console.log(`Response status: ${response.statusCode}`);
-    console.log(`Response data: ${JSON.stringify(response.data, null, 2)}`);
-    
-    return response;
-  } catch (error) {
-    console.error(`Error in Axios request test: ${error}`);
-    throw error;
-  }
-}
-
-// Execute the function when script is run directly
-if (require.main === module) {
-  console.log('Starting Axios API client test script...');
   
-  testAxiosRequest()
-    .then(response => {
-      console.log(`Test completed successfully with status: ${response.statusCode}`);
-      process.exit(0);
-    })
-    .catch(error => {
-      console.error(`Test failed: ${error}`);
-      process.exit(1);
-    });
+  const content = fs.readFileSync(envPath, 'utf8');
+  const config = {};
+  
+  content.split('\n').forEach(line => {
+    const match = line.match(/^([^=]+)=(.*)$/);
+    if (match) {
+      const key = match[1].trim();
+      const value = match[2].trim();
+      config[key] = value;
+    }
+  });
+  
+  return {
+    baseUrl: config.API_BASE_URL || '',
+    certPath: config.CERT_PATH || '',
+    passphrase: config.CERT_PASSPHRASE || ''
+  };
 }
 
-export default {
-  client: AxiosApiClient.getInstance(),
-  test: testAxiosRequest
-};
-
-direct request.ts
------------------------
-
-/**
- * Simple script to test API request directly
- * This bypasses the Playwright request API to use Node's https module
- */
-
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import * as https from 'https';
-import { configHelper } from '../../config/config';
-
-// Function to make a direct HTTPS request with certificate
-async function makeDirectRequest() {
+// Test certificate and make a request
+async function testCertificateRequest() {
   try {
-    console.log('Starting direct HTTPS request test...');
+    console.log('Starting simple certificate test...');
     
-    // Get config values
-    const baseUrl = configHelper.getBaseUrl();
-    const certPath = configHelper.getCertPath();
-    const passphrase = configHelper.getCertPassphrase();
+    // Load configuration
+    const config = loadConfig();
+    console.log(`Base URL: ${config.baseUrl}`);
+    console.log(`Certificate Path: ${config.certPath}`);
+    console.log(`Has Passphrase: ${config.passphrase ? 'Yes' : 'No'}`);
     
-    console.log(`Base URL: ${baseUrl}`);
-    console.log(`Certificate Path: ${certPath}`);
-    console.log(`Has Passphrase: ${passphrase ? 'Yes' : 'No'}`);
+    if (!config.baseUrl) {
+      throw new Error('Base URL not configured');
+    }
     
-    // Extract host and path from baseUrl
-    const url = new URL(baseUrl);
+    // Parse URL
+    const url = new URL(config.baseUrl);
     const host = url.hostname;
     const port = url.port ? parseInt(url.port) : 443;
     
     console.log(`Host: ${host}`);
     console.log(`Port: ${port}`);
     
-    // Load certificate
+    // Load certificate if available
     let cert = null;
-    if (certPath && fs.existsSync(path.resolve(certPath))) {
-      cert = fs.readFileSync(path.resolve(certPath));
-      console.log(`Certificate loaded: ${cert.length} bytes`);
-    } else {
-      console.log('No certificate found or path is invalid');
-    }
-    
-    // Load test payload from test data
-    const payloadPath = path.resolve('tests/testData/payloads/assetLayoutPayload.json');
-    let payload = {};
-    
-    if (fs.existsSync(payloadPath)) {
-      const payloadContent = fs.readFileSync(payloadPath, 'utf8');
-      payload = JSON.parse(payloadContent);
-      console.log(`Payload loaded: ${JSON.stringify(payload)}`);
-    } else {
-      console.log('Payload file not found, using sample payload');
-      payload = {
-        messageId: 1234,
-        dealId: 34384,
-        reportDate: "2024-03-31"
-      };
-    }
-    
-    // Convert payload to string
-    const postData = JSON.stringify(payload);
-    
-    // Create request options
-    const options: https.RequestOptions = {
-      hostname: host,
-      port: port,
-      path: '/v1/assets/assetlayout', // Endpoint from your code
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      },
-      rejectUnauthorized: false // Important for self-signed certs
-    };
-    
-    // Add certificate if available
-    if (cert) {
-      options.pfx = cert;
-      if (passphrase) {
-        options.passphrase = passphrase;
+    if (config.certPath) {
+      const certFilePath = path.resolve(config.certPath);
+      if (fs.existsSync(certFilePath)) {
+        cert = fs.readFileSync(certFilePath);
+        console.log(`Certificate loaded: ${cert.length} bytes`);
+      } else {
+        console.warn(`Certificate file not found: ${certFilePath}`);
       }
     }
     
-    console.log('Request options prepared (without sensitive data)');
+    // Sample payload
+    const payload = {
+      messageId: 1234,
+      dealId: 34384,
+      reportDate: "2024-03-31"
+    };
     
-    // Make the request
+    console.log(`Using payload: ${JSON.stringify(payload)}`);
+    const postData = JSON.stringify(payload);
+    
+    // Make HTTPS request
     return new Promise((resolve, reject) => {
-      const req = https.request(options, (res) => {
-        console.log(`STATUS: ${res.statusCode}`);
-        console.log(`HEADERS: ${JSON.stringify(res.headers)}`);
+      // Build request options
+      const requestOptions = {
+        hostname: host,
+        port: port,
+        path: '/v1/assets/assetlayout', // Endpoint path
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Content-Length': Buffer.byteLength(postData)
+        },
+        rejectUnauthorized: false // For self-signed certs
+      };
+      
+      // Add certificate if available
+      if (cert) {
+        requestOptions.pfx = cert;
+        requestOptions.passphrase = config.passphrase;
+      }
+      
+      console.log('Sending request...');
+      
+      const req = https.request(requestOptions, (res) => {
+        console.log(`Status Code: ${res.statusCode}`);
+        console.log(`Headers: ${JSON.stringify(res.headers)}`);
         
-        let data = '';
+        let responseData = '';
         
         res.on('data', (chunk) => {
-          data += chunk;
+          responseData += chunk;
         });
         
         res.on('end', () => {
           console.log('Response received');
           try {
-            const jsonData = JSON.parse(data);
-            console.log(`Response data: ${JSON.stringify(jsonData, null, 2)}`);
-            resolve({ status: res.statusCode, data: jsonData });
+            const jsonResponse = JSON.parse(responseData);
+            console.log(`Response data: ${JSON.stringify(jsonResponse, null, 2)}`);
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              data: jsonResponse
+            });
           } catch (e) {
-            console.log(`Raw response: ${data}`);
-            resolve({ status: res.statusCode, data: data });
+            console.log(`Raw response: ${responseData}`);
+            resolve({
+              statusCode: res.statusCode,
+              headers: res.headers,
+              data: responseData
+            });
           }
         });
       });
@@ -315,36 +137,33 @@ async function makeDirectRequest() {
       req.on('error', (e) => {
         console.error(`Request error: ${e.message}`);
         if (e.message.includes('ECONNRESET')) {
-          console.error('ECONNRESET error detected - this might be due to a certificate issue or network problem');
+          console.error('ECONNRESET error detected. This usually means:');
+          console.error('1. The server abruptly closed the connection');
+          console.error('2. There might be a certificate/TLS issue');
+          console.error('3. Network connectivity problems');
+          console.error('4. Firewall or proxy interference');
         }
         reject(e);
       });
       
-      // Write data to request body
-      console.log('Sending request...');
       req.write(postData);
       req.end();
       console.log('Request sent');
     });
   } catch (error) {
-    console.error(`Error in makeDirectRequest: ${error}`);
+    console.error(`Error: ${error.message}`);
     throw error;
   }
 }
 
-// Execute the function when script is run directly
-if (require.main === module) {
-  console.log('Starting direct request test script...');
-  
-  makeDirectRequest()
-    .then((result: any) => {
-      console.log(`Test completed successfully with status: ${result.status}`);
-      process.exit(0);
-    })
-    .catch(error => {
-      console.error(`Test failed: ${error}`);
-      process.exit(1);
-    });
-}
-
-export default makeDirectRequest;
+// Run test
+console.log('Starting simple certificate test...');
+testCertificateRequest()
+  .then(result => {
+    console.log(`Test completed successfully with status: ${result.statusCode}`);
+    process.exit(0);
+  })
+  .catch(error => {
+    console.error(`Test failed: ${error.message}`);
+    process.exit(1);
+  });
