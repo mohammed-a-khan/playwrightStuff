@@ -1,169 +1,546 @@
-/**
- * Super simplified test script that uses minimal dependencies
- */
+src/api/apiClient.ts
+-----------------------
 
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const { promisify } = require('util');
+import * as https from 'https';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import { URL } from 'url';
+import { configHelper } from '../../config/config';
+import { logger, logHttpDetails } from '../helpers/loggerHelper';
+import { RetryHelper } from '../helpers/retryHelper';
+import { TimeoutUtils } from '../utils/timeoutUtils';
 
-// Get configuration from environment file
-function loadConfig() {
-  const envPath = path.resolve('config/environments/.env.sit');
-  if (!fs.existsSync(envPath)) {
-    console.error(`Environment file not found: ${envPath}`);
-    return { baseUrl: '', certPath: '', passphrase: '' };
-  }
-  
-  const content = fs.readFileSync(envPath, 'utf8');
-  const config = {};
-  
-  content.split('\n').forEach(line => {
-    const match = line.match(/^([^=]+)=(.*)$/);
-    if (match) {
-      const key = match[1].trim();
-      const value = match[2].trim();
-      config[key] = value;
-    }
-  });
-  
-  return {
-    baseUrl: config.API_BASE_URL || '',
-    certPath: config.CERT_PATH || '',
-    passphrase: config.CERT_PASSPHRASE || ''
-  };
+export interface RequestOptions {
+  headers?: Record<string, string>;
+  timeout?: number;
+  retries?: number;
+  retryDelay?: number;
+  retryCondition?: (response: ApiResponse<any>) => boolean;
 }
 
-// Test certificate and make a request
-async function testCertificateRequest() {
-  try {
-    console.log('Starting simple certificate test...');
-    
-    // Load configuration
-    const config = loadConfig();
-    console.log(`Base URL: ${config.baseUrl}`);
-    console.log(`Certificate Path: ${config.certPath}`);
-    console.log(`Has Passphrase: ${config.passphrase ? 'Yes' : 'No'}`);
-    
-    if (!config.baseUrl) {
-      throw new Error('Base URL not configured');
+export interface ApiResponse<T> {
+  statusCode: number;
+  headers: Record<string, string>;
+  data: T;
+  ok: boolean;
+}
+
+export class ApiClient {
+  private static instance: ApiClient;
+  private baseUrl: string;
+  private certificatePath: string | null = null;
+  private certificatePassphrase: string | null = null;
+  private certificate: Buffer | null = null;
+
+  private constructor() {
+    this.baseUrl = configHelper.getBaseUrl();
+    this.initializeCertificate();
+  }
+
+  public static getInstance(): ApiClient {
+    if (!ApiClient.instance) {
+      ApiClient.instance = new ApiClient();
     }
-    
-    // Parse URL
-    const url = new URL(config.baseUrl);
-    const host = url.hostname;
-    const port = url.port ? parseInt(url.port) : 443;
-    
-    console.log(`Host: ${host}`);
-    console.log(`Port: ${port}`);
-    
-    // Load certificate if available
-    let cert = null;
-    if (config.certPath) {
-      const certFilePath = path.resolve(config.certPath);
-      if (fs.existsSync(certFilePath)) {
-        cert = fs.readFileSync(certFilePath);
-        console.log(`Certificate loaded: ${cert.length} bytes`);
+    return ApiClient.instance;
+  }
+
+  /**
+   * Initialize certificate
+   */
+  private initializeCertificate(): void {
+    try {
+      const certPath = configHelper.getCertPath();
+      if (certPath) {
+        const resolvedPath = path.resolve(certPath);
+        if (fs.existsSync(resolvedPath)) {
+          this.certificatePath = resolvedPath;
+          this.certificatePassphrase = configHelper.getCertPassphrase();
+          this.certificate = fs.readFileSync(resolvedPath);
+          logger.info(`Certificate loaded: ${this.certificate.length} bytes from ${resolvedPath}`);
+        } else {
+          logger.warn(`Certificate file not found at path: ${resolvedPath}`);
+        }
       } else {
-        console.warn(`Certificate file not found: ${certFilePath}`);
+        logger.info('No certificate path configured');
       }
+    } catch (error) {
+      logger.error(`Failed to initialize certificate: ${error}`);
     }
-    
-    // Sample payload
-    const payload = {
-      messageId: 1234,
-      dealId: 34384,
-      reportDate: "2024-03-31"
+  }
+
+  /**
+   * Initialize the API client
+   * @returns Promise resolving when initialization is complete
+   */
+  public async initialize(): Promise<void> {
+    logger.info(`API Client initialized with base URL: ${this.baseUrl}`);
+    if (this.certificate) {
+      logger.info('Certificate is loaded and ready');
+    } else {
+      logger.info('Running without certificate');
+    }
+    return Promise.resolve();
+  }
+
+  /**
+   * Perform a GET request
+   * @param url The URL to request
+   * @param options Request options
+   * @returns Promise resolving to the API response
+   */
+  public async get<T>(url: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
+    return this.executeRequest<T>('GET', url, undefined, options);
+  }
+
+  /**
+   * Perform a POST request
+   * @param url The URL to request
+   * @param data The data to send
+   * @param options Request options
+   * @returns Promise resolving to the API response
+   */
+  public async post<T>(url: string, data: any, options: RequestOptions = {}): Promise<ApiResponse<T>> {
+    return this.executeRequest<T>('POST', url, data, options);
+  }
+
+  /**
+   * Perform a PUT request
+   * @param url The URL to request
+   * @param data The data to send
+   * @param options Request options
+   * @returns Promise resolving to the API response
+   */
+  public async put<T>(url: string, data: any, options: RequestOptions = {}): Promise<ApiResponse<T>> {
+    return this.executeRequest<T>('PUT', url, data, options);
+  }
+
+  /**
+   * Perform a DELETE request
+   * @param url The URL to request
+   * @param options Request options
+   * @returns Promise resolving to the API response
+   */
+  public async delete<T>(url: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
+    return this.executeRequest<T>('DELETE', url, undefined, options);
+  }
+
+  /**
+   * Perform a PATCH request
+   * @param url The URL to request
+   * @param data The data to send
+   * @param options Request options
+   * @returns Promise resolving to the API response
+   */
+  public async patch<T>(url: string, data: any, options: RequestOptions = {}): Promise<ApiResponse<T>> {
+    return this.executeRequest<T>('PATCH', url, data, options);
+  }
+
+  /**
+   * Execute a request with retries and timeouts
+   * @param method The HTTP method
+   * @param endpoint The endpoint URL
+   * @param data The data to send (for POST, PUT, PATCH)
+   * @param options Request options
+   * @returns Promise resolving to the API response
+   */
+  private async executeRequest<T>(
+    method: string,
+    endpoint: string,
+    data?: any,
+    options: RequestOptions = {}
+  ): Promise<ApiResponse<T>> {
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...(options.headers || {})
     };
     
-    console.log(`Using payload: ${JSON.stringify(payload)}`);
-    const postData = JSON.stringify(payload);
+    const timeout = options.timeout || configHelper.getRequestTimeout();
+    const retries = options.retries || parseInt(configHelper.get('REQUEST_RETRY_COUNT'), 10) || 3;
+    const retryDelay = options.retryDelay || parseInt(configHelper.get('REQUEST_RETRY_DELAY'), 10) || 1000;
     
-    // Make HTTPS request
-    return new Promise((resolve, reject) => {
-      // Build request options
-      const requestOptions = {
-        hostname: host,
-        port: port,
-        path: '/v1/assets/assetlayout', // Endpoint path
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Content-Length': Buffer.byteLength(postData)
-        },
-        rejectUnauthorized: false // For self-signed certs
-      };
-      
-      // Add certificate if available
-      if (cert) {
-        requestOptions.pfx = cert;
-        requestOptions.passphrase = config.passphrase;
-      }
-      
-      console.log('Sending request...');
-      
-      const req = https.request(requestOptions, (res) => {
-        console.log(`Status Code: ${res.statusCode}`);
-        console.log(`Headers: ${JSON.stringify(res.headers)}`);
+    // Normalize the endpoint URL
+    if (endpoint.startsWith('/')) {
+      endpoint = endpoint.substring(1);
+    }
+    
+    const fullUrl = `${this.baseUrl}/${endpoint}`;
+    
+    // Only log if detailed logging is enabled
+    if (configHelper.isDetailedLogging()) {
+      logHttpDetails(method, fullUrl, headers, data);
+    }
+    
+    return RetryHelper.withRetry<ApiResponse<T>>(
+      async () => {
+        return TimeoutUtils.withTimeout<ApiResponse<T>>(
+          async () => {
+            return this.makeHttpRequest<T>(method, fullUrl, data, headers);
+          },
+          timeout,
+          `Request ${method} ${fullUrl} timed out after ${timeout}ms`
+        );
+      },
+      retries,
+      retryDelay
+    );
+  }
+
+  /**
+   * Make an HTTP request using Node.js https module
+   * @param method HTTP method
+   * @param url Full URL
+   * @param data Request data
+   * @param headers Request headers
+   * @returns Promise resolving to API response
+   */
+  private async makeHttpRequest<T>(
+    method: string,
+    url: string,
+    data?: any,
+    headers: Record<string, string> = {}
+  ): Promise<ApiResponse<T>> {
+    return new Promise<ApiResponse<T>>((resolve, reject) => {
+      try {
+        // Parse URL
+        const parsedUrl = new URL(url);
         
-        let responseData = '';
+        // Prepare request data if needed
+        const postData = data ? JSON.stringify(data) : '';
         
-        res.on('data', (chunk) => {
-          responseData += chunk;
-        });
-        
-        res.on('end', () => {
-          console.log('Response received');
-          try {
-            const jsonResponse = JSON.parse(responseData);
-            console.log(`Response data: ${JSON.stringify(jsonResponse, null, 2)}`);
-            resolve({
-              statusCode: res.statusCode,
-              headers: res.headers,
-              data: jsonResponse
-            });
-          } catch (e) {
-            console.log(`Raw response: ${responseData}`);
-            resolve({
-              statusCode: res.statusCode,
-              headers: res.headers,
-              data: responseData
-            });
-          }
-        });
-      });
-      
-      req.on('error', (e) => {
-        console.error(`Request error: ${e.message}`);
-        if (e.message.includes('ECONNRESET')) {
-          console.error('ECONNRESET error detected. This usually means:');
-          console.error('1. The server abruptly closed the connection');
-          console.error('2. There might be a certificate/TLS issue');
-          console.error('3. Network connectivity problems');
-          console.error('4. Firewall or proxy interference');
+        // Set Content-Length for requests with body
+        if (postData && !headers['Content-Length']) {
+          headers['Content-Length'] = Buffer.byteLength(postData).toString();
         }
-        reject(e);
-      });
-      
-      req.write(postData);
-      req.end();
-      console.log('Request sent');
+        
+        // Prepare request options
+        const options: https.RequestOptions = {
+          hostname: parsedUrl.hostname,
+          port: parsedUrl.port || 443,
+          path: parsedUrl.pathname + parsedUrl.search,
+          method: method,
+          headers: headers,
+          rejectUnauthorized: false // For self-signed certificates
+        };
+        
+        // Add certificate if available
+        if (this.certificate) {
+          options.pfx = this.certificate;
+          if (this.certificatePassphrase) {
+            options.passphrase = this.certificatePassphrase;
+          }
+        }
+        
+        logger.debug(`Making ${method} request to ${url}`);
+        
+        // Create request
+        const req = https.request(options, (res) => {
+          let responseData = '';
+          
+          // Collect response data
+          res.on('data', (chunk) => {
+            responseData += chunk;
+          });
+          
+          // Process response when complete
+          res.on('end', () => {
+            try {
+              // Parse JSON if possible
+              let parsedData: any;
+              try {
+                parsedData = JSON.parse(responseData);
+              } catch (e) {
+                parsedData = responseData;
+              }
+              
+              // Create API response
+              const apiResponse: ApiResponse<T> = {
+                statusCode: res.statusCode || 0,
+                headers: res.headers as Record<string, string>,
+                data: parsedData,
+                ok: (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300
+              };
+              
+              // Log response details if needed
+              if (configHelper.isDetailedLogging()) {
+                logHttpDetails(
+                  method,
+                  url,
+                  headers,
+                  data,
+                  apiResponse.statusCode,
+                  apiResponse.headers,
+                  apiResponse.data
+                );
+              }
+              
+              // Check if we should retry based on status code
+              const shouldRetryStatus = options.retryCondition ? 
+                options.retryCondition(apiResponse) : 
+                apiResponse.statusCode >= 500;
+              
+              if (shouldRetryStatus) {
+                reject(new Error(`Request failed with status: ${apiResponse.statusCode}`));
+              } else {
+                resolve(apiResponse);
+              }
+            } catch (error) {
+              logger.error(`Error processing response: ${error}`);
+              reject(error);
+            }
+          });
+        });
+        
+        // Handle request errors
+        req.on('error', (error) => {
+          logger.error(`Request error: ${error.message}`);
+          
+          // Handle specific errors
+          if (error.message.includes('ECONNRESET')) {
+            logger.error('ECONNRESET error detected - connection was reset by server');
+          }
+          
+          reject(error);
+        });
+        
+        // Handle timeout
+        req.on('timeout', () => {
+          req.destroy();
+          reject(new Error(`Request timeout after ${timeout}ms`));
+        });
+        
+        // Send data for request methods that have a body
+        if (['POST', 'PUT', 'PATCH'].includes(method.toUpperCase()) && postData) {
+          req.write(postData);
+        }
+        
+        // End the request
+        req.end();
+      } catch (error) {
+        logger.error(`Error creating request: ${error}`);
+        reject(error);
+      }
     });
-  } catch (error) {
-    console.error(`Error: ${error.message}`);
-    throw error;
+  }
+
+  /**
+   * Dispose the API client
+   */
+  public async dispose(): Promise<void> {
+    logger.info('API Client disposed');
   }
 }
 
-// Run test
-console.log('Starting simple certificate test...');
-testCertificateRequest()
-  .then(result => {
-    console.log(`Test completed successfully with status: ${result.statusCode}`);
-    process.exit(0);
-  })
-  .catch(error => {
-    console.error(`Test failed: ${error.message}`);
-    process.exit(1);
-  });
+export default ApiClient.getInstance();
+
+src/api/services/assetLayoutService.ts
+------------------------------------------
+import apiClient from '../apiClient';
+import { apiExecutor } from '../apiExecutor';
+import { Endpoints } from '../endpoints';
+import { AssetLayoutRequest, AssetLayoutResponse } from '../../models/apiModels';
+import { logger } from '../../helpers/loggerHelper';
+import { ApiResponse } from '../../models/apiModels';
+import { configHelper } from '../../../config/config';
+
+export class AssetLayoutService {
+  private static instance: AssetLayoutService;
+
+  private constructor() {}
+
+  public static getInstance(): AssetLayoutService {
+    if (!AssetLayoutService.instance) {
+      AssetLayoutService.instance = new AssetLayoutService();
+    }
+    return AssetLayoutService.instance;
+  }
+
+  /**
+   * Get asset layout with guaranteed sequential execution
+   * @param request Asset layout request
+   * @returns Promise resolving to API response
+   */
+  public async getAssetLayout(request: AssetLayoutRequest): Promise<ApiResponse<AssetLayoutResponse>> {
+    return apiExecutor.execute(
+      `GetAssetLayout-${request.dealId}`,
+      async () => {
+        try {
+          logger.info(`Fetching asset layout for dealId: ${request.dealId}`);
+          
+          // Record the start time for performance measurements
+          const startTime = Date.now();
+          
+          // Send the request using the updated API client
+          const response = await apiClient.post<AssetLayoutResponse>(
+            Endpoints.ASSET_LAYOUT, 
+            request,
+            {
+              retries: parseInt(configHelper.get('REQUEST_RETRY_COUNT'), 10) || 3,
+              retryDelay: parseInt(configHelper.get('REQUEST_RETRY_DELAY'), 10) || 1000
+            }
+          );
+          
+          // Calculate response time
+          const responseTime = Date.now() - startTime;
+          logger.info(`Asset layout response received with status: ${response.statusCode} in ${responseTime}ms`);
+          
+          return response;
+        } catch (error) {
+          logger.error(`Error fetching asset layout: ${error}`);
+          throw error;
+        }
+      }
+    );
+  }
+}
+
+export default AssetLayoutService.getInstance();
+
+tests/step-definitions/assetLayoutSteps.ts
+------------------------------------------
+import { Given, When, Then } from '@cucumber/cucumber';
+import assertionUtils from '../../src/utils/assertionUtils';
+import AssetLayoutService from '../../src/api/services/assetLayoutService';
+import { AssetLayoutRequest } from '../../src/models/apiModels';
+import { logger } from '../../src/helpers/loggerHelper';
+import { World } from '../../src/models/worldModels';
+import { expect } from 'chai';
+
+Given('the API is available', async function(this: World) {
+  logger.info('Verifying API availability');
+  // In a real implementation, we might do a health check here
+  // For now, we'll assume the API is available
+});
+
+When('I send a request to get asset layout with the following data:', async function(this: World, dataTable) {
+  try {
+    // Convert the data table to our request object
+    const rows = dataTable.hashes();
+    if (rows.length === 0) {
+      throw new Error('No data provided in the data table');
+    }
+
+    const row = rows[0];
+    const request: AssetLayoutRequest = {
+      messageId: parseInt(row.messageId),
+      dealId: parseInt(row.dealId),
+      reportDate: row.reportDate
+    };
+
+    logger.info(`Sending asset layout request with dealId: ${request.dealId}`);
+    
+    // Record the start time for performance measurements
+    this.context.requestStartTime = Date.now();
+    
+    // Send the request and store the response in the world context
+    this.context.assetLayoutResponse = await AssetLayoutService.getAssetLayout(request);
+    
+    // Calculate and store the response time
+    this.context.responseTime = Date.now() - this.context.requestStartTime;
+    
+    logger.info(`Received response with status: ${this.context.assetLayoutResponse.statusCode} in ${this.context.responseTime}ms`);
+    
+    // Log the response data for debugging
+    logger.debug(`Response data: ${JSON.stringify(this.context.assetLayoutResponse.data, null, 2)}`);
+    
+  } catch (error) {
+    logger.error(`Error during asset layout request: ${error}`);
+    throw error;
+  }
+});
+
+Then('the response status code should be {int}', function(this: World, expectedStatusCode) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
+  assertionUtils.assertStatusCode(this.context.assetLayoutResponse, expectedStatusCode);
+});
+
+Then('the response should contain valid asset layout data', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
+  
+  // Make sure data exists
+  if (!this.context.assetLayoutResponse.data) {
+    throw new Error('Response does not contain any data.');
+  }
+  
+  // Verify response structure
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse, 'data');
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse.data, 'assetLayouts');
+  
+  // Make sure assetLayouts array exists
+  if (!this.context.assetLayoutResponse.data.assetLayouts) {
+    throw new Error('Response data does not contain assetLayouts array.');
+  }
+  
+  assertionUtils.assertArrayHasItems(this.context.assetLayoutResponse.data, 'assetLayouts');
+  
+  // Make sure there's at least one asset layout
+  if (this.context.assetLayoutResponse.data.assetLayouts.length === 0) {
+    throw new Error('AssetLayouts array is empty.');
+  }
+  
+  // Verify first asset layout
+  const firstAssetLayout = this.context.assetLayoutResponse.data.assetLayouts[0];
+  
+  if (!firstAssetLayout) {
+    throw new Error('First asset layout is undefined or null.');
+  }
+  
+  expect(firstAssetLayout).to.have.property('dealId');
+  expect(firstAssetLayout).to.have.property('entityId');
+  expect(firstAssetLayout.dealId).to.be.a('number');
+  expect(firstAssetLayout.entityId).to.be.a('number');
+});
+
+Then('the response should not contain any errors', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
+  assertionUtils.assertNoError(this.context.assetLayoutResponse);
+});
+
+Then('the response should contain an error message', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
+  
+  if (!this.context.assetLayoutResponse.data) {
+    throw new Error('Response does not contain any data.');
+  }
+  
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse, 'data');
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse.data, 'errorMessage');
+  assertionUtils.assertHasError(this.context.assetLayoutResponse, 'errorMessage');
+});
+
+Then('the response should contain a validation error', function(this: World) {
+  // Check if response exists before asserting
+  if (!this.context.assetLayoutResponse) {
+    throw new Error('No response received. API request may have failed.');
+  }
+  
+  if (!this.context.assetLayoutResponse.data) {
+    throw new Error('Response does not contain any data.');
+  }
+  
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse, 'data');
+  assertionUtils.assertFieldExists(this.context.assetLayoutResponse.data, 'validationErrorMessage');
+  assertionUtils.assertHasError(this.context.assetLayoutResponse, 'validationErrorMessage');
+});
+
+Then('the response time should be less than {int} seconds', function(this: World, expectedSeconds) {
+  // Check if response time exists
+  if (this.context.responseTime === undefined) {
+    throw new Error('Response time not measured. API request may have failed.');
+  }
+  const expectedMs = expectedSeconds * 1000;
+  assertionUtils.assertResponseTime(this.context.responseTime, expectedMs);
+});
+
