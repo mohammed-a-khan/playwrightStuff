@@ -1,263 +1,231 @@
-import { request, APIRequestContext, APIResponse } from '@playwright/test';
+CertificateHelper.js
+-----------------------
+
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import * as pem from 'pem';
 import { configHelper } from '../../config/config';
-import { logger, logHttpDetails } from '../helpers/loggerHelper';
-import { certificateHelper } from '../helpers/certificateHelper';
-import { RetryHelper } from '../helpers/retryHelper';
-import { TimeoutUtils } from '../utils/timeoutUtils';
-import { ProxyAgent } from 'https-proxy-agent';
+import { logger } from './loggerHelper';
+import { RetryHelper } from './retryHelper';
 
-export interface RequestOptions {
-  headers?: Record<string, string>;
-  timeout?: number;
-  retries?: number;
-  retryDelay?: number;
-  retryCondition?: (response: APIResponse) => boolean;
-}
-
-export class ApiClient {
-  private static instance: ApiClient;
-  private context: APIRequestContext | null = null;
-  private isInitializing: boolean = false;
-  private initializePromise: Promise<void> | null = null;
+export class CertificateHelper {
+  private static instance: CertificateHelper;
+  private certificateCache: Map<string, Buffer> = new Map();
 
   private constructor() {}
 
-  public static getInstance(): ApiClient {
-    if (!ApiClient.instance) {
-      ApiClient.instance = new ApiClient();
+  public static getInstance(): CertificateHelper {
+    if (!CertificateHelper.instance) {
+      CertificateHelper.instance = new CertificateHelper();
     }
-    return ApiClient.instance;
+    return CertificateHelper.instance;
   }
 
   /**
-   * Initialize the API client
-   * @returns Promise resolving when initialization is complete
+   * Validate and read certificate file
+   * @returns Detailed certificate information
    */
-  public async initialize(): Promise<void> {
-    // If already initializing, return the existing promise
-    if (this.isInitializing && this.initializePromise) {
-      return this.initializePromise;
-    }
-
-    // If already initialized, return immediately
-    if (this.context) {
-      return Promise.resolve();
-    }
-
-    this.isInitializing = true;
-    this.initializePromise = this.doInitialize();
-    
+  public async validateCertificate(): Promise<{
+    valid: boolean;
+    details?: any;
+    error?: string;
+  }> {
     try {
-      await this.initializePromise;
-    } finally {
-      this.isInitializing = false;
-      this.initializePromise = null;
+      const certPath = path.resolve(configHelper.getCertPath());
+      const passphrase = configHelper.getCertPassphrase();
+
+      // Check file existence
+      if (!fs.existsSync(certPath)) {
+        logger.error(`Certificate file not found at: ${certPath}`);
+        return { 
+          valid: false, 
+          error: `Certificate file not found at: ${certPath}` 
+        };
+      }
+
+      // Read file
+      const certBuffer = await fs.readFile(certPath);
+
+      // Detailed certificate information extraction
+      return new Promise((resolve, reject) => {
+        pem.readPkcs12(certBuffer, { p12Password: passphrase }, (err, cert) => {
+          if (err) {
+            logger.error('Certificate parsing error', {
+              error: err.message,
+              path: certPath
+            });
+            resolve({ 
+              valid: false, 
+              error: `Certificate parsing error: ${err.message}` 
+            });
+            return;
+          }
+
+          // Extract certificate details
+          pem.getPublicKey(cert.key, (keyErr, publicKey) => {
+            if (keyErr) {
+              logger.error('Public key extraction error', {
+                error: keyErr.message
+              });
+              resolve({ 
+                valid: false, 
+                error: `Public key extraction error: ${keyErr.message}` 
+              });
+              return;
+            }
+
+            // Detailed logging of certificate information
+            logger.info('Certificate Validation Details', {
+              certPath,
+              certSize: `${certBuffer.length} bytes`,
+              hasKey: !!cert.key,
+              hasCertificate: !!cert.cert,
+              publicKeyLength: publicKey.length
+            });
+
+            resolve({
+              valid: true,
+              details: {
+                certPath,
+                certSize: certBuffer.length,
+                publicKeyLength: publicKey.length,
+                pemCert: cert.cert
+              }
+            });
+          });
+        });
+      });
+    } catch (error) {
+      logger.error(`Comprehensive certificate validation error: ${error}`);
+      return { 
+        valid: false, 
+        error: `Comprehensive certificate validation error: ${error}` 
+      };
     }
   }
 
-  private async doInitialize(): Promise<void> {
+  /**
+   * Get certificate options for API client
+   * @returns Certificate options object
+   */
+  public async getCertificateOptions(): Promise<any> {
     try {
-      const baseURL = configHelper.getBaseUrl();
-      const certOptions = await certificateHelper.getCertificateOptions();
-      const proxyUrl = configHelper.getProxyUrl();
+      const certPath = path.resolve(configHelper.getCertPath());
+      const passphrase = configHelper.getCertPassphrase();
       
-      const requestOptions: any = {
-        baseURL,
-        extraHTTPHeaders: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Connection': 'keep-alive' // Add keep-alive to prevent ECONNRESET
-        },
-        ignoreHTTPSErrors: true,
-        timeout: configHelper.getTimeout(),
-        ...certOptions
-      };
+      // Validate certificate first
+      const validationResult = await this.validateCertificate();
       
-      // Add proxy if configured
-      if (proxyUrl) {
-        requestOptions.proxy = {
-          server: proxyUrl
-        };
+      if (!validationResult.valid) {
+        logger.error(`Certificate validation failed: ${validationResult.error}`);
+        return {};
       }
+
+      // Read certificate file
+      const pfxBuffer = await fs.readFile(certPath);
       
-      this.context = await request.newContext(requestOptions);
-      
-      logger.info(`API Client initialized with base URL: ${baseURL}`);
+      return {
+        httpsOptions: {
+          pfx: pfxBuffer,
+          passphrase
+        }
+      };
     } catch (error) {
-      logger.error(`Failed to initialize API client: ${error}`);
-      this.context = null;
+      logger.error(`Comprehensive certificate loading error: ${error}`, {
+        certPath: configHelper.getCertPath(),
+        hasPassphrase: !!configHelper.getCertPassphrase()
+      });
       throw error;
     }
   }
 
-  private async ensureContext(): Promise<APIRequestContext> {
-    if (!this.context) {
-      await this.initialize();
-    }
-    return this.context!;
-  }
-
   /**
-   * Perform a GET request
-   * @param url The URL to request
-   * @param options Request options
-   * @returns Promise resolving to the API response
+   * Diagnose certificate issues
    */
-  public async get(url: string, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('GET', url, undefined, options);
-  }
+  public async diagnoseCertificateIssues(): Promise<void> {
+    try {
+      const certPath = path.resolve(configHelper.getCertPath());
+      
+      // Basic file system checks
+      logger.info('Certificate Diagnostic Information');
+      logger.info(`Certificate Path: ${certPath}`);
+      
+      // Check file existence and permissions
+      const stats = await fs.stat(certPath);
+      logger.info('File Statistics', {
+        size: stats.size,
+        isFile: stats.isFile(),
+        canRead: stats.mode & 0o400 ? 'Yes' : 'No'
+      });
 
-  /**
-   * Perform a POST request
-   * @param url The URL to request
-   * @param data The data to send
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async post(url: string, data: any, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('POST', url, data, options);
-  }
+      // Attempt to read file contents
+      const fileBuffer = await fs.readFile(certPath);
+      logger.info(`File read successfully, size: ${fileBuffer.length} bytes`);
 
-  /**
-   * Perform a PUT request
-   * @param url The URL to request
-   * @param data The data to send
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async put(url: string, data: any, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('PUT', url, data, options);
-  }
-
-  /**
-   * Perform a DELETE request
-   * @param url The URL to request
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async delete(url: string, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('DELETE', url, undefined, options);
-  }
-
-  /**
-   * Perform a PATCH request
-   * @param url The URL to request
-   * @param data The data to send
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  public async patch(url: string, data: any, options: RequestOptions = {}): Promise<APIResponse> {
-    return this.executeRequest('PATCH', url, data, options);
-  }
-
-  /**
-   * Execute a request with retries and timeouts
-   * @param method The HTTP method
-   * @param url The URL to request
-   * @param data The data to send (for POST, PUT, PATCH)
-   * @param options Request options
-   * @returns Promise resolving to the API response
-   */
-  private async executeRequest(
-    method: string,
-    url: string,
-    data?: any,
-    options: RequestOptions = {}
-  ): Promise<APIResponse> {
-    const headers = {
-      'Connection': 'keep-alive', // Add keep-alive to prevent ECONNRESET
-      ...(options.headers || {})
-    };
-    
-    const timeout = options.timeout || configHelper.getRequestTimeout();
-    const retries = options.retries || parseInt(configHelper.get('REQUEST_RETRY_COUNT'), 10) || 3;
-    const retryDelay = options.retryDelay || parseInt(configHelper.get('REQUEST_RETRY_DELAY'), 10) || 1000;
-    
-    // Only log if detailed logging is enabled
-    if (configHelper.isDetailedLogging()) {
-      logHttpDetails(method, url, headers, data);
-    }
-    
-    return RetryHelper.withRetry(
-      async () => {
-        try {
-          const context = await this.ensureContext();
-          
-          // Execute request with timeout
-          const response = await TimeoutUtils.withTimeout(
-            async () => {
-              let requestConfig: any = { headers };
-              
-              switch (method.toUpperCase()) {
-                case 'GET':
-                  return await context.get(url, requestConfig);
-                case 'POST':
-                  return await context.post(url, { ...requestConfig, data });
-                case 'PUT':
-                  return await context.put(url, { ...requestConfig, data });
-                case 'DELETE':
-                  return await context.delete(url, requestConfig);
-                case 'PATCH':
-                  return await context.patch(url, { ...requestConfig, data });
-                default:
-                  throw new Error(`Unsupported HTTP method: ${method}`);
-              }
-            },
-            timeout,
-            `Request ${method} ${url} timed out after ${timeout}ms`
-          );
-          
-          // Only log if detailed logging is enabled
-          if (configHelper.isDetailedLogging()) {
-            let responseData = null;
-            try {
-              responseData = await response.json();
-            } catch (e) {
-              // Ignore JSON parsing errors for logging
-            }
-            
-            logHttpDetails(
-              method,
-              url,
-              headers,
-              data,
-              response.status(),
-              response.headers(),
-              responseData
-            );
-          }
-          
-          // Check if retry is needed based on status code
-          const shouldRetryStatus = options.retryCondition ? 
-            options.retryCondition(response) : 
-            response.status() >= 500;
-          
-          if (shouldRetryStatus) {
-            throw new Error(`Request failed with status: ${response.status()}`);
-          }
-          
-          return response;
-        } catch (error) {
-          // Log the error and always retry network related errors
-          logger.error(`Request error (will retry): ${error}`);
-          throw error; // Re-throw to trigger retry
-        }
-      },
-      retries,
-      retryDelay
-    );
-  }
-
-  /**
-   * Dispose the API client
-   */
-  public async dispose(): Promise<void> {
-    if (this.context) {
-      await this.context.dispose();
-      this.context = null;
-      logger.info('API Client disposed');
+      // Additional validation
+      await this.validateCertificate();
+    } catch (error) {
+      logger.error('Certificate Diagnosis Failed', {
+        error: error.message,
+        stack: error.stack
+      });
     }
   }
 }
 
-export default ApiClient.getInstance();
+export const certificateHelper = CertificateHelper.getInstance();
+
+certificateDiagnostic.ts
+--------------------------
+#!/usr/bin/env node
+const path = require('path');
+const fs = require('fs');
+const { certificateHelper } = require('./dist/src/helpers/certificateHelper');
+const { configHelper } = require('./dist/config/config');
+
+async function runCertificateDiagnostics() {
+  try {
+    console.log('=== Certificate Diagnostics ===');
+    
+    // Get certificate path
+    const certPath = path.resolve(configHelper.getCertPath());
+    console.log(`Certificate Path: ${certPath}`);
+
+    // Check file existence
+    if (!fs.existsSync(certPath)) {
+      console.error(`ERROR: Certificate file does not exist at ${certPath}`);
+      return;
+    }
+
+    // Get file stats
+    const stats = fs.statSync(certPath);
+    console.log('File Statistics:');
+    console.log(`- Size: ${stats.size} bytes`);
+    console.log(`- Readable: ${stats.mode & 0o400 ? 'Yes' : 'No'}`);
+
+    // Validate certificate
+    console.log('\nValidating Certificate...');
+    const validationResult = await certificateHelper.validateCertificate();
+    
+    if (validationResult.valid) {
+      console.log('Certificate is VALID');
+      console.log('Details:', JSON.stringify(validationResult.details, null, 2));
+    } else {
+      console.error('Certificate INVALID');
+      console.error('Error:', validationResult.error);
+    }
+
+    // Try to get certificate options
+    console.log('\nTesting Certificate Options...');
+    const certOptions = await certificateHelper.getCertificateOptions();
+    console.log('Certificate Options Generated Successfully');
+
+  } catch (error) {
+    console.error('CRITICAL ERROR during certificate diagnostics:');
+    console.error(error);
+  }
+}
+
+runCertificateDiagnostics();
+
+"cert:diagnose": "ts-node scripts/certificateDiagnostics.ts"
