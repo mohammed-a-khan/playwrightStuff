@@ -1,6 +1,3 @@
-hooks.ts
-----------
-
 import { BeforeAll, AfterAll, Before, After, BeforeStep, AfterStep, Status, setDefaultTimeout } from '@cucumber/cucumber';
 import { ITestCaseHookParameter, ITestStepHookParameter } from '@cucumber/cucumber';
 import apiClient from '../api/apiClient';
@@ -133,7 +130,7 @@ BeforeStep(async function(this: World, step: ITestStepHookParameter) {
   }
 });
 
-// Fixed AfterStep hook with proper type annotation
+// Fixed AfterStep hook without accessing pickleStepType
 AfterStep(async function(this: World, step: ITestStepHookParameter) {
   try {
     if (!this.context || !this.context.stepStartTime) {
@@ -145,26 +142,22 @@ AfterStep(async function(this: World, step: ITestStepHookParameter) {
     const status = step.result?.status || 'unknown';
     const stepText = step.pickleStep.text || '';
     
-    // Get keyword from the step type
-    let stepKeyword = '';
-    switch (step.pickleStepType) {
-      case 'Given':
-        stepKeyword = 'Given';
-        break;
-      case 'When':
-        stepKeyword = 'When';
-        break;
-      case 'Then':
-        stepKeyword = 'Then';
-        break;
-      case 'And':
-        stepKeyword = 'And';
-        break;
-      case 'But':
-        stepKeyword = 'But';
-        break;
-      default:
-        stepKeyword = step.pickleStepType || '';
+    // We can't access pickleStepType so we use a simple approach
+    // Look at the step text to infer the keyword
+    let stepKeyword = 'Step'; // Default
+    
+    // Simple heuristic - we can improve this if needed
+    const textLower = stepText.toLowerCase();
+    if (textLower.startsWith('given ')) {
+      stepKeyword = 'Given';
+    } else if (textLower.startsWith('when ')) {
+      stepKeyword = 'When';
+    } else if (textLower.startsWith('then ')) {
+      stepKeyword = 'Then';
+    } else if (textLower.startsWith('and ')) {
+      stepKeyword = 'And';
+    } else if (textLower.startsWith('but ')) {
+      stepKeyword = 'But';
     }
     
     logger.debug(`Completed step: ${stepText} with status: ${status.toUpperCase()} (${duration}ms)`);
@@ -265,4 +258,3 @@ After(async function(this: World, scenario: ITestCaseHookParameter) {
     logger.error(`Error in After hook: ${error}`);
   }
 });
-
