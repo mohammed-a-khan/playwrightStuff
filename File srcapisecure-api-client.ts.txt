@@ -1,3 +1,6 @@
+assetlayoutsteps.ts
+-----------------
+
 import { Given, When, Then } from '@cucumber/cucumber';
 import assertionUtils from '../../src/utils/assertionUtils';
 import AssetLayoutService from '../../src/api/services/assetLayoutService';
@@ -59,13 +62,34 @@ Then('the response should contain valid asset layout data', function(this: World
     throw new Error('No response received. API request may have failed.');
   }
   
+  // Make sure data exists
+  if (!this.context.assetLayoutResponse.data) {
+    throw new Error('Response does not contain any data.');
+  }
+  
   // Verify response structure
   assertionUtils.assertFieldExists(this.context.assetLayoutResponse, 'data');
   assertionUtils.assertFieldExists(this.context.assetLayoutResponse.data, 'assetLayouts');
+  
+  // Make sure assetLayouts array exists
+  if (!this.context.assetLayoutResponse.data.assetLayouts) {
+    throw new Error('Response data does not contain assetLayouts array.');
+  }
+  
   assertionUtils.assertArrayHasItems(this.context.assetLayoutResponse.data, 'assetLayouts');
+  
+  // Make sure there's at least one asset layout
+  if (this.context.assetLayoutResponse.data.assetLayouts.length === 0) {
+    throw new Error('AssetLayouts array is empty.');
+  }
   
   // Verify first asset layout
   const firstAssetLayout = this.context.assetLayoutResponse.data.assetLayouts[0];
+  
+  if (!firstAssetLayout) {
+    throw new Error('First asset layout is undefined or null.');
+  }
+  
   expect(firstAssetLayout).to.have.property('dealId');
   expect(firstAssetLayout).to.have.property('entityId');
   expect(firstAssetLayout.dealId).to.be.a('number');
@@ -85,6 +109,11 @@ Then('the response should contain an error message', function(this: World) {
   if (!this.context.assetLayoutResponse) {
     throw new Error('No response received. API request may have failed.');
   }
+  
+  if (!this.context.assetLayoutResponse.data) {
+    throw new Error('Response does not contain any data.');
+  }
+  
   assertionUtils.assertHasError(this.context.assetLayoutResponse, 'errorMessage');
 });
 
@@ -93,6 +122,11 @@ Then('the response should contain a validation error', function(this: World) {
   if (!this.context.assetLayoutResponse) {
     throw new Error('No response received. API request may have failed.');
   }
+  
+  if (!this.context.assetLayoutResponse.data) {
+    throw new Error('Response does not contain any data.');
+  }
+  
   assertionUtils.assertHasError(this.context.assetLayoutResponse, 'validationErrorMessage');
 });
 
@@ -104,3 +138,228 @@ Then('the response time should be less than {int} seconds', function(this: World
   const expectedMs = expectedSeconds * 1000;
   assertionUtils.assertResponseTime(this.context.responseTime, expectedMs);
 });
+
+assertionUtils.ts
+-----------------------
+
+import { expect } from 'chai';
+import { logger } from '../helpers/loggerHelper';
+import { ApiResponse } from '../models/apiModels';
+
+export class AssertionUtils {
+  private static instance: AssertionUtils;
+
+  private constructor() {}
+
+  public static getInstance(): AssertionUtils {
+    if (!AssertionUtils.instance) {
+      AssertionUtils.instance = new AssertionUtils();
+    }
+    return AssertionUtils.instance;
+  }
+
+  /**
+   * Assert response status code
+   * @param response API response
+   * @param expectedStatus Expected status code
+   */
+  public assertStatusCode(response: ApiResponse<any>, expectedStatus: number): void {
+    logger.debug(`Asserting status code: ${response.statusCode} === ${expectedStatus}`);
+    expect(response.statusCode, `Expected status code ${expectedStatus}, but got ${response.statusCode}`).to.equal(expectedStatus);
+  }
+
+  /**
+   * Assert response contains a specific field
+   * @param response API response
+   * @param field Field to check
+   */
+  public assertFieldExists(response: ApiResponse<any> | any, field: string): void {
+    logger.debug(`Asserting field exists: ${field}`);
+    
+    // Check if it's a raw object or an ApiResponse
+    const dataObj = 'data' in response ? response.data : response;
+    
+    expect(dataObj, `Object is undefined or null`).to.not.be.undefined;
+    expect(dataObj, `Object is undefined or null`).to.not.be.null;
+    expect(dataObj, `Field "${field}" does not exist`).to.have.property(field);
+  }
+
+  /**
+   * Assert field equals value
+   * @param response API response
+   * @param field Field to check
+   * @param value Expected value
+   */
+  public assertFieldEquals(response: ApiResponse<any> | any, field: string, value: any): void {
+    this.assertFieldExists(response, field);
+    
+    // Check if it's a raw object or an ApiResponse
+    const dataObj = 'data' in response ? response.data : response;
+    
+    logger.debug(`Asserting field equals: ${field} === ${value}`);
+    expect(dataObj[field], `Field ${field} expected to be ${value}, but got ${dataObj[field]}`).to.deep.equal(value);
+  }
+
+  /**
+   * Assert array field contains items
+   * @param response API response
+   * @param field Array field
+   * @param minLength Minimum expected length
+   */
+  public assertArrayHasItems(response: ApiResponse<any> | any, field: string, minLength: number = 1): void {
+    this.assertFieldExists(response, field);
+    
+    // Check if it's a raw object or an ApiResponse
+    const dataObj = 'data' in response ? response.data : response;
+    
+    logger.debug(`Asserting array has items: ${field} (min: ${minLength})`);
+    expect(dataObj[field], `Field ${field} expected to be an array`).to.be.an('array');
+    expect(dataObj[field].length, `Field ${field} expected to have at least ${minLength} item(s), but has ${dataObj[field].length}`).to.be.at.least(minLength);
+  }
+
+  /**
+   * Assert response does not contain error
+   * @param response API response
+   */
+  public assertNoError(response: ApiResponse<any>): void {
+    logger.debug(`Asserting no error in response`);
+    
+    // First check if response is OK
+    expect(response.ok, `Response status should be OK, but got ${response.statusCode}`).to.be.true;
+    
+    // Make sure data exists
+    expect(response.data, `Response data is undefined or null`).to.not.be.undefined;
+    expect(response.data, `Response data is undefined or null`).to.not.be.null;
+    
+    // Check common error fields
+    const errorFields = ['error', 'errorMessage', 'systemError', 'validationErrorMessage'];
+    
+    for (const field of errorFields) {
+      if (response.data && response.data[field] !== undefined) {
+        expect(response.data[field], `Error field '${field}' should be null/empty, but got: ${response.data[field]}`).to.be.oneOf([null, '']);
+      }
+    }
+  }
+
+  /**
+   * Assert response contains error
+   * @param response API response
+   * @param errorField Error field to check
+   */
+  public assertHasError(response: ApiResponse<any>, errorField: string = 'errorMessage'): void {
+    logger.debug(`Asserting error in response`);
+    
+    // Make sure data exists
+    expect(response.data, `Response data is undefined or null`).to.not.be.undefined;
+    expect(response.data, `Response data is undefined or null`).to.not.be.null;
+    
+    this.assertFieldExists(response, errorField);
+    expect(response.data[errorField], `Error field '${errorField}' should not be null/empty`).to.not.be.oneOf([null, '']);
+  }
+
+  /**
+   * Assert response schema matches expected
+   * @param response API response
+   * @param schema Schema to validate against
+   */
+  public assertSchema(response: ApiResponse<any>, schema: any): void {
+    logger.debug(`Asserting schema validation`);
+    
+    // Make sure data exists
+    expect(response.data, `Response data is undefined or null`).to.not.be.undefined;
+    expect(response.data, `Response data is undefined or null`).to.not.be.null;
+    
+    // Note: This is a simplified schema validation.
+    // In a real implementation, you might use a library like Ajv
+    for (const [key, type] of Object.entries(schema)) {
+      expect(response.data).to.have.property(key);
+      expect(typeof response.data[key]).to.equal(type);
+    }
+  }
+
+  /**
+   * Assert response time is within expected limits
+   * @param actualTime Actual response time in milliseconds
+   * @param maxTime Maximum allowed time in milliseconds
+   */
+  public assertResponseTime(actualTime: number, maxTime: number): void {
+    logger.debug(`Asserting response time: ${actualTime}ms <= ${maxTime}ms`);
+    expect(actualTime, `Response time ${actualTime}ms exceeds maximum allowed time ${maxTime}ms`).to.be.at.most(maxTime);
+  }
+
+  /**
+   * Assert response headers contain expected value
+   * @param response API response
+   * @param headerName Header name
+   * @param expectedValue Expected header value
+   */
+  public assertHeader(response: ApiResponse<any>, headerName: string, expectedValue?: string): void {
+    logger.debug(`Asserting header: ${headerName}`);
+    expect(response.headers, `Response headers are undefined`).to.not.be.undefined;
+    
+    if (expectedValue) {
+      expect(response.headers[headerName.toLowerCase()], `Header ${headerName} expected to be ${expectedValue}, but got ${response.headers[headerName.toLowerCase()]}`).to.equal(expectedValue);
+    } else {
+      expect(response.headers).to.have.property(headerName.toLowerCase());
+    }
+  }
+
+  /**
+   * Assert response body matches expected object
+   * @param response API response
+   * @param expectedBody Expected response body
+   * @param partial Whether to do a partial match
+   */
+  public assertBody(response: ApiResponse<any>, expectedBody: any, partial: boolean = false): void {
+    logger.debug(`Asserting response body`);
+    
+    // Make sure data exists
+    expect(response.data, `Response data is undefined or null`).to.not.be.undefined;
+    expect(response.data, `Response data is undefined or null`).to.not.be.null;
+    
+    if (partial) {
+      // For partial match, check if expected properties exist with same values
+      for (const [key, value] of Object.entries(expectedBody)) {
+        this.assertFieldEquals(response, key, value);
+      }
+    } else {
+      // For exact match, use deep equal
+      expect(response.data, `Response body does not match expected`).to.deep.equal(expectedBody);
+    }
+  }
+
+  /**
+   * Assert value is one of expected values
+   * @param value Value to check
+   * @param expectedValues Array of expected values
+   * @param message Custom error message
+   */
+  public assertOneOf(value: any, expectedValues: any[], message?: string): void {
+    logger.debug(`Asserting value is one of: ${JSON.stringify(expectedValues)}`);
+    const errorMsg = message || `Value ${value} is not one of expected values: ${JSON.stringify(expectedValues)}`;
+    expect(value, errorMsg).to.be.oneOf(expectedValues);
+  }
+
+  /**
+   * Assert value exists and is not empty
+   * @param value Value to check
+   * @param message Custom error message
+   */
+  public assertNotEmpty(value: any, message?: string): void {
+    logger.debug(`Asserting value is not empty`);
+    const errorMsg = message || `Value is empty or undefined`;
+    
+    expect(value, errorMsg).to.not.be.undefined;
+    expect(value, errorMsg).to.not.be.null;
+    
+    if (typeof value === 'string') {
+      expect(value.trim(), errorMsg).to.not.equal('');
+    } else if (Array.isArray(value)) {
+      expect(value.length, errorMsg).to.be.greaterThan(0);
+    } else if (typeof value === 'object') {
+      expect(Object.keys(value).length, errorMsg).to.be.greaterThan(0);
+    }
+  }
+}
+
+export default AssertionUtils.getInstance();
