@@ -1,55 +1,364 @@
-package com.yourcompany.api.utils;
+package com.yourcompany.api.core;
 
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.UnrecoverableKeyException;
-import java.security.cert.CertificateException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Map;
 
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
 
 import com.qmetry.qaf.automation.core.ConfigurationManager;
 import com.qmetry.qaf.automation.util.PropertyUtil;
+import com.qmetry.qaf.automation.ws.WSCommunicator;
+import com.qmetry.qaf.automation.ws.rest.RestCommunicator;
+import com.qmetry.qaf.automation.ws.rest.RestRequestBean;
+import com.qmetry.qaf.automation.ws.rest.RestResultBean;
+import com.yourcompany.api.utils.CertificateManager;
 
 /**
- * Utility class for managing SSL certificates for API requests.
+ * Generic REST client for handling API requests.
+ * This class provides common functionality for all API requests.
  */
-public class CertificateManager {
+public class GenericRestClient {
     
+    private static final Log logger = LogFactory.getLog(GenericRestClient.class);
     private static final PropertyUtil props = ConfigurationManager.getBundle();
-    private static SSLContext sslContext;
+    
+    // HTTP Methods
+    public static final String METHOD_GET = "GET";
+    public static final String METHOD_POST = "POST";
+    public static final String METHOD_PUT = "PUT";
+    public static final String METHOD_DELETE = "DELETE";
+    public static final String METHOD_PATCH = "PATCH";
+    
+    // Common Content Types
+    public static final String CONTENT_TYPE_JSON = "application/json";
+    public static final String CONTENT_TYPE_XML = "application/xml";
+    public static final String CONTENT_TYPE_FORM = "application/x-www-form-urlencoded";
+    public static final String CONTENT_TYPE_MULTIPART = "multipart/form-data";
     
     /**
-     * Configures and returns the SSL context with the specified certificate.
+     * Sends a request to the specified endpoint using the specified method.
      * 
-     * @return configured SSLContext
+     * @param endpointKey property key for the endpoint URL
+     * @param method HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param headers request headers
+     * @param payload request payload (for POST, PUT, PATCH)
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
      */
-    public static SSLContext getSSLContext() {
-        if (sslContext == null) {
-            try {
-                String certificateFile = props.getString("certificate.file");
-                String certificatePassword = props.getString("certificate.password");
-                
-                KeyStore keyStore = KeyStore.getInstance("PKCS12");
-                try (FileInputStream fis = new FileInputStream(certificateFile)) {
-                    keyStore.load(fis, certificatePassword.toCharArray());
-                }
-                
-                KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-                keyManagerFactory.init(keyStore, certificatePassword.toCharArray());
-                KeyManager[] keyManagers = keyManagerFactory.getKeyManagers();
-                
-                sslContext = SSLContext.getInstance("TLS");
-                sslContext.init(keyManagers, null, null);
-            } catch (KeyStoreException | NoSuchAlgorithmException | CertificateException | IOException 
-                    | UnrecoverableKeyException | java.security.KeyManagementException e) {
-                throw new RuntimeException("Failed to configure SSL context: " + e.getMessage(), e);
-            }
+    public static RestResultBean sendRequest(String endpointKey, String method, 
+                                            Map<String, String> headers, String payload, 
+                                            boolean useSSL) {
+        String endpoint = props.getString(endpointKey);
+        RestRequestBean request = createRequest(endpoint, method, headers, payload);
+        return executeRequest(request, useSSL);
+    }
+    
+    /**
+     * Sends a GET request to the specified endpoint.
+     * 
+     * @param endpointKey property key for the endpoint URL
+     * @param headers request headers
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
+     */
+    public static RestResultBean sendGetRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
+        return sendRequest(endpointKey, METHOD_GET, headers, null, useSSL);
+    }
+    
+    /**
+     * Sends a POST request to the specified endpoint.
+     * 
+     * @param endpointKey property key for the endpoint URL
+     * @param headers request headers
+     * @param payload request payload
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
+     */
+    public static RestResultBean sendPostRequest(String endpointKey, Map<String, String> headers, 
+                                               String payload, boolean useSSL) {
+        return sendRequest(endpointKey, METHOD_POST, headers, payload, useSSL);
+    }
+    
+    /**
+     * Sends a PUT request to the specified endpoint.
+     * 
+     * @param endpointKey property key for the endpoint URL
+     * @param headers request headers
+     * @param payload request payload
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
+     */
+    public static RestResultBean sendPutRequest(String endpointKey, Map<String, String> headers, 
+                                              String payload, boolean useSSL) {
+        return sendRequest(endpointKey, METHOD_PUT, headers, payload, useSSL);
+    }
+    
+    /**
+     * Sends a DELETE request to the specified endpoint.
+     * 
+     * @param endpointKey property key for the endpoint URL
+     * @param headers request headers
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
+     */
+    public static RestResultBean sendDeleteRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
+        return sendRequest(endpointKey, METHOD_DELETE, headers, null, useSSL);
+    }
+    
+    /**
+     * Sends a PATCH request to the specified endpoint.
+     * 
+     * @param endpointKey property key for the endpoint URL
+     * @param headers request headers
+     * @param payload request payload
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
+     */
+    public static RestResultBean sendPatchRequest(String endpointKey, Map<String, String> headers, 
+                                                String payload, boolean useSSL) {
+        return sendRequest(endpointKey, METHOD_PATCH, headers, payload, useSSL);
+    }
+    
+    /**
+     * Creates a RestRequestBean with the specified parameters.
+     * 
+     * @param endpoint the endpoint URL
+     * @param method HTTP method
+     * @param headers request headers
+     * @param payload request payload
+     * @return configured RestRequestBean
+     */
+    public static RestRequestBean createRequest(String endpoint, String method, 
+                                              Map<String, String> headers, String payload) {
+        RestRequestBean request = new RestRequestBean();
+        request.setServiceEndPoint(endpoint);
+        request.setMethod(method);
+        
+        // Apply default headers if none provided
+        if (headers == null || headers.isEmpty()) {
+            headers = getDefaultHeaders();
         }
-        return sslContext;
+        
+        request.setRequestHeaders(headers);
+        
+        // Set payload for methods that support it
+        if (payload != null && 
+           (METHOD_POST.equals(method) || METHOD_PUT.equals(method) || METHOD_PATCH.equals(method))) {
+            request.setRequestBody(payload);
+        }
+        
+        return request;
+    }
+    
+    /**
+     * Executes the REST request.
+     * 
+     * @param request the RestRequestBean
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return RestResultBean containing the response
+     */
+    public static RestResultBean executeRequest(RestRequestBean request, boolean useSSL) {
+        WSCommunicator communicator = createCommunicator(useSSL);
+        
+        try {
+            logger.info("Sending " + request.getMethod() + " request to: " + request.getServiceEndPoint());
+            RestResultBean response = (RestResultBean) communicator.process(request);
+            
+            logger.info("Received response with status: " + response.getStatus());
+            logger.debug("Response body: " + response.getResponse());
+            
+            return response;
+        } catch (Exception e) {
+            logger.error("Error executing API request: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Creates a WSCommunicator with the specified SSL configuration.
+     * 
+     * @param useSSL whether to use SSL certificate for authentication
+     * @return configured WSCommunicator
+     */
+    public static WSCommunicator createCommunicator(boolean useSSL) {
+        RestCommunicator communicator = new RestCommunicator();
+        
+        // Configure timeouts
+        if (props.containsKey("ws.request.timeout")) {
+            communicator.setTimeout(props.getInt("ws.request.timeout"));
+        }
+        
+        if (props.containsKey("ws.connection.timeout")) {
+            communicator.setConnTimeout(props.getInt("ws.connection.timeout"));
+        }
+        
+        // Set SSL context if required
+        if (useSSL) {
+            communicator.setSSLContext(CertificateManager.getSSLContext());
+        }
+        
+        return communicator;
+    }
+    
+    /**
+     * Gets default headers for API requests.
+     * 
+     * @return map of default headers
+     */
+    public static Map<String, String> getDefaultHeaders() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", CONTENT_TYPE_JSON);
+        headers.put("Accept", CONTENT_TYPE_JSON);
+        return headers;
+    }
+    
+    /**
+     * Loads a payload from a file and substitutes placeholders with values.
+     * 
+     * @param payloadFileName name of the payload file
+     * @param dataMap map of values to substitute
+     * @return processed payload as a string
+     */
+    public static String loadPayload(String payloadFileName, Map<String, Object> dataMap) {
+        String payloadPath = "resources/payloads/" + payloadFileName;
+        
+        try {
+            String content = new String(Files.readAllBytes(Paths.get(payloadPath)));
+            
+            // Replace placeholders with actual values
+            if (dataMap != null) {
+                for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
+                    String placeholder = "${" + entry.getKey() + "}";
+                    String value = entry.getValue() != null ? entry.getValue().toString() : "";
+                    content = content.replace(placeholder, value);
+                }
+            }
+            
+            logger.info("Prepared payload: " + content);
+            return content;
+        } catch (IOException e) {
+            logger.error("Failed to load payload file: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to load payload file: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Creates a payload from a JSON object.
+     * 
+     * @param jsonObject JSON object to convert to string
+     * @return JSON string
+     */
+    public static String createPayload(JSONObject jsonObject) {
+        return jsonObject != null ? jsonObject.toString() : null;
+    }
+    
+    /**
+     * Extracts a value from the JSON response by key.
+     * 
+     * @param response REST response bean
+     * @param key the JSON key
+     * @return the value as a string, or null if not found
+     */
+    public static String getResponseValue(RestResultBean response, String key) {
+        if (response == null || response.getResponse() == null) {
+            return null;
+        }
+        
+        try {
+            JSONObject json = new JSONObject(response.getResponse());
+            return json.has(key) ? json.get(key).toString() : null;
+        } catch (Exception e) {
+            logger.error("Error parsing response JSON: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Checks if a field exists in the JSON response.
+     * 
+     * @param response REST response bean
+     * @param field the field name
+     * @return true if the field exists, false otherwise
+     */
+    public static boolean hasResponseField(RestResultBean response, String field) {
+        if (response == null || response.getResponse() == null) {
+            return false;
+        }
+        
+        try {
+            JSONObject json = new JSONObject(response.getResponse());
+            return json.has(field);
+        } catch (Exception e) {
+            logger.error("Error checking field in response JSON: " + e.getMessage(), e);
+            return false;
+        }
+    }
+    
+    /**
+     * Checks if the response was successful (status code 2xx).
+     * 
+     * @param response REST response bean
+     * @return true if successful, false otherwise
+     */
+    public static boolean isSuccessful(RestResultBean response) {
+        if (response == null) {
+            return false;
+        }
+        
+        int status = response.getStatus();
+        return status >= 200 && status < 300;
+    }
+    
+    /**
+     * Builds a query string from parameters.
+     * 
+     * @param params map of query parameters
+     * @return formatted query string (without leading '?')
+     */
+    public static String buildQueryString(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            return "";
+        }
+        
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        
+        for (Map.Entry<String, String> entry : params.entrySet()) {
+            if (first) {
+                first = false;
+            } else {
+                sb.append("&");
+            }
+            
+            sb.append(entry.getKey()).append("=").append(entry.getValue());
+        }
+        
+        return sb.toString();
+    }
+    
+    /**
+     * Adds query parameters to an endpoint URL.
+     * 
+     * @param endpoint base endpoint URL
+     * @param params map of query parameters
+     * @return endpoint URL with query parameters
+     */
+    public static String addQueryParams(String endpoint, Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            return endpoint;
+        }
+        
+        String queryString = buildQueryString(params);
+        
+        if (endpoint.contains("?")) {
+            return endpoint + "&" + queryString;
+        } else {
+            return endpoint + "?" + queryString;
+        }
     }
 }
