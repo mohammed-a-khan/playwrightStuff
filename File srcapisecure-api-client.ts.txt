@@ -1,392 +1,65 @@
-package com.yourcompany.api.core;
+package com.yourcompany.api.utils;
 
-import java.io.BufferedReader;
+import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
 
-import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.json.JSONObject;
 
 import com.qmetry.qaf.automation.core.ConfigurationManager;
 import com.qmetry.qaf.automation.util.PropertyUtil;
-import com.qmetry.qaf.automation.ws.WsRequestBean;
-import com.yourcompany.api.utils.CertificateManager;
 
 /**
- * Generic REST client for handling API requests.
- * This class provides common functionality for all API requests.
+ * Utility class for managing SSL certificates for API requests.
  */
-public class GenericRestClient {
+public class CertificateManager {
     
-    private static final Log logger = LogFactory.getLog(GenericRestClient.class);
+    private static final Log logger = LogFactory.getLog(CertificateManager.class);
     private static final PropertyUtil props = ConfigurationManager.getBundle();
-    
-    // HTTP Methods
-    public static final String METHOD_GET = "GET";
-    public static final String METHOD_POST = "POST";
-    public static final String METHOD_PUT = "PUT";
-    public static final String METHOD_DELETE = "DELETE";
-    public static final String METHOD_PATCH = "PATCH";
-    
-    // Common Content Types
-    public static final String CONTENT_TYPE_JSON = "application/json";
-    public static final String CONTENT_TYPE_XML = "application/xml";
-    public static final String CONTENT_TYPE_FORM = "application/x-www-form-urlencoded";
-    public static final String CONTENT_TYPE_MULTIPART = "multipart/form-data";
+    private static SSLContext sslContext;
     
     /**
-     * Represents an API response with status code and body content.
+     * Configures and returns the SSL context with the specified certificate.
+     * 
+     * @return configured SSLContext
      */
-    public static class ApiResponse {
-        private int statusCode;
-        private String responseBody;
-        private Map<String, String> responseHeaders;
-        
-        public ApiResponse(int statusCode, String responseBody, Map<String, String> responseHeaders) {
-            this.statusCode = statusCode;
-            this.responseBody = responseBody;
-            this.responseHeaders = responseHeaders;
-        }
-        
-        public int getStatusCode() {
-            return statusCode;
-        }
-        
-        public String getResponseBody() {
-            return responseBody;
-        }
-        
-        public Map<String, String> getResponseHeaders() {
-            return responseHeaders;
-        }
-        
-        public boolean isSuccessful() {
-            return statusCode >= 200 && statusCode < 300;
-        }
-        
-        public JSONObject getJsonResponse() {
-            if (responseBody != null && !responseBody.isEmpty()) {
-                try {
-                    return new JSONObject(responseBody);
-                } catch (Exception e) {
-                    logger.error("Error parsing response as JSON: " + e.getMessage(), e);
+    public static SSLContext getSSLContext() {
+        if (sslContext == null) {
+            try {
+                String certificateFile = props.getString("certificate.file");
+                String certificatePassword = props.getString("certificate.password");
+                
+                logger.info("Loading certificate from: " + certificateFile);
+                
+                KeyStore keyStore = KeyStore.getInstance("PKCS12");
+                try (FileInputStream fis = new FileInputStream(certificateFile)) {
+                    keyStore.load(fis, certificatePassword.toCharArray());
                 }
+                
+                KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+                keyManagerFactory.init(keyStore, certificatePassword.toCharArray());
+                KeyManager[] keyManagers = keyManagerFactory.getKeyManagers();
+                
+                sslContext = SSLContext.getInstance("TLS");
+                sslContext.init(keyManagers, null, null);
+                
+                logger.info("SSL context initialized successfully");
+                
+            } catch (KeyStoreException | NoSuchAlgorithmException | CertificateException | IOException 
+                    | UnrecoverableKeyException | java.security.KeyManagementException e) {
+                logger.error("Failed to configure SSL context: " + e.getMessage(), e);
+                throw new RuntimeException("Failed to configure SSL context: " + e.getMessage(), e);
             }
-            return null;
         }
-    }
-    
-    /**
-     * Sends a request to the specified endpoint using the specified method.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param method HTTP method (GET, POST, PUT, DELETE, PATCH)
-     * @param headers request headers
-     * @param payload request payload (for POST, PUT, PATCH)
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing status code and response body
-     */
-    public static ApiResponse sendRequest(String endpointKey, String method, 
-                                          Map<String, String> headers, String payload, 
-                                          boolean useSSL) {
-        String endpoint = props.getString(endpointKey);
-        
-        try {
-            URL url = new URL(endpoint);
-            HttpURLConnection connection;
-            
-            if (url.getProtocol().equals("https")) {
-                connection = (HttpsURLConnection) url.openConnection();
-                if (useSSL) {
-                    ((HttpsURLConnection) connection).setSSLSocketFactory(
-                            CertificateManager.getSSLContext().getSocketFactory());
-                }
-            } else {
-                connection = (HttpURLConnection) url.openConnection();
-            }
-            
-            connection.setRequestMethod(method);
-            
-            // Set request headers
-            if (headers == null || headers.isEmpty()) {
-                headers = getDefaultHeaders();
-            }
-            
-            for (Map.Entry<String, String> header : headers.entrySet()) {
-                connection.setRequestProperty(header.getKey(), header.getValue());
-            }
-            
-            // Set connection timeouts
-            if (props.containsKey("ws.request.timeout")) {
-                connection.setReadTimeout(props.getInt("ws.request.timeout"));
-            }
-            
-            if (props.containsKey("ws.connection.timeout")) {
-                connection.setConnectTimeout(props.getInt("ws.connection.timeout"));
-            }
-            
-            // Set payload for methods that support it
-            if (payload != null && 
-               (METHOD_POST.equals(method) || METHOD_PUT.equals(method) || METHOD_PATCH.equals(method))) {
-                connection.setDoOutput(true);
-                try (OutputStream os = connection.getOutputStream()) {
-                    byte[] input = payload.getBytes(StandardCharsets.UTF_8);
-                    os.write(input, 0, input.length);
-                }
-            }
-            
-            // Get response
-            int statusCode = connection.getResponseCode();
-            
-            // Read response
-            BufferedReader reader;
-            if (statusCode >= 200 && statusCode < 300) {
-                reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
-            } else {
-                reader = new BufferedReader(new InputStreamReader(connection.getErrorStream(), StandardCharsets.UTF_8));
-            }
-            
-            String responseBody = reader.lines().collect(Collectors.joining("\n"));
-            reader.close();
-            
-            // Get response headers
-            Map<String, String> responseHeaders = new HashMap<>();
-            connection.getHeaderFields().forEach((key, values) -> {
-                if (key != null && !values.isEmpty()) {
-                    responseHeaders.put(key, values.get(0));
-                }
-            });
-            
-            // Log response info
-            logger.info("Received response with status: " + statusCode);
-            logger.debug("Response body: " + responseBody);
-            
-            return new ApiResponse(statusCode, responseBody, responseHeaders);
-            
-        } catch (Exception e) {
-            logger.error("Error executing API request: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sends a GET request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing status code and response body
-     */
-    public static ApiResponse sendGetRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_GET, headers, null, useSSL);
-    }
-    
-    /**
-     * Sends a POST request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param payload request payload
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing status code and response body
-     */
-    public static ApiResponse sendPostRequest(String endpointKey, Map<String, String> headers, 
-                                             String payload, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_POST, headers, payload, useSSL);
-    }
-    
-    /**
-     * Sends a PUT request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param payload request payload
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing status code and response body
-     */
-    public static ApiResponse sendPutRequest(String endpointKey, Map<String, String> headers, 
-                                           String payload, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_PUT, headers, payload, useSSL);
-    }
-    
-    /**
-     * Sends a DELETE request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing status code and response body
-     */
-    public static ApiResponse sendDeleteRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_DELETE, headers, null, useSSL);
-    }
-    
-    /**
-     * Sends a PATCH request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param payload request payload
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing status code and response body
-     */
-    public static ApiResponse sendPatchRequest(String endpointKey, Map<String, String> headers, 
-                                             String payload, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_PATCH, headers, payload, useSSL);
-    }
-    
-    /**
-     * Gets default headers for API requests.
-     * 
-     * @return map of default headers
-     */
-    public static Map<String, String> getDefaultHeaders() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", CONTENT_TYPE_JSON);
-        headers.put("Accept", CONTENT_TYPE_JSON);
-        return headers;
-    }
-    
-    /**
-     * Loads a payload from a file and substitutes placeholders with values.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute
-     * @return processed payload as a string
-     */
-    public static String loadPayload(String payloadFileName, Map<String, Object> dataMap) {
-        String payloadPath = "resources/payloads/" + payloadFileName;
-        
-        try {
-            String content = new String(Files.readAllBytes(Paths.get(payloadPath)));
-            
-            // Replace placeholders with actual values
-            if (dataMap != null) {
-                for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
-                    String placeholder = "${" + entry.getKey() + "}";
-                    String value = entry.getValue() != null ? entry.getValue().toString() : "";
-                    content = content.replace(placeholder, value);
-                }
-            }
-            
-            logger.info("Prepared payload: " + content);
-            return content;
-        } catch (IOException e) {
-            logger.error("Failed to load payload file: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to load payload file: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Creates a payload from a JSON object.
-     * 
-     * @param jsonObject JSON object to convert to string
-     * @return JSON string
-     */
-    public static String createPayload(JSONObject jsonObject) {
-        return jsonObject != null ? jsonObject.toString() : null;
-    }
-    
-    /**
-     * Extracts a value from the JSON response by key.
-     * 
-     * @param response API response
-     * @param key the JSON key
-     * @return the value as a string, or null if not found
-     */
-    public static String getResponseValue(ApiResponse response, String key) {
-        if (response == null || response.getResponseBody() == null) {
-            return null;
-        }
-        
-        try {
-            JSONObject json = new JSONObject(response.getResponseBody());
-            return json.has(key) ? json.get(key).toString() : null;
-        } catch (Exception e) {
-            logger.error("Error parsing response JSON: " + e.getMessage(), e);
-            return null;
-        }
-    }
-    
-    /**
-     * Checks if a field exists in the JSON response.
-     * 
-     * @param response API response
-     * @param field the field name
-     * @return true if the field exists, false otherwise
-     */
-    public static boolean hasResponseField(ApiResponse response, String field) {
-        if (response == null || response.getResponseBody() == null) {
-            return false;
-        }
-        
-        try {
-            JSONObject json = new JSONObject(response.getResponseBody());
-            return json.has(field);
-        } catch (Exception e) {
-            logger.error("Error checking field in response JSON: " + e.getMessage(), e);
-            return false;
-        }
-    }
-    
-    /**
-     * Builds a query string from parameters.
-     * 
-     * @param params map of query parameters
-     * @return formatted query string (without leading '?')
-     */
-    public static String buildQueryString(Map<String, String> params) {
-        if (params == null || params.isEmpty()) {
-            return "";
-        }
-        
-        StringBuilder sb = new StringBuilder();
-        boolean first = true;
-        
-        for (Map.Entry<String, String> entry : params.entrySet()) {
-            if (first) {
-                first = false;
-            } else {
-                sb.append("&");
-            }
-            
-            sb.append(entry.getKey()).append("=").append(entry.getValue());
-        }
-        
-        return sb.toString();
-    }
-    
-    /**
-     * Adds query parameters to an endpoint URL.
-     * 
-     * @param endpoint base endpoint URL
-     * @param params map of query parameters
-     * @return endpoint URL with query parameters
-     */
-    public static String addQueryParams(String endpoint, Map<String, String> params) {
-        if (params == null || params.isEmpty()) {
-            return endpoint;
-        }
-        
-        String queryString = buildQueryString(params);
-        
-        if (endpoint.contains("?")) {
-            return endpoint + "&" + queryString;
-        } else {
-            return endpoint + "?" + queryString;
-        }
+        return sslContext;
     }
 }
