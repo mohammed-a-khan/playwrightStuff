@@ -1,10 +1,20 @@
 package com.yourcompany.api.core;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -12,10 +22,7 @@ import org.json.JSONObject;
 
 import com.qmetry.qaf.automation.core.ConfigurationManager;
 import com.qmetry.qaf.automation.util.PropertyUtil;
-import com.qmetry.qaf.automation.ws.WSCommunicator;
-import com.qmetry.qaf.automation.ws.rest.RestCommunicator;
-import com.qmetry.qaf.automation.ws.rest.RestRequestBean;
-import com.qmetry.qaf.automation.ws.rest.RestResultBean;
+import com.qmetry.qaf.automation.ws.WsRequestBean;
 import com.yourcompany.api.utils.CertificateManager;
 
 /**
@@ -41,6 +48,48 @@ public class GenericRestClient {
     public static final String CONTENT_TYPE_MULTIPART = "multipart/form-data";
     
     /**
+     * Represents an API response with status code and body content.
+     */
+    public static class ApiResponse {
+        private int statusCode;
+        private String responseBody;
+        private Map<String, String> responseHeaders;
+        
+        public ApiResponse(int statusCode, String responseBody, Map<String, String> responseHeaders) {
+            this.statusCode = statusCode;
+            this.responseBody = responseBody;
+            this.responseHeaders = responseHeaders;
+        }
+        
+        public int getStatusCode() {
+            return statusCode;
+        }
+        
+        public String getResponseBody() {
+            return responseBody;
+        }
+        
+        public Map<String, String> getResponseHeaders() {
+            return responseHeaders;
+        }
+        
+        public boolean isSuccessful() {
+            return statusCode >= 200 && statusCode < 300;
+        }
+        
+        public JSONObject getJsonResponse() {
+            if (responseBody != null && !responseBody.isEmpty()) {
+                try {
+                    return new JSONObject(responseBody);
+                } catch (Exception e) {
+                    logger.error("Error parsing response as JSON: " + e.getMessage(), e);
+                }
+            }
+            return null;
+        }
+    }
+    
+    /**
      * Sends a request to the specified endpoint using the specified method.
      * 
      * @param endpointKey property key for the endpoint URL
@@ -48,14 +97,89 @@ public class GenericRestClient {
      * @param headers request headers
      * @param payload request payload (for POST, PUT, PATCH)
      * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
+     * @return ApiResponse containing status code and response body
      */
-    public static RestResultBean sendRequest(String endpointKey, String method, 
-                                            Map<String, String> headers, String payload, 
-                                            boolean useSSL) {
+    public static ApiResponse sendRequest(String endpointKey, String method, 
+                                          Map<String, String> headers, String payload, 
+                                          boolean useSSL) {
         String endpoint = props.getString(endpointKey);
-        RestRequestBean request = createRequest(endpoint, method, headers, payload);
-        return executeRequest(request, useSSL);
+        
+        try {
+            URL url = new URL(endpoint);
+            HttpURLConnection connection;
+            
+            if (url.getProtocol().equals("https")) {
+                connection = (HttpsURLConnection) url.openConnection();
+                if (useSSL) {
+                    ((HttpsURLConnection) connection).setSSLSocketFactory(
+                            CertificateManager.getSSLContext().getSocketFactory());
+                }
+            } else {
+                connection = (HttpURLConnection) url.openConnection();
+            }
+            
+            connection.setRequestMethod(method);
+            
+            // Set request headers
+            if (headers == null || headers.isEmpty()) {
+                headers = getDefaultHeaders();
+            }
+            
+            for (Map.Entry<String, String> header : headers.entrySet()) {
+                connection.setRequestProperty(header.getKey(), header.getValue());
+            }
+            
+            // Set connection timeouts
+            if (props.containsKey("ws.request.timeout")) {
+                connection.setReadTimeout(props.getInt("ws.request.timeout"));
+            }
+            
+            if (props.containsKey("ws.connection.timeout")) {
+                connection.setConnectTimeout(props.getInt("ws.connection.timeout"));
+            }
+            
+            // Set payload for methods that support it
+            if (payload != null && 
+               (METHOD_POST.equals(method) || METHOD_PUT.equals(method) || METHOD_PATCH.equals(method))) {
+                connection.setDoOutput(true);
+                try (OutputStream os = connection.getOutputStream()) {
+                    byte[] input = payload.getBytes(StandardCharsets.UTF_8);
+                    os.write(input, 0, input.length);
+                }
+            }
+            
+            // Get response
+            int statusCode = connection.getResponseCode();
+            
+            // Read response
+            BufferedReader reader;
+            if (statusCode >= 200 && statusCode < 300) {
+                reader = new BufferedReader(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
+            } else {
+                reader = new BufferedReader(new InputStreamReader(connection.getErrorStream(), StandardCharsets.UTF_8));
+            }
+            
+            String responseBody = reader.lines().collect(Collectors.joining("\n"));
+            reader.close();
+            
+            // Get response headers
+            Map<String, String> responseHeaders = new HashMap<>();
+            connection.getHeaderFields().forEach((key, values) -> {
+                if (key != null && !values.isEmpty()) {
+                    responseHeaders.put(key, values.get(0));
+                }
+            });
+            
+            // Log response info
+            logger.info("Received response with status: " + statusCode);
+            logger.debug("Response body: " + responseBody);
+            
+            return new ApiResponse(statusCode, responseBody, responseHeaders);
+            
+        } catch (Exception e) {
+            logger.error("Error executing API request: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
+        }
     }
     
     /**
@@ -64,9 +188,9 @@ public class GenericRestClient {
      * @param endpointKey property key for the endpoint URL
      * @param headers request headers
      * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
+     * @return ApiResponse containing status code and response body
      */
-    public static RestResultBean sendGetRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
+    public static ApiResponse sendGetRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
         return sendRequest(endpointKey, METHOD_GET, headers, null, useSSL);
     }
     
@@ -77,10 +201,10 @@ public class GenericRestClient {
      * @param headers request headers
      * @param payload request payload
      * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
+     * @return ApiResponse containing status code and response body
      */
-    public static RestResultBean sendPostRequest(String endpointKey, Map<String, String> headers, 
-                                               String payload, boolean useSSL) {
+    public static ApiResponse sendPostRequest(String endpointKey, Map<String, String> headers, 
+                                             String payload, boolean useSSL) {
         return sendRequest(endpointKey, METHOD_POST, headers, payload, useSSL);
     }
     
@@ -91,10 +215,10 @@ public class GenericRestClient {
      * @param headers request headers
      * @param payload request payload
      * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
+     * @return ApiResponse containing status code and response body
      */
-    public static RestResultBean sendPutRequest(String endpointKey, Map<String, String> headers, 
-                                              String payload, boolean useSSL) {
+    public static ApiResponse sendPutRequest(String endpointKey, Map<String, String> headers, 
+                                           String payload, boolean useSSL) {
         return sendRequest(endpointKey, METHOD_PUT, headers, payload, useSSL);
     }
     
@@ -104,9 +228,9 @@ public class GenericRestClient {
      * @param endpointKey property key for the endpoint URL
      * @param headers request headers
      * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
+     * @return ApiResponse containing status code and response body
      */
-    public static RestResultBean sendDeleteRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
+    public static ApiResponse sendDeleteRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
         return sendRequest(endpointKey, METHOD_DELETE, headers, null, useSSL);
     }
     
@@ -117,92 +241,11 @@ public class GenericRestClient {
      * @param headers request headers
      * @param payload request payload
      * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
+     * @return ApiResponse containing status code and response body
      */
-    public static RestResultBean sendPatchRequest(String endpointKey, Map<String, String> headers, 
-                                                String payload, boolean useSSL) {
+    public static ApiResponse sendPatchRequest(String endpointKey, Map<String, String> headers, 
+                                             String payload, boolean useSSL) {
         return sendRequest(endpointKey, METHOD_PATCH, headers, payload, useSSL);
-    }
-    
-    /**
-     * Creates a RestRequestBean with the specified parameters.
-     * 
-     * @param endpoint the endpoint URL
-     * @param method HTTP method
-     * @param headers request headers
-     * @param payload request payload
-     * @return configured RestRequestBean
-     */
-    public static RestRequestBean createRequest(String endpoint, String method, 
-                                              Map<String, String> headers, String payload) {
-        RestRequestBean request = new RestRequestBean();
-        request.setServiceEndPoint(endpoint);
-        request.setMethod(method);
-        
-        // Apply default headers if none provided
-        if (headers == null || headers.isEmpty()) {
-            headers = getDefaultHeaders();
-        }
-        
-        request.setRequestHeaders(headers);
-        
-        // Set payload for methods that support it
-        if (payload != null && 
-           (METHOD_POST.equals(method) || METHOD_PUT.equals(method) || METHOD_PATCH.equals(method))) {
-            request.setRequestBody(payload);
-        }
-        
-        return request;
-    }
-    
-    /**
-     * Executes the REST request.
-     * 
-     * @param request the RestRequestBean
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return RestResultBean containing the response
-     */
-    public static RestResultBean executeRequest(RestRequestBean request, boolean useSSL) {
-        WSCommunicator communicator = createCommunicator(useSSL);
-        
-        try {
-            logger.info("Sending " + request.getMethod() + " request to: " + request.getServiceEndPoint());
-            RestResultBean response = (RestResultBean) communicator.process(request);
-            
-            logger.info("Received response with status: " + response.getStatus());
-            logger.debug("Response body: " + response.getResponse());
-            
-            return response;
-        } catch (Exception e) {
-            logger.error("Error executing API request: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Creates a WSCommunicator with the specified SSL configuration.
-     * 
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return configured WSCommunicator
-     */
-    public static WSCommunicator createCommunicator(boolean useSSL) {
-        RestCommunicator communicator = new RestCommunicator();
-        
-        // Configure timeouts
-        if (props.containsKey("ws.request.timeout")) {
-            communicator.setTimeout(props.getInt("ws.request.timeout"));
-        }
-        
-        if (props.containsKey("ws.connection.timeout")) {
-            communicator.setConnTimeout(props.getInt("ws.connection.timeout"));
-        }
-        
-        // Set SSL context if required
-        if (useSSL) {
-            communicator.setSSLContext(CertificateManager.getSSLContext());
-        }
-        
-        return communicator;
     }
     
     /**
@@ -260,17 +303,17 @@ public class GenericRestClient {
     /**
      * Extracts a value from the JSON response by key.
      * 
-     * @param response REST response bean
+     * @param response API response
      * @param key the JSON key
      * @return the value as a string, or null if not found
      */
-    public static String getResponseValue(RestResultBean response, String key) {
-        if (response == null || response.getResponse() == null) {
+    public static String getResponseValue(ApiResponse response, String key) {
+        if (response == null || response.getResponseBody() == null) {
             return null;
         }
         
         try {
-            JSONObject json = new JSONObject(response.getResponse());
+            JSONObject json = new JSONObject(response.getResponseBody());
             return json.has(key) ? json.get(key).toString() : null;
         } catch (Exception e) {
             logger.error("Error parsing response JSON: " + e.getMessage(), e);
@@ -281,37 +324,22 @@ public class GenericRestClient {
     /**
      * Checks if a field exists in the JSON response.
      * 
-     * @param response REST response bean
+     * @param response API response
      * @param field the field name
      * @return true if the field exists, false otherwise
      */
-    public static boolean hasResponseField(RestResultBean response, String field) {
-        if (response == null || response.getResponse() == null) {
+    public static boolean hasResponseField(ApiResponse response, String field) {
+        if (response == null || response.getResponseBody() == null) {
             return false;
         }
         
         try {
-            JSONObject json = new JSONObject(response.getResponse());
+            JSONObject json = new JSONObject(response.getResponseBody());
             return json.has(field);
         } catch (Exception e) {
             logger.error("Error checking field in response JSON: " + e.getMessage(), e);
             return false;
         }
-    }
-    
-    /**
-     * Checks if the response was successful (status code 2xx).
-     * 
-     * @param response REST response bean
-     * @return true if successful, false otherwise
-     */
-    public static boolean isSuccessful(RestResultBean response) {
-        if (response == null) {
-            return false;
-        }
-        
-        int status = response.getStatus();
-        return status >= 200 && status < 300;
     }
     
     /**
