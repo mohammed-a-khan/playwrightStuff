@@ -1,216 +1,568 @@
-Project Structure:
+SimpleRestClient.java
+----------------------
 
-src/main/java
-├── com.mycompany.www.api.core
-│   ├── BaseSecureApiClient.java
-│   └── ApiResponse.java
-├── com.mycompany.www.api.endpoints
-│   └── AssetLayoutApi.java
-├── com.mycompany.www.api.steps
-│   ├── BaseApiSteps.java
-│   └── AssetLayoutSteps.java
-├── com.mycompany.www.api.utils
-│   ├── CertificateManager.java
-│   ├── JsonPayloadUtil.java
-│   ├── ExcelUtil.java
-│   └── ApiUtil.java
+package com.mycompany.api.core;
 
-src/test/resources
-├── certificates
-│   └── KHANonProd.pfx
-├── payloads
-│   └── assetlayout_payload.json
-├── environment
-│   └── application.properties
-│   └── testdata
-│       └── Regression_testdata.xlsx
-└── features
-    └── assetlayout.feature
-
-------------------------------------------
-BaseSecureApiClient.java
-------------------------------------------
-package com.mycompany.www.api.core;
+import java.io.File;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 import io.restassured.RestAssured;
 import io.restassured.config.SSLConfig;
-import io.restassured.specification.RequestSpecification;
-import com.mycompany.www.api.utils.CertificateManager;
-
-public class BaseSecureApiClient {
-
-    protected RequestSpecification getSecureRequest() {
-        CertificateManager certManager = new CertificateManager();
-        RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                        .keyStore(certManager.getKeyStore(), certManager.getPassphrase())
-                        .trustStore(certManager.getKeyStore(), certManager.getPassphrase())
-                        .relaxedHTTPSValidation());
-        return RestAssured.given();
-    }
-}
-
-------------------------------------------
-CertificateManager.java
-------------------------------------------
-package com.mycompany.www.api.utils;
-
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import java.io.File;
-
-public class CertificateManager {
-    private final String certPath;
-    private final String passphrase;
-
-    public CertificateManager() {
-        certPath = ConfigurationManager.getBundle().getString("certificate.path");
-        passphrase = ConfigurationManager.getBundle().getString("certificate.passphrase");
-    }
-
-    public File getKeyStore() {
-        return new File(certPath);
-    }
-
-    public String getPassphrase() {
-        return passphrase;
-    }
-}
-
-------------------------------------------
-ApiUtil.java
-------------------------------------------
-package com.mycompany.www.api.utils;
-
 import io.restassured.http.ContentType;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
-import java.util.Map;
 
-public class ApiUtil {
-
-    public static Response post(RequestSpecification req, String url, String payload) {
-        return req.contentType(ContentType.JSON)
-                .body(payload)
-                .when()
-                .post(url);
-    }
-
-    public static Response get(RequestSpecification req, String url) {
-        return req.when().get(url);
-    }
-
-    public static Response put(RequestSpecification req, String url, String payload) {
-        return req.contentType(ContentType.JSON)
-                .body(payload)
-                .when()
-                .put(url);
-    }
-
-    public static Response delete(RequestSpecification req, String url) {
-        return req.when().delete(url);
-    }
-}
-
-------------------------------------------
-JsonPayloadUtil.java
-------------------------------------------
-package com.mycompany.www.api.utils;
-
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.util.Map;
-
-public class JsonPayloadUtil {
-    public static String getUpdatedPayload(String path, Map<String, Object> data) throws Exception {
-        String payload = new String(Files.readAllBytes(Paths.get(path)));
-        for (Map.Entry<String, Object> entry : data.entrySet()) {
-            payload = payload.replace("${" + entry.getKey() + "}", entry.getValue().toString());
+/**
+ * A simplified REST client that ensures direct access to API endpoints
+ * with certificate-based authentication.
+ * Based on the working standalone code sample.
+ */
+public class SimpleRestClient {
+    
+    private static final Log logger = LogFactory.getLog(SimpleRestClient.class);
+    
+    private String baseUrl;
+    private File certificateFile;
+    private String certificatePassword;
+    private boolean sslConfigured = false;
+    
+    /**
+     * Constructor for SimpleRestClient with required parameters.
+     * 
+     * @param baseUrl the base URL for the API
+     * @param certificateFilePath path to the certificate file
+     * @param certificatePassword password for the certificate
+     */
+    public SimpleRestClient(String baseUrl, String certificateFilePath, String certificatePassword) {
+        this.baseUrl = baseUrl;
+        this.certificateFile = new File(certificateFilePath);
+        this.certificatePassword = certificatePassword;
+        
+        if (!certificateFile.exists()) {
+            logger.error("Certificate file not found: " + certificateFilePath);
+            throw new RuntimeException("Certificate file not found: " + certificateFilePath);
         }
-        return payload;
+        
+        configureSsl();
+    }
+    
+    /**
+     * Configures SSL for REST Assured using the certificate.
+     */
+    private void configureSsl() {
+        try {
+            RestAssured.config = RestAssured.config()
+                    .sslConfig(new SSLConfig()
+                            .keyStore(certificateFile, certificatePassword)
+                            .trustStore(certificateFile, certificatePassword)
+                            .relaxedHTTPSValidation());
+            
+            sslConfigured = true;
+            logger.info("SSL configuration completed successfully");
+        } catch (Exception e) {
+            logger.error("Error configuring SSL: " + e.getMessage(), e);
+            throw new RuntimeException("Error configuring SSL: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Creates a basic request specification with content type JSON.
+     * 
+     * @return RequestSpecification with content type JSON
+     */
+    private RequestSpecification createBaseRequest() {
+        if (!sslConfigured) {
+            configureSsl();
+        }
+        
+        return RestAssured.given()
+                .contentType(ContentType.JSON);
+    }
+    
+    /**
+     * Sends a POST request to the specified endpoint.
+     * 
+     * @param endpoint the API endpoint (path after base URL)
+     * @param payload the JSON payload as a string
+     * @return Response from the API
+     */
+    public Response post(String endpoint, String payload) {
+        logger.info("Sending POST request to: " + baseUrl + endpoint);
+        logger.debug("Request payload: " + payload);
+        
+        try {
+            Response response = createBaseRequest()
+                    .body(payload)
+                    .when()
+                    .post(baseUrl + endpoint);
+            
+            logger.info("Response status code: " + response.getStatusCode());
+            logger.debug("Response body: " + response.getBody().asString());
+            
+            return response;
+        } catch (Exception e) {
+            logger.error("Error sending POST request: " + e.getMessage(), e);
+            throw new RuntimeException("Error sending POST request: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Sends a GET request to the specified endpoint.
+     * 
+     * @param endpoint the API endpoint (path after base URL)
+     * @return Response from the API
+     */
+    public Response get(String endpoint) {
+        logger.info("Sending GET request to: " + baseUrl + endpoint);
+        
+        try {
+            Response response = createBaseRequest()
+                    .when()
+                    .get(baseUrl + endpoint);
+            
+            logger.info("Response status code: " + response.getStatusCode());
+            logger.debug("Response body: " + response.getBody().asString());
+            
+            return response;
+        } catch (Exception e) {
+            logger.error("Error sending GET request: " + e.getMessage(), e);
+            throw new RuntimeException("Error sending GET request: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Sends a PUT request to the specified endpoint.
+     * 
+     * @param endpoint the API endpoint (path after base URL)
+     * @param payload the JSON payload as a string
+     * @return Response from the API
+     */
+    public Response put(String endpoint, String payload) {
+        logger.info("Sending PUT request to: " + baseUrl + endpoint);
+        logger.debug("Request payload: " + payload);
+        
+        try {
+            Response response = createBaseRequest()
+                    .body(payload)
+                    .when()
+                    .put(baseUrl + endpoint);
+            
+            logger.info("Response status code: " + response.getStatusCode());
+            logger.debug("Response body: " + response.getBody().asString());
+            
+            return response;
+        } catch (Exception e) {
+            logger.error("Error sending PUT request: " + e.getMessage(), e);
+            throw new RuntimeException("Error sending PUT request: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Sends a DELETE request to the specified endpoint.
+     * 
+     * @param endpoint the API endpoint (path after base URL)
+     * @return Response from the API
+     */
+    public Response delete(String endpoint) {
+        logger.info("Sending DELETE request to: " + baseUrl + endpoint);
+        
+        try {
+            Response response = createBaseRequest()
+                    .when()
+                    .delete(baseUrl + endpoint);
+            
+            logger.info("Response status code: " + response.getStatusCode());
+            logger.debug("Response body: " + response.getBody().asString());
+            
+            return response;
+        } catch (Exception e) {
+            logger.error("Error sending DELETE request: " + e.getMessage(), e);
+            throw new RuntimeException("Error sending DELETE request: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Adds a header to the request.
+     * 
+     * @param headerName the header name
+     * @param headerValue the header value
+     * @return RequestSpecification with the header added
+     */
+    public RequestSpecification addHeader(String headerName, String headerValue) {
+        return createBaseRequest()
+                .header(headerName, headerValue);
     }
 }
 
-------------------------------------------
-AssetLayoutApi.java
-------------------------------------------
-package com.mycompany.www.api.endpoints;
+AssetLayoutAPI.java
+-------------------
 
-import com.mycompany.www.api.core.BaseSecureApiClient;
-import com.mycompany.www.api.utils.ApiUtil;
-import io.restassured.response.Response;
+package com.mycompany.api.endpoints;
 
-public class AssetLayoutApi extends BaseSecureApiClient {
-
-    public Response postAssetLayout(String url, String payload) {
-        return ApiUtil.post(getSecureRequest(), url, payload);
-    }
-}
-
-------------------------------------------
-BaseApiSteps.java
-------------------------------------------
-package com.mycompany.www.api.steps;
-
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import io.restassured.response.Response;
-
-public class BaseApiSteps {
-    protected Response response;
-
-    @QAFTestStep(description = "validate response status {statusCode}")
-    public void validateResponseStatus(int statusCode) {
-        assert response.getStatusCode() == statusCode;
-    }
-}
-
-------------------------------------------
-AssetLayoutSteps.java
-------------------------------------------
-package com.mycompany.www.api.steps;
-
-import com.mycompany.www.api.endpoints.AssetLayoutApi;
-import com.mycompany.www.api.utils.JsonPayloadUtil;
-import com.qmetry.qaf.automation.step.QAFTestStep;
 import java.util.Map;
+import java.util.UUID;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
 
-public class AssetLayoutSteps extends BaseApiSteps {
+import io.restassured.response.Response;
+import com.mycompany.api.core.SimpleRestClient;
 
-    @QAFTestStep(description = "post asset layout with data {data}")
-    public void postAssetLayout(Map<String, Object> data) throws Exception {
-        String url = "https://ktgapi-sit.ksmls.americas.ishare.net/api/v1/spc/assetlayout";
-        String payload = JsonPayloadUtil.getUpdatedPayload("resources/payloads/assetlayout_payload.json", data);
-        AssetLayoutApi api = new AssetLayoutApi();
-        response = api.postAssetLayout(url, payload);
+/**
+ * API endpoint class for Asset Layout operations.
+ * Uses the simplified REST client to ensure stable connections.
+ */
+public class AssetLayoutAPI {
+    
+    private static final Log logger = LogFactory.getLog(AssetLayoutAPI.class);
+    private static final String ENDPOINT = "/api/v1/spc/assetlayout";
+    
+    private SimpleRestClient restClient;
+    
+    /**
+     * Constructor for AssetLayoutAPI with configuration from properties.
+     * 
+     * @param baseUrl base URL for the API
+     * @param certificatePath path to the certificate file
+     * @param certificatePassword password for the certificate
+     */
+    public AssetLayoutAPI(String baseUrl, String certificatePath, String certificatePassword) {
+        this.restClient = new SimpleRestClient(baseUrl, certificatePath, certificatePassword);
+        logger.info("Initialized AssetLayoutAPI with base URL: " + baseUrl);
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with the provided data.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date (YYYY-MM-DD)
+     * @return Response from the API
+     */
+    public Response submitRequest(String dealId, String reportDate) {
+        // Create payload based on your working example
+        JSONObject payload = new JSONObject();
+        payload.put("messageId", generateMessageId());
+        payload.put("dealId", dealId);
+        payload.put("reportDate", reportDate);
+        
+        String payloadStr = payload.toString();
+        logger.info("Sending request to Asset Layout API with dealId: " + dealId);
+        
+        return restClient.post(ENDPOINT, payloadStr);
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with a full data map.
+     * 
+     * @param dataMap map containing all required fields
+     * @return Response from the API
+     */
+    public Response submitRequest(Map<String, Object> dataMap) {
+        // Ensure required fields exist
+        if (!dataMap.containsKey("messageId")) {
+            dataMap.put("messageId", generateMessageId());
+        }
+        
+        if (!dataMap.containsKey("dealId") || !dataMap.containsKey("reportDate")) {
+            logger.error("Required fields missing from data map: dealId and/or reportDate");
+            throw new IllegalArgumentException("Required fields missing: dealId and/or reportDate");
+        }
+        
+        JSONObject payload = new JSONObject(dataMap);
+        String payloadStr = payload.toString();
+        
+        logger.info("Sending request to Asset Layout API with data map");
+        logger.debug("Payload: " + payloadStr);
+        
+        return restClient.post(ENDPOINT, payloadStr);
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with a custom payload.
+     * 
+     * @param payload full JSON payload as a string
+     * @return Response from the API
+     */
+    public Response submitRequest(String payload) {
+        logger.info("Sending request to Asset Layout API with custom payload");
+        logger.debug("Payload: " + payload);
+        
+        return restClient.post(ENDPOINT, payload);
+    }
+    
+    /**
+     * Generates a unique message ID for requests.
+     * 
+     * @return unique message ID string
+     */
+    private String generateMessageId() {
+        return "Test-" + UUID.randomUUID().toString();
+    }
+    
+    /**
+     * Utility method to create a basic payload.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date
+     * @return JSON payload as a string
+     */
+    public static String createBasicPayload(String dealId, String reportDate) {
+        return "{\n" +
+               "  \"messageId\": \"Test-" + UUID.randomUUID().toString() + "\",\n" +
+               "  \"dealId\": " + dealId + ",\n" +
+               "  \"reportDate\": \"" + reportDate + "\"\n" +
+               "}";
     }
 }
 
-------------------------------------------
-application.properties
-------------------------------------------
-certificate.path=resources/certificates/KHANonProd.pfx
-certificate.passphrase=kha#123!
+AssetLayoutSteps.java
+-----------------------
 
-------------------------------------------
-assetlayout_payload.json
-------------------------------------------
-{
-  "messageId": "${messageId}",
-  "dealId": ${dealId},
-  "reportDate": "${reportDate}"
+package com.mycompany.api.steps;
+
+import java.util.Map;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.PropertyUtil;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qmetry.qaf.automation.util.Validator;
+
+import io.restassured.response.Response;
+import org.hamcrest.CoreMatchers;
+import static org.hamcrest.MatcherAssert.assertThat;
+
+import com.mycompany.api.endpoints.AssetLayoutAPI;
+
+/**
+ * BDD step definitions for the Asset Layout API tests.
+ */
+public class AssetLayoutSteps {
+    
+    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
+    private static final PropertyUtil props = ConfigurationManager.getBundle();
+    
+    // Store the response for validation in subsequent steps
+    private Response response;
+    private AssetLayoutAPI assetLayoutAPI;
+    
+    /**
+     * Initializes the AssetLayoutAPI with configuration.
+     */
+    public AssetLayoutSteps() {
+        String baseUrl = props.getString("api.base.url", "https://ktgapi-sit.ksmls.americas.ishare.net");
+        String certPath = props.getString("certificate.path", "resources/certificates/KHANonProd.pfx");
+        String certPassword = props.getString("certificate.password", "kha#123!");
+        
+        assetLayoutAPI = new AssetLayoutAPI(baseUrl, certPath, certPassword);
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with deal ID and report date.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date in YYYY-MM-DD format
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with deal {dealId} and report date {reportDate}")
+    public void sendRequestWithDealAndDate(String dealId, String reportDate) {
+        try {
+            logger.info("Sending Asset Layout API request with deal ID: " + dealId + ", report date: " + reportDate);
+            
+            response = assetLayoutAPI.submitRequest(dealId, reportDate);
+            
+            Reporter.log("Request sent successfully to Asset Layout API");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getBody().asString());
+            
+        } catch (Exception e) {
+            Reporter.log("Error sending request: " + e.getMessage());
+            logger.error("Error sending request: " + e.getMessage(), e);
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with test data.
+     * 
+     * @param testData map containing the test data
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with data {testData}")
+    public void sendRequestWithTestData(Map<String, Object> testData) {
+        try {
+            logger.info("Sending Asset Layout API request with test data: " + testData);
+            
+            response = assetLayoutAPI.submitRequest(testData);
+            
+            Reporter.log("Request sent successfully to Asset Layout API");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getBody().asString());
+            
+        } catch (Exception e) {
+            Reporter.log("Error sending request: " + e.getMessage());
+            logger.error("Error sending request: " + e.getMessage(), e);
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with a custom payload.
+     * 
+     * @param payload the custom JSON payload
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with payload {payload}")
+    public void sendRequestWithPayload(String payload) {
+        try {
+            logger.info("Sending Asset Layout API request with custom payload");
+            
+            response = assetLayoutAPI.submitRequest(payload);
+            
+            Reporter.log("Request sent successfully to Asset Layout API");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getBody().asString());
+            
+        } catch (Exception e) {
+            Reporter.log("Error sending request: " + e.getMessage());
+            logger.error("Error sending request: " + e.getMessage(), e);
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response has the expected status code.
+     * 
+     * @param expectedStatus the expected HTTP status code
+     */
+    @QAFTestStep(description = "the response status should be {expectedStatus}")
+    public void verifyResponseStatus(int expectedStatus) {
+        if (response == null) {
+            throw new IllegalStateException("No response available. Make sure to send a request first.");
+        }
+        
+        int actualStatus = response.getStatusCode();
+        
+        Reporter.log("Verifying response status: expected=" + expectedStatus + ", actual=" + actualStatus);
+        assertThat("Response status code", actualStatus, CoreMatchers.is(expectedStatus));
+    }
+    
+    /**
+     * Verifies that the response contains the expected field.
+     * 
+     * @param field the field name to check for
+     */
+    @QAFTestStep(description = "the response should contain field {field}")
+    public void verifyResponseContainsField(String field) {
+        if (response == null) {
+            throw new IllegalStateException("No response available. Make sure to send a request first.");
+        }
+        
+        String responseBody = response.getBody().asString();
+        
+        Reporter.log("Verifying response contains field: " + field);
+        
+        // For simple checks, we can just verify the field name is in the response
+        Validator.verifyThat("Response contains field: " + field, 
+                responseBody.contains("\"" + field + "\""), CoreMatchers.is(true));
+    }
+    
+    /**
+     * Verifies that the field in response has the expected value.
+     * 
+     * @param field the field name
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the field {field} in response should be {expectedValue}")
+    public void verifyFieldValue(String field, String expectedValue) {
+        if (response == null) {
+            throw new IllegalStateException("No response available. Make sure to send a request first.");
+        }
+        
+        Reporter.log("Verifying field value: " + field + "=" + expectedValue);
+        
+        // Use RestAssured's path feature to extract the value
+        String actualValue = response.path(field).toString();
+        assertThat("Field value for " + field, actualValue, CoreMatchers.is(expectedValue));
+    }
+    
+    /**
+     * Verifies that the field in response contains the expected text.
+     * 
+     * @param field the field name
+     * @param expectedText the text that should be contained
+     */
+    @QAFTestStep(description = "the field {field} in response should contain {expectedText}")
+    public void verifyFieldContains(String field, String expectedText) {
+        if (response == null) {
+            throw new IllegalStateException("No response available. Make sure to send a request first.");
+        }
+        
+        Reporter.log("Verifying field contains text: " + field + " contains " + expectedText);
+        
+        // Use RestAssured's path feature to extract the value
+        String actualValue = response.path(field).toString();
+        assertThat("Field " + field + " contains " + expectedText, 
+                actualValue.contains(expectedText), CoreMatchers.is(true));
+    }
+    
+    /**
+     * Verifies that the response time is below the threshold.
+     * 
+     * @param maxMillis the maximum response time in milliseconds
+     */
+    @QAFTestStep(description = "the response time should be less than {maxMillis} milliseconds")
+    public void verifyResponseTime(long maxMillis) {
+        if (response == null) {
+            throw new IllegalStateException("No response available. Make sure to send a request first.");
+        }
+        
+        long responseTime = response.getTime();
+        
+        Reporter.log("Verifying response time: " + responseTime + "ms (max: " + maxMillis + "ms)");
+        Validator.verifyThat("Response time is below threshold", 
+                responseTime < maxMillis, CoreMatchers.is(true));
+    }
 }
 
-------------------------------------------
 assetlayout.feature
-------------------------------------------
+-----------------------
+@AssetLayout
+Feature: Asset Layout API Testing
+  As a user of the Asset Layout API
+  I want to verify the API functionality
+  So that I can ensure it meets business requirements
+
+@Smoke
+Scenario: Verify Asset Layout API with valid data
+  When I send a request to Asset Layout API with deal 838438 and report date 2024-12-09
+  Then the response status should be 200
+  And the response should contain field "status"
+  And the field "status" in response should be "success"
+  And the response time should be less than 5000 milliseconds
+
 @Regression
-@enabled:true
-@testCaseId:483438
-@description:Test Asset Layout API
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.abc.customdataproviderimpl.DataProvider
-@sheet:testData
-@key:TC_34939
-Scenario: Validate asset layout API
-  When post asset layout with data '${args[0]}'
-  Then validate response status 200
+Scenario: Verify Asset Layout API with invalid deal ID
+  When I send a request to Asset Layout API with deal 999999 and report date 2024-12-09
+  Then the response status should be 400
+  And the response should contain field "error"
+  And the field "error" in response should contain "Invalid deal ID"
+
+@Regression
+Scenario: Verify Asset Layout API with invalid date format
+  When I send a request to Asset Layout API with deal 838438 and report date 2024/12/09
+  Then the response status should be 400
+  And the response should contain field "error"
+  And the field "error" in response should contain "Invalid date format"
+
+@Regression
+Scenario: Verify Asset Layout API with custom payload
+  When I send a request to Asset Layout API with payload {
+    "messageId": "Test-123",
+    "dealId": 838438,
+    "reportDate": "2024-12-09"
+  }
+  Then the response status should be 200
+  And the response should contain field "status"
+  And the field "status" in response should be "success"
+
