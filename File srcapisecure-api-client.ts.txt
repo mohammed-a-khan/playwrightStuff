@@ -1,41 +1,137 @@
-package com.yourcompany.api.endpoints;
+package com.yourcompany.steps.api;
 
-import java.util.Map;
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.notNullValue;
+import static org.hamcrest.MatcherAssert.assertThat;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qmetry.qaf.automation.util.Validator;
 import com.yourcompany.api.core.BaseAPIEndpoint;
-import com.yourcompany.api.core.GenericRestClient.ApiResponse;
 
 /**
- * Endpoint class for the Asset Layout API.
- * Uses the generic BaseAPIEndpoint to handle API requests.
+ * Base class for all API step definition classes.
+ * Provides common step definitions that can be used across all API tests.
  */
-public class AssetLayoutEndpoint extends BaseAPIEndpoint {
+public abstract class BaseAPISteps {
     
-    private static final String PAYLOAD_FILE = "assetlayout-payload.json";
+    protected static final Log logger = LogFactory.getLog(BaseAPISteps.class);
     
     /**
-     * Constructor for AssetLayoutEndpoint.
-     * Configures the endpoint for certificate-based authentication.
+     * Gets the endpoint for this steps class.
+     * 
+     * @return the API endpoint
      */
-    public AssetLayoutEndpoint() {
-        super("ws.endpoint.assetlayout", true);
+    protected abstract BaseAPIEndpoint getEndpoint();
+    
+    /**
+     * Verifies that the response status code matches the expected value.
+     * 
+     * @param expectedStatus the expected HTTP status code
+     */
+    @QAFTestStep(description = "the response status code should be {expectedStatus}")
+    public void theResponseStatusCodeShouldBe(int expectedStatus) {
+        int actualStatus = getEndpoint().getStatusCode();
+        
+        Reporter.log("Verifying response status code: expected=" + expectedStatus + ", actual=" + actualStatus);
+        assertThat("Response status code", actualStatus, is(equalTo(expectedStatus)));
     }
     
     /**
-     * Executes a request to the Asset Layout API using the test data provided.
-     * 
-     * @param testData map containing test data values
-     * @return the response from the API
+     * Verifies that the response is successful (status code 2xx).
      */
-    public ApiResponse executeRequest(Map<String, Object> testData) {
-        logger.info("Executing Asset Layout API request with test data: " + testData);
+    @QAFTestStep(description = "the response should be successful")
+    public void theResponseShouldBeSuccessful() {
+        boolean successful = getEndpoint().isSuccessful();
         
-        // Execute POST request with payload from file
-        post(PAYLOAD_FILE, testData);
+        Reporter.log("Verifying response is successful: " + successful);
+        assertThat("Response is successful", successful, is(true));
+    }
+    
+    /**
+     * Verifies that the response contains the specified field.
+     * 
+     * @param field the field to check for
+     */
+    @QAFTestStep(description = "the response should contain the field {field}")
+    public void theResponseShouldContainField(String field) {
+        boolean hasField = getEndpoint().hasField(field);
         
-        logger.info("Received response with status: " + getStatusCode());
-        logger.debug("Response body: " + getResponseBody());
+        Reporter.log("Verifying response contains field '" + field + "': " + hasField);
+        assertThat("Response contains field '" + field + "'", hasField, is(true));
+    }
+    
+    /**
+     * Verifies that the response field has the expected value.
+     * 
+     * @param field the field to check
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the response field {field} should be {expectedValue}")
+    public void theResponseFieldShouldBe(String field, String expectedValue) {
+        String actualValue = getEndpoint().getResponseValue(field);
         
-        return getResponse();
+        Reporter.log("Verifying response field '" + field + "': expected=" + expectedValue + ", actual=" + actualValue);
+        
+        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
+        assertThat("Response field '" + field + "' value", actualValue, is(equalTo(expectedValue)));
+    }
+    
+    /**
+     * Verifies that the response field contains the expected text.
+     * 
+     * @param field the field to check
+     * @param expectedText the text that should be contained
+     */
+    @QAFTestStep(description = "the response field {field} should contain {expectedText}")
+    public void theResponseFieldShouldContain(String field, String expectedText) {
+        String actualValue = getEndpoint().getResponseValue(field);
+        
+        Reporter.log("Verifying response field '" + field + "' contains: " + expectedText);
+        
+        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
+        Validator.verifyThat("Response field '" + field + "' contains expected text", 
+                actualValue.contains(expectedText), is(true));
+    }
+    
+    /**
+     * Verifies that the response field does not contain the expected text.
+     * 
+     * @param field the field to check
+     * @param unexpectedText the text that should not be contained
+     */
+    @QAFTestStep(description = "the response field {field} should not contain {unexpectedText}")
+    public void theResponseFieldShouldNotContain(String field, String unexpectedText) {
+        String actualValue = getEndpoint().getResponseValue(field);
+        
+        Reporter.log("Verifying response field '" + field + "' does not contain: " + unexpectedText);
+        
+        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
+        Validator.verifyThat("Response field '" + field + "' does not contain unexpected text", 
+                !actualValue.contains(unexpectedText), is(true));
+    }
+    
+    /**
+     * Verifies that the response contains a non-empty array field.
+     * 
+     * @param arrayField the array field to check
+     */
+    @QAFTestStep(description = "the response should contain a non-empty {arrayField} array")
+    public void theResponseShouldContainNonEmptyArray(String arrayField) {
+        if (!getEndpoint().hasField(arrayField)) {
+            assertThat("Response contains array field '" + arrayField + "'", false, is(true));
+            return;
+        }
+        
+        String arrayValue = getEndpoint().getResponseValue(arrayField);
+        boolean isNonEmptyArray = arrayValue != null && arrayValue.startsWith("[") && 
+                                 !arrayValue.equals("[]") && arrayValue.endsWith("]");
+        
+        Reporter.log("Verifying response contains non-empty array '" + arrayField + "': " + isNonEmptyArray);
+        assertThat("Response contains non-empty array '" + arrayField + "'", isNonEmptyArray, is(true));
     }
 }
