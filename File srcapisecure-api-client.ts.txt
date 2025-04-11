@@ -1,283 +1,41 @@
-package com.yourcompany.api.core;
+package com.yourcompany.api.endpoints;
 
-import java.util.HashMap;
 import java.util.Map;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONObject;
-
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import com.qmetry.qaf.automation.util.PropertyUtil;
+import com.yourcompany.api.core.BaseAPIEndpoint;
 import com.yourcompany.api.core.GenericRestClient.ApiResponse;
 
 /**
- * Base class for all API endpoint classes.
- * Provides common functionality and access to the GenericRestClient.
+ * Endpoint class for the Asset Layout API.
+ * Uses the generic BaseAPIEndpoint to handle API requests.
  */
-public abstract class BaseAPIEndpoint {
+public class AssetLayoutEndpoint extends BaseAPIEndpoint {
     
-    protected static final Log logger = LogFactory.getLog(BaseAPIEndpoint.class);
-    protected static final PropertyUtil props = ConfigurationManager.getBundle();
-    
-    protected ApiResponse response;
-    protected String endpointKey;
-    protected boolean useSSL;
-    protected Map<String, String> defaultHeaders;
+    private static final String PAYLOAD_FILE = "assetlayout-payload.json";
     
     /**
-     * Constructor for BaseAPIEndpoint.
-     * 
-     * @param endpointKey the property key for the endpoint URL
-     * @param useSSL whether to use SSL certificate for authentication
+     * Constructor for AssetLayoutEndpoint.
+     * Configures the endpoint for certificate-based authentication.
      */
-    public BaseAPIEndpoint(String endpointKey, boolean useSSL) {
-        this.endpointKey = endpointKey;
-        this.useSSL = useSSL;
-        this.defaultHeaders = new HashMap<>();
-        initializeDefaultHeaders();
+    public AssetLayoutEndpoint() {
+        super("ws.endpoint.assetlayout", true);
     }
     
     /**
-     * Initializes default headers for this endpoint.
-     * Override this method to set endpoint-specific headers.
-     */
-    protected void initializeDefaultHeaders() {
-        defaultHeaders.put("Content-Type", GenericRestClient.CONTENT_TYPE_JSON);
-        defaultHeaders.put("Accept", GenericRestClient.CONTENT_TYPE_JSON);
-    }
-    
-    /**
-     * Sends a GET request to this endpoint.
+     * Executes a request to the Asset Layout API using the test data provided.
      * 
-     * @return this endpoint for chaining
+     * @param testData map containing test data values
+     * @return the response from the API
      */
-    public BaseAPIEndpoint get() {
-        response = GenericRestClient.sendGetRequest(endpointKey, defaultHeaders, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a GET request with query parameters to this endpoint.
-     * 
-     * @param queryParams map of query parameters
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint get(Map<String, String> queryParams) {
-        String endpoint = props.getString(endpointKey);
-        String endpointWithParams = GenericRestClient.addQueryParams(endpoint, queryParams);
+    public ApiResponse executeRequest(Map<String, Object> testData) {
+        logger.info("Executing Asset Layout API request with test data: " + testData);
         
-        // Create a temporary endpoint key
-        String tempKey = endpointKey + ".temp";
-        props.setProperty(tempKey, endpointWithParams);
+        // Execute POST request with payload from file
+        post(PAYLOAD_FILE, testData);
         
-        response = GenericRestClient.sendGetRequest(tempKey, defaultHeaders, useSSL);
+        logger.info("Received response with status: " + getStatusCode());
+        logger.debug("Response body: " + getResponseBody());
         
-        // Clean up
-        props.remove(tempKey);
-        
-        return this;
-    }
-    
-    /**
-     * Sends a POST request to this endpoint.
-     * 
-     * @param payload request payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint post(String payload) {
-        response = GenericRestClient.sendPostRequest(endpointKey, defaultHeaders, payload, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a POST request to this endpoint with a JSON object as payload.
-     * 
-     * @param jsonObject JSON object to send as payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint post(JSONObject jsonObject) {
-        String payload = GenericRestClient.createPayload(jsonObject);
-        return post(payload);
-    }
-    
-    /**
-     * Sends a POST request to this endpoint with payload from a file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute in the payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint post(String payloadFileName, Map<String, Object> dataMap) {
-        String payload = GenericRestClient.loadPayload(payloadFileName, dataMap);
-        return post(payload);
-    }
-    
-    /**
-     * Sends a PUT request to this endpoint.
-     * 
-     * @param payload request payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint put(String payload) {
-        response = GenericRestClient.sendPutRequest(endpointKey, defaultHeaders, payload, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a PUT request to this endpoint with a JSON object as payload.
-     * 
-     * @param jsonObject JSON object to send as payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint put(JSONObject jsonObject) {
-        String payload = GenericRestClient.createPayload(jsonObject);
-        return put(payload);
-    }
-    
-    /**
-     * Sends a PUT request to this endpoint with payload from a file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute in the payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint put(String payloadFileName, Map<String, Object> dataMap) {
-        String payload = GenericRestClient.loadPayload(payloadFileName, dataMap);
-        return put(payload);
-    }
-    
-    /**
-     * Sends a DELETE request to this endpoint.
-     * 
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint delete() {
-        response = GenericRestClient.sendDeleteRequest(endpointKey, defaultHeaders, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a PATCH request to this endpoint.
-     * 
-     * @param payload request payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint patch(String payload) {
-        response = GenericRestClient.sendPatchRequest(endpointKey, defaultHeaders, payload, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a PATCH request to this endpoint with a JSON object as payload.
-     * 
-     * @param jsonObject JSON object to send as payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint patch(JSONObject jsonObject) {
-        String payload = GenericRestClient.createPayload(jsonObject);
-        return patch(payload);
-    }
-    
-    /**
-     * Sends a PATCH request to this endpoint with payload from a file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute in the payload
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint patch(String payloadFileName, Map<String, Object> dataMap) {
-        String payload = GenericRestClient.loadPayload(payloadFileName, dataMap);
-        return patch(payload);
-    }
-    
-    /**
-     * Adds a custom header to this endpoint.
-     * 
-     * @param name header name
-     * @param value header value
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint addHeader(String name, String value) {
-        defaultHeaders.put(name, value);
-        return this;
-    }
-    
-    /**
-     * Adds multiple custom headers to this endpoint.
-     * 
-     * @param headers map of headers
-     * @return this endpoint for chaining
-     */
-    public BaseAPIEndpoint addHeaders(Map<String, String> headers) {
-        if (headers != null) {
-            defaultHeaders.putAll(headers);
-        }
-        return this;
-    }
-    
-    /**
-     * Gets the response status code.
-     * 
-     * @return the HTTP status code
-     */
-    public int getStatusCode() {
-        return response != null ? response.getStatusCode() : -1;
-    }
-    
-    /**
-     * Gets the response body as a String.
-     * 
-     * @return the response body
-     */
-    public String getResponseBody() {
-        return response != null ? response.getResponseBody() : null;
-    }
-    
-    /**
-     * Gets the raw ApiResponse.
-     * 
-     * @return the raw response
-     */
-    public ApiResponse getResponse() {
-        return response;
-    }
-    
-    /**
-     * Gets a value from the JSON response by key.
-     * 
-     * @param key the JSON key
-     * @return the value as a String, or null if not found
-     */
-    public String getResponseValue(String key) {
-        return GenericRestClient.getResponseValue(response, key);
-    }
-    
-    /**
-     * Checks if a field exists in the response JSON.
-     * 
-     * @param field the field name
-     * @return true if the field exists, false otherwise
-     */
-    public boolean hasField(String field) {
-        return GenericRestClient.hasResponseField(response, field);
-    }
-    
-    /**
-     * Checks if the response was successful (status code 2xx).
-     * 
-     * @return true if successful, false otherwise
-     */
-    public boolean isSuccessful() {
-        return response != null && response.isSuccessful();
-    }
-    
-    /**
-     * Gets the response as a JSONObject.
-     * 
-     * @return JSONObject representing the response
-     */
-    public JSONObject getResponseJson() {
-        return response != null ? response.getJsonResponse() : null;
+        return getResponse();
     }
 }
