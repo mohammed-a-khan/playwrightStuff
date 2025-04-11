@@ -1,346 +1,44 @@
-package com.mycompany.diagnostics;
+package com.mycompany.listeners;
 
+import com.qmetry.qaf.automation.keys.ApplicationProperties;
+import com.qmetry.qaf.automation.step.QAFTestStepListener;
 import io.restassured.RestAssured;
 import io.restassured.config.SSLConfig;
-import io.restassured.http.ContentType;
-import io.restassured.response.Response;
-import io.restassured.specification.RequestSpecification;
-
-import java.io.File;
-import java.net.URI;
-import java.net.URL;
-
-/**
- * Diagnostic tool to troubleshoot API connection issues.
- * This class provides various tests to identify what might be causing 502 errors.
- */
-public class ApiTroubleshooter {
-
-    public static void main(String[] args) {
-        // Configuration - update these with your actual values
-        String baseUrl = "https://ktgapi-sit.ksmls.americas.ishare.net";
-        String endpoint = "/api/v1/spc/assetlayout";
-        String certificateFile = "path/to/KHANonProd.pfx";
-        String certificatePassword = "kha#123!";
-        
-        String payload = "{\n" +
-                         "  \"messageId\": \"Test-123\",\n" +
-                         "  \"dealId\": 838438,\n" +
-                         "  \"reportDate\": \"2024-12-09\"\n" +
-                         "}";
-
-        System.out.println("=== API Troubleshooting Tool ===");
-        
-        try {
-            // Test 1: Basic connectivity without SSL
-            testBasicConnectivity(baseUrl);
-            
-            // Test 2: Test with your working approach
-            testWorkingApproach(baseUrl, endpoint, certificateFile, certificatePassword, payload);
-            
-            // Test 3: Test with explicit URL formation
-            testExplicitUrlFormation(baseUrl, endpoint, certificateFile, certificatePassword, payload);
-            
-            // Test 4: Test with proxy bypass
-            testWithProxyBypass(baseUrl, endpoint, certificateFile, certificatePassword, payload);
-            
-            // Test 5: Test with different content type
-            testWithDifferentContentType(baseUrl, endpoint, certificateFile, certificatePassword, payload);
-            
-            // Test 6: Test with request timeout settings
-            testWithTimeoutSettings(baseUrl, endpoint, certificateFile, certificatePassword, payload);
-        } catch (Exception e) {
-            System.err.println("Error during troubleshooting: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private static void testBasicConnectivity(String baseUrl) {
-        System.out.println("\n=== Test 1: Basic Connectivity Test ===");
-        try {
-            URL url = new URI(baseUrl).toURL();
-            java.net.HttpURLConnection con = (java.net.HttpURLConnection) url.openConnection();
-            con.setRequestMethod("HEAD");
-            con.setConnectTimeout(5000);
-            
-            try {
-                int responseCode = con.getResponseCode();
-                System.out.println("Basic connectivity test result: " + responseCode);
-            } catch (Exception e) {
-                System.out.println("Cannot connect to host: " + e.getMessage());
-            }
-        } catch (Exception e) {
-            System.out.println("Error setting up connection: " + e.getMessage());
-        }
-    }
-
-    private static void testWorkingApproach(String baseUrl, String endpoint, String certificateFile, 
-                                          String certificatePassword, String payload) {
-        System.out.println("\n=== Test 2: Your Working Approach ===");
-        try {
-            File certFile = new File(certificateFile);
-            if (!certFile.exists()) {
-                System.out.println("Certificate file not found: " + certificateFile);
-                return;
-            }
-            
-            // Configure REST Assured with certificate
-            RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certificatePassword)
-                    .trustStore(certFile, certificatePassword)
-                    .relaxedHTTPSValidation());
-            
-            System.out.println("Sending request to: " + baseUrl + endpoint);
-            
-            // Make the API request
-            Response response = RestAssured.given()
-                .contentType(ContentType.JSON)
-                .body(payload)
-                .log().all() // Print all request details
-                .when()
-                .post(baseUrl + endpoint);
-            
-            // Print response details
-            System.out.println("Response Status Code: " + response.getStatusCode());
-            System.out.println("Response Body: " + response.getBody().asString());
-        } catch (Exception e) {
-            System.out.println("Error in working approach test: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private static void testExplicitUrlFormation(String baseUrl, String endpoint, String certificateFile, 
-                                               String certificatePassword, String payload) {
-        System.out.println("\n=== Test 3: Explicit URL Formation ===");
-        try {
-            File certFile = new File(certificateFile);
-            if (!certFile.exists()) {
-                System.out.println("Certificate file not found: " + certificateFile);
-                return;
-            }
-            
-            // Configure REST Assured with certificate
-            RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certificatePassword)
-                    .trustStore(certFile, certificatePassword)
-                    .relaxedHTTPSValidation());
-            
-            // Form URL explicitly
-            String fullUrl = baseUrl;
-            if (!baseUrl.endsWith("/") && !endpoint.startsWith("/")) {
-                fullUrl += "/";
-            } else if (baseUrl.endsWith("/") && endpoint.startsWith("/")) {
-                fullUrl = baseUrl.substring(0, baseUrl.length() - 1);
-            }
-            fullUrl += endpoint;
-            
-            System.out.println("Sending request to explicitly formed URL: " + fullUrl);
-            
-            // Make the API request
-            Response response = RestAssured.given()
-                .contentType(ContentType.JSON)
-                .body(payload)
-                .when()
-                .post(fullUrl);
-            
-            // Print response details
-            System.out.println("Response Status Code: " + response.getStatusCode());
-            System.out.println("Response Body: " + response.getBody().asString());
-        } catch (Exception e) {
-            System.out.println("Error in explicit URL test: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private static void testWithProxyBypass(String baseUrl, String endpoint, String certificateFile, 
-                                          String certificatePassword, String payload) {
-        System.out.println("\n=== Test 4: Proxy Bypass Test ===");
-        try {
-            // Disable proxy settings
-            System.setProperty("http.proxyHost", "");
-            System.setProperty("http.proxyPort", "");
-            System.setProperty("https.proxyHost", "");
-            System.setProperty("https.proxyPort", "");
-            
-            File certFile = new File(certificateFile);
-            if (!certFile.exists()) {
-                System.out.println("Certificate file not found: " + certificateFile);
-                return;
-            }
-            
-            // Configure REST Assured with certificate
-            RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certificatePassword)
-                    .trustStore(certFile, certificatePassword)
-                    .relaxedHTTPSValidation());
-            
-            System.out.println("Sending request with proxy bypass to: " + baseUrl + endpoint);
-            
-            // Make the API request
-            Response response = RestAssured.given()
-                .contentType(ContentType.JSON)
-                .body(payload)
-                .when()
-                .post(baseUrl + endpoint);
-            
-            // Print response details
-            System.out.println("Response Status Code: " + response.getStatusCode());
-            System.out.println("Response Body: " + response.getBody().asString());
-        } catch (Exception e) {
-            System.out.println("Error in proxy bypass test: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private static void testWithDifferentContentType(String baseUrl, String endpoint, String certificateFile, 
-                                                  String certificatePassword, String payload) {
-        System.out.println("\n=== Test 5: Different Content Type Test ===");
-        try {
-            File certFile = new File(certificateFile);
-            if (!certFile.exists()) {
-                System.out.println("Certificate file not found: " + certificateFile);
-                return;
-            }
-            
-            // Configure REST Assured with certificate
-            RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certificatePassword)
-                    .trustStore(certFile, certificatePassword)
-                    .relaxedHTTPSValidation());
-            
-            System.out.println("Sending request with explicit content type header to: " + baseUrl + endpoint);
-            
-            // Make the API request with explicit header instead of contentType()
-            Response response = RestAssured.given()
-                .header("Content-Type", "application/json")
-                .body(payload)
-                .when()
-                .post(baseUrl + endpoint);
-            
-            // Print response details
-            System.out.println("Response Status Code: " + response.getStatusCode());
-            System.out.println("Response Body: " + response.getBody().asString());
-        } catch (Exception e) {
-            System.out.println("Error in content type test: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private static void testWithTimeoutSettings(String baseUrl, String endpoint, String certificateFile, 
-                                             String certificatePassword, String payload) {
-        System.out.println("\n=== Test 6: Timeout Settings Test ===");
-        try {
-            File certFile = new File(certificateFile);
-            if (!certFile.exists()) {
-                System.out.println("Certificate file not found: " + certificateFile);
-                return;
-            }
-            
-            // Configure REST Assured with certificate and timeouts
-            RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certificatePassword)
-                    .trustStore(certFile, certificatePassword)
-                    .relaxedHTTPSValidation())
-                .httpClient(io.restassured.config.HttpClientConfig.httpClientConfig()
-                    .setParam("http.connection.timeout", 30000)
-                    .setParam("http.socket.timeout", 30000));
-            
-            System.out.println("Sending request with extended timeouts to: " + baseUrl + endpoint);
-            
-            // Make the API request
-            RequestSpecification req = RestAssured.given()
-                .contentType(ContentType.JSON)
-                .body(payload);
-            
-            Response response = req.when().post(baseUrl + endpoint);
-            
-            // Print response details
-            System.out.println("Response Status Code: " + response.getStatusCode());
-            System.out.println("Response Body: " + response.getBody().asString());
-        } catch (Exception e) {
-            System.out.println("Error in timeout settings test: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-}
-
-
-
-package com.mycompany.direct;
-
-import io.restassured.RestAssured;
-import io.restassured.config.SSLConfig;
-import io.restassured.http.ContentType;
-import io.restassured.response.Response;
 import java.io.File;
 
-/**
- * This is a direct implementation with no framework overhead.
- * Use this as a working baseline to compare with framework issues.
- */
-public class DirectApiTest {
-    
-    public static void main(String[] args) {
-        // ========= MODIFY THESE VALUES =========
-        String certificateFile = "path/to/KHANonProd.pfx";
-        String certificatePassword = "kha#123!";
-        
-        String baseUrl = "https://ktgapi-sit.ksmls.americas.ishare.net";
-        String endpoint = "/api/v1/spc/assetlayout";
-        
-        String payload = "{\n" +
-                         "  \"messageId\": \"Test-123\",\n" +
-                         "  \"dealId\": 838438,\n" +
-                         "  \"reportDate\": \"2024-12-09\"\n" +
-                         "}";
-        // ======================================
-        
+public class SSLInitializationListener implements QAFTestStepListener {
+
+    @Override
+    public void onExecutionStart() {
+        // Initialize SSL settings when execution starts
         try {
-            // Print connection info for debugging
-            System.out.println("Connecting to: " + baseUrl + endpoint);
-            System.out.println("Using certificate: " + certificateFile);
+            String certPath = ApplicationProperties.RESOURCES_DIR.getStringVal() + 
+                           "/certificates/KHANonProd.pfx";
+            String certPassword = "kha#123!";
             
-            // Verify certificate file exists
-            File certFile = new File(certificateFile);
+            File certFile = new File(certPath);
             System.out.println("Certificate file exists: " + certFile.exists());
-            if (!certFile.exists()) {
-                System.err.println("Certificate file not found!");
-                return;
-            }
             
-            // Configure REST Assured with certificate
             RestAssured.config = RestAssured.config()
                 .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certificatePassword)
-                    .trustStore(certFile, certificatePassword)
+                    .keyStore(certFile, certPassword)
+                    .trustStore(certFile, certPassword)
                     .relaxedHTTPSValidation());
                     
-            // Log configuration and request for debugging
-            System.out.println("SSL configuration complete");
-            System.out.println("Sending payload: " + payload);
-            
-            // Make the API request
-            Response response = RestAssured.given()
-                .contentType(ContentType.JSON)
-                .body(payload)
-                .when()
-                .post(baseUrl + endpoint);
-            
-            // Print response details
-            System.out.println("\n=== RESPONSE ===");
-            System.out.println("Status Code: " + response.getStatusCode());
-            System.out.println("Status Line: " + response.getStatusLine());
-            System.out.println("Headers: " + response.getHeaders());
-            System.out.println("Body: " + response.getBody().asString());
-            
+            System.out.println("SSL configuration initialized by listener");
         } catch (Exception e) {
-            System.err.println("Error occurred: " + e.getMessage());
+            System.err.println("Error initializing SSL: " + e.getMessage());
             e.printStackTrace();
         }
     }
+
+    // Implement other required methods
+    @Override
+    public void onExecutionFinish() { }
+    
+    @Override
+    public void beforStepExecute(StepExecutionTracker tracker) { }
+    
+    @Override
+    public void afterStepExecute(StepExecutionTracker tracker) { }
 }
