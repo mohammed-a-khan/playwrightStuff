@@ -1,45 +1,3 @@
-// Add this method to your existing ApiClientUtil class
-
-/**
- * Processes a payload template by replacing placeholders with values from a data map.
- * Handles various data types appropriately (keeping numbers unquoted, etc.)
- *
- * @param template the template string with placeholders like ${variable}
- * @param data the map containing values to substitute
- * @return the processed template with all placeholders replaced
- */
-public static String processTemplate(String template, Map<String, Object> data) {
-    if (template == null || data == null) {
-        return template;
-    }
-    
-    String result = template;
-    
-    for (Map.Entry<String, Object> entry : data.entrySet()) {
-        String key = entry.getKey();
-        Object value = entry.getValue();
-        String placeholder = "${" + key + "}";
-        
-        // Handle different types appropriately
-        if (value instanceof Number) {
-            // Replace with the raw numeric value (no quotes)
-            result = result.replace("\"" + placeholder + "\"", value.toString());
-            // Also handle the case where there are no quotes
-            result = result.replace(placeholder, value.toString());
-        } else if (value instanceof Boolean) {
-            // For boolean values, convert to lowercase true/false 
-            result = result.replace("\"" + placeholder + "\"", value.toString().toLowerCase());
-            result = result.replace(placeholder, value.toString().toLowerCase());
-        } else {
-            // For string values, preserve the quotes if they exist
-            result = result.replace(placeholder, value != null ? value.toString() : "");
-        }
-    }
-    
-    return result;
-}
-
-
 package com.qaf.framework.stepdefs;
 
 import static org.testng.Assert.*;
@@ -86,7 +44,7 @@ public class AssetLayoutExcelSteps extends ApiSteps {
             logger.debug("Processed payload: " + payload);
             
             // Send the request
-            ApiResponse response = ApiClientUtil.sendPostRequest("/api/v1/spc/assetlayout", payload, getAssetLayoutService().getHeaders());
+            ApiResponse response = ApiClientUtil.sendPostRequest("/api/v1/spc/assetlayout", payload, new HashMap<>());
             
             // Store the response in context
             setResponse(response);
@@ -182,7 +140,7 @@ public class AssetLayoutExcelSteps extends ApiSteps {
             logger.debug("Processed payload: " + payload);
             
             // Send the request
-            ApiResponse response = ApiClientUtil.sendPostRequest("/api/v1/spc/assetlayout", payload, getAssetLayoutService().getHeaders());
+            ApiResponse response = ApiClientUtil.sendPostRequest("/api/v1/spc/assetlayout", payload, new HashMap<>());
             
             // Store the response in context
             setResponse(response);
@@ -212,58 +170,3 @@ public class AssetLayoutExcelSteps extends ApiSteps {
         }
     }
 }
-
-
-@Regression
-@AssetLayout
-Feature: Asset Layout API Testing with Excel Data
-  As a user of the Asset Layout API
-  I want to send requests using data from Excel
-  So that I can test various scenarios efficiently
-
-@Smoke
-@TestCaseId:TC_34950
-@Description:Verify Asset Layout API with Excel data
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34950
-Scenario: Verify Asset Layout API using Excel data
-  Given I print Excel data '${args[0]}'
-  When I send a request to Asset Layout API with Excel data '${args[0]}'
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "status"
-  And the response field "status" should be "success"
-
-@Regression
-@TestCaseId:TC_34951
-@Description:Verify Asset Layout API with specific template and Excel data
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34951
-Scenario: Verify Asset Layout API with custom template and Excel data
-  When I send a request to Asset Layout API with template "assetlayout_payload.json" and Excel data '${args[0]}'
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "status"
-  And the response field "status" should be "success"
-
-@Regression
-@TestCaseId:TC_34952
-@Description:Verify Asset Layout API with loaded Excel data
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34952
-Scenario: Verify Asset Layout API with pre-loaded Excel data
-  Given I load Asset Layout test data from Excel '${args[0]}'
-  When I send a request to Asset Layout API with test data
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "status"
-  And the response field "status" should be "success"
