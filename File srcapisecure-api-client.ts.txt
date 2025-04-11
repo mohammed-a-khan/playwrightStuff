@@ -1,44 +1,63 @@
-package com.mycompany.listeners;
+import javax.net.ssl.*;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.KeyStore;
 
-import com.qmetry.qaf.automation.keys.ApplicationProperties;
-import com.qmetry.qaf.automation.step.QAFTestStepListener;
-import io.restassured.RestAssured;
-import io.restassured.config.SSLConfig;
-import java.io.File;
+public class HttpUtil {
 
-public class SSLInitializationListener implements QAFTestStepListener {
-
-    @Override
-    public void onExecutionStart() {
-        // Initialize SSL settings when execution starts
+    public static String postWithPfxCert(String url, String payload, String pfxPath, String pfxPassword) {
         try {
-            String certPath = ApplicationProperties.RESOURCES_DIR.getStringVal() + 
-                           "/certificates/KHANonProd.pfx";
-            String certPassword = "kha#123!";
-            
-            File certFile = new File(certPath);
-            System.out.println("Certificate file exists: " + certFile.exists());
-            
-            RestAssured.config = RestAssured.config()
-                .sslConfig(new SSLConfig()
-                    .keyStore(certFile, certPassword)
-                    .trustStore(certFile, certPassword)
-                    .relaxedHTTPSValidation());
-                    
-            System.out.println("SSL configuration initialized by listener");
+            // Load KeyStore from PFX
+            KeyStore keyStore = KeyStore.getInstance("PKCS12");
+            try (InputStream keyStoreStream = new FileInputStream(pfxPath)) {
+                keyStore.load(keyStoreStream, pfxPassword.toCharArray());
+            }
+
+            // KeyManager for client cert
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
+            kmf.init(keyStore, pfxPassword.toCharArray());
+
+            // TrustManager (trust the same store or all)
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance("SunX509");
+            tmf.init(keyStore);
+
+            // SSL context setup
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
+
+            // Set custom SSL socket factory
+            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
+
+            // Create connection
+            URL endpointUrl = new URL(url);
+            HttpsURLConnection conn = (HttpsURLConnection) endpointUrl.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+
+            // Write request body
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload.getBytes("UTF-8"));
+            }
+
+            // Read response
+            int statusCode = conn.getResponseCode();
+            InputStream is = (statusCode >= 200 && statusCode < 300)
+                    ? conn.getInputStream() : conn.getErrorStream();
+
+            StringBuilder response = new StringBuilder();
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(is))) {
+                String line;
+                while ((line = in.readLine()) != null) {
+                    response.append(line);
+                }
+            }
+
+            return "Status: " + statusCode + "\nResponse: " + response;
+
         } catch (Exception e) {
-            System.err.println("Error initializing SSL: " + e.getMessage());
-            e.printStackTrace();
+            return "Error: " + e.getMessage();
         }
     }
-
-    // Implement other required methods
-    @Override
-    public void onExecutionFinish() { }
-    
-    @Override
-    public void beforStepExecute(StepExecutionTracker tracker) { }
-    
-    @Override
-    public void afterStepExecute(StepExecutionTracker tracker) { }
 }
