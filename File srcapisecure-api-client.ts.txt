@@ -1,62 +1,991 @@
+Project Structure:
+├── pom.xml (Add REST Assured dependency)
+├── config/
+│   └── testng_sit.xml
+├── resources/
+│   ├── application.properties
+│   ├── payloads/
+│   │   └── assetlayout-payload.json
+│   └── env/
+│       └── sit/
+│           ├── env.properties
+│           ├── certificates/
+│           │   └── KHANonProd.pfx
+│           └── testdata/
+│               └── Regression_testdata.xlsx
+├── scenarios/
+│   └── api/
+│       └── AssetLayoutAPI.feature
+└── src/
+    └── com/
+        └── yourcompany/
+            ├── api/
+            │   ├── core/
+            │   │   ├── RestAPIBase.java
+            │   │   └── RequestBuilder.java
+            │   ├── endpoints/
+            │   │   └── AssetLayoutAPI.java
+            │   └── utils/
+            │       └── APIUtils.java
+            ├── steps/
+            │   └── api/
+            │       ├── BaseAPISteps.java
+            │       └── AssetLayoutSteps.java
+            └── tests/
+                └── api/
+                    └── AssetLayoutAPITest.java
+
+RestAPIBase.java
+---------------------
+
+package com.yourcompany.api.core;
+
 import io.restassured.RestAssured;
 import io.restassured.config.SSLConfig;
-import io.restassured.http.ContentType;
 import io.restassured.response.Response;
+import io.restassured.specification.RequestSpecification;
+
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.Map;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import com.qmetry.qaf.automation.util.PropertyUtil;
 
 /**
- * Simple standalone test to verify if REST Assured can successfully make
- * an API call with certificate authentication.
+ * Base class for all REST API operations using REST Assured.
  */
-public class TestAssetLayoutAPI {
-
-    public static void main(String[] args) {
+public class RestAPIBase {
+    
+    private static final Log logger = LogFactory.getLog(RestAPIBase.class);
+    protected static final PropertyUtil props = ConfigurationManager.getBundle();
+    
+    private static boolean isConfigured = false;
+    
+    /**
+     * Initialize REST Assured with SSL configuration.
+     */
+    public static void configureRestAssured() {
+        if (!isConfigured) {
+            try {
+                String certificateFile = props.getString("certificate.file");
+                String certificatePassword = props.getString("certificate.password");
+                
+                logger.info("Configuring REST Assured with certificate: " + certificateFile);
+                
+                // Verify certificate file exists
+                File certFile = new File(certificateFile);
+                if (!certFile.exists()) {
+                    throw new RuntimeException("Certificate file not found: " + certificateFile);
+                }
+                
+                logger.info("Certificate file exists: " + certFile.exists());
+                
+                // Configure REST Assured with certificate
+                RestAssured.config = RestAssured.config()
+                        .sslConfig(new SSLConfig()
+                                .keyStore(certFile, certificatePassword)
+                                .trustStore(certFile, certificatePassword)
+                                .relaxedHTTPSValidation());
+                
+                // Configure proxy if needed
+                if (props.containsKey("http.proxyHost") && props.containsKey("http.proxyPort")) {
+                    String proxyHost = props.getString("http.proxyHost");
+                    int proxyPort = props.getInt("http.proxyPort");
+                    logger.info("Configuring proxy: " + proxyHost + ":" + proxyPort);
+                    
+                    RestAssured.proxy(proxyHost, proxyPort);
+                }
+                
+                isConfigured = true;
+                logger.info("REST Assured configured successfully");
+                
+            } catch (Exception e) {
+                logger.error("Error configuring REST Assured: " + e.getMessage(), e);
+                throw new RuntimeException("Failed to configure REST Assured: " + e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Loads a payload from a file and substitutes placeholders with values.
+     * 
+     * @param payloadFileName name of the payload file
+     * @param dataMap map of values to substitute
+     * @return processed payload as a string
+     */
+    public static String loadPayload(String payloadFileName, Map<String, Object> dataMap) {
+        String payloadPath = "resources/payloads/" + payloadFileName;
+        
         try {
-            // Certificate path - update with correct path
-            String certificateFile = "path/to/KHANonProd.pfx";
-            String certificatePassword = "kha#123!";
+            String content = new String(Files.readAllBytes(Paths.get(payloadPath)));
             
-            // API endpoint URL
-            String baseUrl = "https://ktgapi-sit.ksmls.americas.ishare.net";
-            String endpoint = "/api/v1/spc/assetlayout";
+            // Replace placeholders with actual values
+            if (dataMap != null) {
+                for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
+                    String placeholder = "${" + entry.getKey() + "}";
+                    String value = entry.getValue() != null ? entry.getValue().toString() : "";
+                    content = content.replace(placeholder, value);
+                }
+            }
             
-            // Test data for request
-            String payload = "{\n" +
-                    "  \"messageId\": \"Test-123\",\n" +
-                    "  \"dealId\": 838438,\n" +
-                    "  \"reportDate\": \"2024-12-09\"\n" +
-                    "}";
+            logger.info("Prepared payload: " + content);
+            return content;
+        } catch (IOException e) {
+            logger.error("Failed to load payload file: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to load payload file: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Creates a request specification with default headers.
+     * 
+     * @return RequestSpecification
+     */
+    public static RequestSpecification createRequest() {
+        // Make sure REST Assured is configured
+        configureRestAssured();
+        
+        RequestSpecification request = RestAssured.given()
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json");
+        
+        // Add any additional default headers from properties if needed
+        if (props.containsKey("api.default.headers")) {
+            String[] headers = props.getStringArray("api.default.headers");
+            for (String header : headers) {
+                String[] parts = header.split(":");
+                if (parts.length == 2) {
+                    request.header(parts[0].trim(), parts[1].trim());
+                }
+            }
+        }
+        
+        return request;
+    }
+    
+    /**
+     * Gets the base URL for API endpoints.
+     * 
+     * @return base URL
+     */
+    public static String getBaseUrl() {
+        return props.getString("base.url");
+    }
+    
+    /**
+     * Gets the endpoint URL for the specified endpoint key.
+     * 
+     * @param endpointKey the property key for the endpoint
+     * @return full endpoint URL
+     */
+    public static String getEndpointUrl(String endpointKey) {
+        String endpoint = props.getString(endpointKey);
+        if (endpoint.startsWith("/")) {
+            return getBaseUrl() + endpoint;
+        }
+        return endpoint;
+    }
+    
+    /**
+     * Adds query parameters to a request.
+     * 
+     * @param request the request specification
+     * @param queryParams map of query parameters
+     * @return updated request specification
+     */
+    public static RequestSpecification addQueryParams(RequestSpecification request, Map<String, String> queryParams) {
+        if (queryParams != null && !queryParams.isEmpty()) {
+            for (Map.Entry<String, String> entry : queryParams.entrySet()) {
+                request.queryParam(entry.getKey(), entry.getValue());
+            }
+        }
+        return request;
+    }
+    
+    /**
+     * Logs response details.
+     * 
+     * @param response the response to log
+     */
+    public static void logResponse(Response response) {
+        logger.info("Response Status: " + response.getStatusCode());
+        logger.info("Response Time: " + response.getTime() + "ms");
+        logger.debug("Response Body: " + response.getBody().asString());
+    }
+}
+
+RequestBuilder.java
+-----------------------
+
+package com.yourcompany.api.core;
+
+import io.restassured.RestAssured;
+import io.restassured.response.Response;
+import io.restassured.specification.RequestSpecification;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
+
+/**
+ * Builder class for creating and executing REST API requests.
+ */
+public class RequestBuilder {
+    
+    private static final Log logger = LogFactory.getLog(RequestBuilder.class);
+    
+    private String endpointKey;
+    private Map<String, String> headers;
+    private Map<String, String> queryParams;
+    private String payload;
+    
+    /**
+     * Creates a new RequestBuilder for the specified endpoint.
+     * 
+     * @param endpointKey the property key for the endpoint
+     * @return new RequestBuilder
+     */
+    public static RequestBuilder withEndpoint(String endpointKey) {
+        return new RequestBuilder(endpointKey);
+    }
+    
+    /**
+     * Constructor for RequestBuilder.
+     * 
+     * @param endpointKey the property key for the endpoint
+     */
+    private RequestBuilder(String endpointKey) {
+        this.endpointKey = endpointKey;
+        this.headers = new HashMap<>();
+        this.queryParams = new HashMap<>();
+    }
+    
+    /**
+     * Adds a header to the request.
+     * 
+     * @param name header name
+     * @param value header value
+     * @return this builder for chaining
+     */
+    public RequestBuilder withHeader(String name, String value) {
+        headers.put(name, value);
+        return this;
+    }
+    
+    /**
+     * Adds multiple headers to the request.
+     * 
+     * @param headers map of headers
+     * @return this builder for chaining
+     */
+    public RequestBuilder withHeaders(Map<String, String> headers) {
+        if (headers != null) {
+            this.headers.putAll(headers);
+        }
+        return this;
+    }
+    
+    /**
+     * Adds a query parameter to the request.
+     * 
+     * @param name parameter name
+     * @param value parameter value
+     * @return this builder for chaining
+     */
+    public RequestBuilder withQueryParam(String name, String value) {
+        queryParams.put(name, value);
+        return this;
+    }
+    
+    /**
+     * Adds multiple query parameters to the request.
+     * 
+     * @param params map of query parameters
+     * @return this builder for chaining
+     */
+    public RequestBuilder withQueryParams(Map<String, String> params) {
+        if (params != null) {
+            this.queryParams.putAll(params);
+        }
+        return this;
+    }
+    
+    /**
+     * Sets the payload for the request.
+     * 
+     * @param payload request payload
+     * @return this builder for chaining
+     */
+    public RequestBuilder withPayload(String payload) {
+        this.payload = payload;
+        return this;
+    }
+    
+    /**
+     * Sets the payload from a JSON object.
+     * 
+     * @param jsonObject JSON object for the payload
+     * @return this builder for chaining
+     */
+    public RequestBuilder withPayload(JSONObject jsonObject) {
+        this.payload = jsonObject != null ? jsonObject.toString() : null;
+        return this;
+    }
+    
+    /**
+     * Sets the payload from a file with variable substitution.
+     * 
+     * @param payloadFileName name of the payload file
+     * @param dataMap map of values to substitute
+     * @return this builder for chaining
+     */
+    public RequestBuilder withPayloadFromFile(String payloadFileName, Map<String, Object> dataMap) {
+        this.payload = RestAPIBase.loadPayload(payloadFileName, dataMap);
+        return this;
+    }
+    
+    /**
+     * Sends a GET request.
+     * 
+     * @return the response
+     */
+    public Response get() {
+        String url = RestAPIBase.getEndpointUrl(endpointKey);
+        logger.info("Sending GET request to: " + url);
+        
+        RequestSpecification request = RestAPIBase.createRequest();
+        
+        // Add headers
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            request.header(header.getKey(), header.getValue());
+        }
+        
+        // Add query parameters
+        RestAPIBase.addQueryParams(request, queryParams);
+        
+        // Execute request
+        Response response = request.get(url);
+        
+        // Log response
+        RestAPIBase.logResponse(response);
+        
+        return response;
+    }
+    
+    /**
+     * Sends a POST request.
+     * 
+     * @return the response
+     */
+    public Response post() {
+        String url = RestAPIBase.getEndpointUrl(endpointKey);
+        logger.info("Sending POST request to: " + url);
+        
+        RequestSpecification request = RestAPIBase.createRequest();
+        
+        // Add headers
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            request.header(header.getKey(), header.getValue());
+        }
+        
+        // Add query parameters
+        RestAPIBase.addQueryParams(request, queryParams);
+        
+        // Add payload
+        if (payload != null) {
+            request.body(payload);
+        }
+        
+        // Execute request
+        Response response = request.post(url);
+        
+        // Log response
+        RestAPIBase.logResponse(response);
+        
+        return response;
+    }
+    
+    /**
+     * Sends a PUT request.
+     * 
+     * @return the response
+     */
+    public Response put() {
+        String url = RestAPIBase.getEndpointUrl(endpointKey);
+        logger.info("Sending PUT request to: " + url);
+        
+        RequestSpecification request = RestAPIBase.createRequest();
+        
+        // Add headers
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            request.header(header.getKey(), header.getValue());
+        }
+        
+        // Add query parameters
+        RestAPIBase.addQueryParams(request, queryParams);
+        
+        // Add payload
+        if (payload != null) {
+            request.body(payload);
+        }
+        
+        // Execute request
+        Response response = request.put(url);
+        
+        // Log response
+        RestAPIBase.logResponse(response);
+        
+        return response;
+    }
+    
+    /**
+     * Sends a DELETE request.
+     * 
+     * @return the response
+     */
+    public Response delete() {
+        String url = RestAPIBase.getEndpointUrl(endpointKey);
+        logger.info("Sending DELETE request to: " + url);
+        
+        RequestSpecification request = RestAPIBase.createRequest();
+        
+        // Add headers
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            request.header(header.getKey(), header.getValue());
+        }
+        
+        // Add query parameters
+        RestAPIBase.addQueryParams(request, queryParams);
+        
+        // Execute request
+        Response response = request.delete(url);
+        
+        // Log response
+        RestAPIBase.logResponse(response);
+        
+        return response;
+    }
+    
+    /**
+     * Sends a PATCH request.
+     * 
+     * @return the response
+     */
+    public Response patch() {
+        String url = RestAPIBase.getEndpointUrl(endpointKey);
+        logger.info("Sending PATCH request to: " + url);
+        
+        RequestSpecification request = RestAPIBase.createRequest();
+        
+        // Add headers
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            request.header(header.getKey(), header.getValue());
+        }
+        
+        // Add query parameters
+        RestAPIBase.addQueryParams(request, queryParams);
+        
+        // Add payload
+        if (payload != null) {
+            request.body(payload);
+        }
+        
+        // Execute request
+        Response response = request.patch(url);
+        
+        // Log response
+        RestAPIBase.logResponse(response);
+        
+        return response;
+    }
+}
+
+AssetLayoutAPI.java
+------------------------
+
+package com.yourcompany.api.endpoints;
+
+import java.util.Map;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import com.yourcompany.api.core.RequestBuilder;
+import com.yourcompany.api.utils.APIUtils;
+
+import io.restassured.response.Response;
+
+/**
+ * Class representing the Asset Layout API endpoint.
+ */
+public class AssetLayoutAPI {
+    
+    private static final Log logger = LogFactory.getLog(AssetLayoutAPI.class);
+    private static final String ENDPOINT_KEY = "ws.endpoint.assetlayout";
+    private static final String PAYLOAD_FILE = "assetlayout-payload.json";
+    
+    private Response response;
+    
+    /**
+     * Executes a request to the Asset Layout API.
+     * 
+     * @param testData map containing test data values
+     * @return this API instance for chaining
+     */
+    public AssetLayoutAPI sendRequest(Map<String, Object> testData) {
+        logger.info("Executing Asset Layout API request with test data: " + testData);
+        
+        response = RequestBuilder.withEndpoint(ENDPOINT_KEY)
+                .withPayloadFromFile(PAYLOAD_FILE, testData)
+                .post();
+        
+        return this;
+    }
+    
+    /**
+     * Gets the response status code.
+     * 
+     * @return the HTTP status code
+     */
+    public int getStatusCode() {
+        return response != null ? response.getStatusCode() : -1;
+    }
+    
+    /**
+     * Gets the response body as a String.
+     * 
+     * @return the response body
+     */
+    public String getResponseBody() {
+        return response != null ? response.getBody().asString() : null;
+    }
+    
+    /**
+     * Gets the response.
+     * 
+     * @return the response
+     */
+    public Response getResponse() {
+        return response;
+    }
+    
+    /**
+     * Gets a value from the JSON response by path.
+     * 
+     * @param path the JSON path
+     * @return the value as a String
+     */
+    public String getValueByPath(String path) {
+        return response != null ? response.jsonPath().getString(path) : null;
+    }
+    
+    /**
+     * Gets a value from the JSON response by key.
+     * 
+     * @param key the JSON key
+     * @return the value as a String, or null if not found
+     */
+    public String getResponseValue(String key) {
+        return response != null ? 
+                APIUtils.getResponseValue(response, key) : null;
+    }
+    
+    /**
+     * Checks if a field exists in the response JSON.
+     * 
+     * @param field the field name
+     * @return true if the field exists, false otherwise
+     */
+    public boolean hasField(String field) {
+        return response != null ? 
+                APIUtils.hasField(response, field) : false;
+    }
+    
+    /**
+     * Checks if the response was successful (status code 2xx).
+     * 
+     * @return true if successful, false otherwise
+     */
+    public boolean isSuccessful() {
+        return response != null ? 
+                APIUtils.isSuccessful(response) : false;
+    }
+}
+
+BaseAPISteps.java
+-----------------------
+
+package com.yourcompany.steps.api;
+
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.notNullValue;
+import static org.hamcrest.MatcherAssert.assertThat;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qmetry.qaf.automation.util.Validator;
+
+import io.restassured.response.Response;
+
+/**
+ * Base class for all API step definition classes.
+ */
+public abstract class BaseAPISteps {
+    
+    protected static final Log logger = LogFactory.getLog(BaseAPISteps.class);
+    
+    /**
+     * Gets the response for validation.
+     * 
+     * @return the response
+     */
+    protected abstract Response getResponse();
+    
+    /**
+     * Gets the status code from the response.
+     * 
+     * @return the status code
+     */
+    protected abstract int getStatusCode();
+    
+    /**
+     * Checks if the response was successful.
+     * 
+     * @return true if successful, false otherwise
+     */
+    protected abstract boolean isSuccessful();
+    
+    /**
+     * Checks if a field exists in the response.
+     * 
+     * @param field the field name
+     * @return true if exists, false otherwise
+     */
+    protected abstract boolean hasField(String field);
+    
+    /**
+     * Gets a value from a response field.
+     * 
+     * @param field the field name
+     * @return the value as a String
+     */
+    protected abstract String getResponseValue(String field);
+    
+    /**
+     * Verifies that the response status code matches the expected value.
+     * 
+     * @param expectedStatus the expected HTTP status code
+     */
+    @QAFTestStep(description = "the response status code should be {expectedStatus}")
+    public void theResponseStatusCodeShouldBe(int expectedStatus) {
+        int actualStatus = getStatusCode();
+        
+        Reporter.log("Verifying response status code: expected=" + expectedStatus + ", actual=" + actualStatus);
+        assertThat("Response status code", actualStatus, is(equalTo(expectedStatus)));
+    }
+    
+    /**
+     * Verifies that the response is successful (status code 2xx).
+     */
+    @QAFTestStep(description = "the response should be successful")
+    public void theResponseShouldBeSuccessful() {
+        boolean successful = isSuccessful();
+        
+        Reporter.log("Verifying response is successful: " + successful);
+        assertThat("Response is successful", successful, is(true));
+    }
+    
+    /**
+     * Verifies that the response contains the specified field.
+     * 
+     * @param field the field to check for
+     */
+    @QAFTestStep(description = "the response should contain the field {field}")
+    public void theResponseShouldContainField(String field) {
+        boolean exists = hasField(field);
+        
+        Reporter.log("Verifying response contains field '" + field + "': " + exists);
+        assertThat("Response contains field '" + field + "'", exists, is(true));
+    }
+    
+    /**
+     * Verifies that the response field has the expected value.
+     * 
+     * @param field the field to check
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the response field {field} should be {expectedValue}")
+    public void theResponseFieldShouldBe(String field, String expectedValue) {
+        String actualValue = getResponseValue(field);
+        
+        Reporter.log("Verifying response field '" + field + "': expected=" + expectedValue + ", actual=" + actualValue);
+        
+        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
+        assertThat("Response field '" + field + "' value", actualValue, is(equalTo(expectedValue)));
+    }
+    
+    /**
+     * Verifies that the response field contains the expected text.
+     * 
+     * @param field the field to check
+     * @param expectedText the text that should be contained
+     */
+    @QAFTestStep(description = "the response field {field} should contain {expectedText}")
+    public void theResponseFieldShouldContain(String field, String expectedText) {
+        String actualValue = getResponseValue(field);
+        
+        Reporter.log("Verifying response field '" + field + "' contains: " + expectedText);
+        
+        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
+        Validator.verifyThat("Response field '" + field + "' contains expected text", 
+                actualValue.contains(expectedText), is(true));
+    }
+    
+    /**
+     * Verifies that the response field does not contain the expected text.
+     * 
+     * @param field the field to check
+     * @param unexpectedText the text that should not be contained
+     */
+    @QAFTestStep(description = "the response field {field} should not contain {unexpectedText}")
+    public void theResponseFieldShouldNotContain(String field, String unexpectedText) {
+        String actualValue = getResponseValue(field);
+        
+        Reporter.log("Verifying response field '" + field + "' does not contain: " + unexpectedText);
+        
+        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
+        Validator.verifyThat("Response field '" + field + "' does not contain unexpected text", 
+                !actualValue.contains(unexpectedText), is(true));
+    }
+    
+    /**
+     * Verifies that the response contains a non-empty array field.
+     * 
+     * @param arrayField the array field to check
+     */
+    @QAFTestStep(description = "the response should contain a non-empty {arrayField} array")
+    public void theResponseShouldContainNonEmptyArray(String arrayField) {
+        String arrayValue = getResponseValue(arrayField);
+        
+        Reporter.log("Verifying response contains non-empty array '" + arrayField + "'");
+        
+        assertThat("Response field '" + arrayField + "' exists", arrayValue, is(notNullValue()));
+        boolean isNonEmptyArray = arrayValue.startsWith("[") && !arrayValue.equals("[]") && arrayValue.endsWith("]");
+        assertThat("Response contains non-empty array '" + arrayField + "'", isNonEmptyArray, is(true));
+    }
+}
+
+AssetLayoutSteps.java
+---------------------
+
+package com.yourcompany.steps.api;
+
+import java.util.Map;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.yourcompany.api.endpoints.AssetLayoutAPI;
+
+import io.restassured.response.Response;
+
+/**
+ * BDD step definitions for the Asset Layout API tests.
+ */
+public class AssetLayoutSteps extends BaseAPISteps {
+    
+    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
+    private AssetLayoutAPI api = new AssetLayoutAPI();
+    
+    @Override
+    protected Response getResponse() {
+        return api.getResponse();
+    }
+    
+    @Override
+    protected int getStatusCode() {
+        return api.getStatusCode();
+    }
+    
+    @Override
+    protected boolean isSuccessful() {
+        return api.isSuccessful();
+    }
+    
+    @Override
+    protected boolean hasField(String field) {
+        return api.hasField(field);
+    }
+    
+    @Override
+    protected String getResponseValue(String field) {
+        return api.getResponseValue(field);
+    }
+    
+    /**
+     * Executes a request to the Asset Layout API using the provided test data.
+     * 
+     * @param data Map containing the test data from the Excel file
+     */
+    @QAFTestStep(description = "I send a request to the asset layout API with data {data}")
+    public void iSendRequestToAssetLayoutAPIWithData(Map<String, Object> data) {
+        try {
+            logger.info("Sending asset layout API request with data: " + data);
+            api.sendRequest(data);
             
-            // Verify certificate file exists
-            File certFile = new File(certificateFile);
-            System.out.println("Certificate file exists: " + certFile.exists());
-            
-            // Configure REST Assured with certificate
-            RestAssured.config = RestAssured.config()
-                    .sslConfig(new SSLConfig()
-                            .keyStore(certFile, certificatePassword)
-                            .trustStore(certFile, certificatePassword)
-                            .relaxedHTTPSValidation());
-            
-            // If a proxy is needed, uncomment and configure
-            // RestAssured.proxy("your-proxy-host", 8080);
-            
-            System.out.println("Sending request to: " + baseUrl + endpoint);
-            
-            // Make the API request
-            Response response = RestAssured.given()
-                    .contentType(ContentType.JSON)
-                    .body(payload)
-                    .when()
-                    .post(baseUrl + endpoint);
-            
-            // Print response details
-            System.out.println("Response Status Code: " + response.getStatusCode());
-            System.out.println("Response Body: " + response.getBody().asString());
+            Reporter.log("Request sent successfully.");
+            Reporter.log("Response status: " + api.getStatusCode());
+            Reporter.log("Response body: " + api.getResponseBody());
             
         } catch (Exception e) {
-            System.err.println("Error occurred: " + e.getMessage());
-            e.printStackTrace();
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
         }
     }
 }
+
+APIUtils.java
+----------------
+
+package com.yourcompany.api.utils;
+
+import java.util.Map;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
+
+import io.restassured.response.Response;
+
+/**
+ * Utility class for API testing.
+ */
+public class APIUtils {
+    
+    private static final Log logger = LogFactory.getLog(APIUtils.class);
+    
+    /**
+     * Extracts a value from the JSON response by JSON path.
+     * 
+     * @param response the response
+     * @param jsonPath the JSON path
+     * @return the value as a String, or null if not found
+     */
+    public static String getValueByPath(Response response, String jsonPath) {
+        try {
+            return response.jsonPath().getString(jsonPath);
+        } catch (Exception e) {
+            logger.warn("Failed to get value by path '" + jsonPath + "': " + e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Extracts a value from the JSON response by key.
+     * 
+     * @param response the response
+     * @param key the JSON key
+     * @return the value as a String, or null if not found
+     */
+    public static String getResponseValue(Response response, String key) {
+        if (response == null || response.getBody() == null) {
+            return null;
+        }
+        
+        try {
+            JSONObject json = new JSONObject(response.getBody().asString());
+            return json.has(key) ? json.get(key).toString() : null;
+        } catch (Exception e) {
+            logger.error("Error parsing response JSON: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Checks if a field exists in the JSON response.
+     * 
+     * @param response the response
+     * @param field the field name
+     * @return true if the field exists, false otherwise
+     */
+    public static boolean hasField(Response response, String field) {
+        if (response == null || response.getBody() == null) {
+            return false;
+        }
+        
+        try {
+            JSONObject json = new JSONObject(response.getBody().asString());
+            return json.has(field);
+        } catch (Exception e) {
+            logger.error("Error checking field in response JSON: " + e.getMessage(), e);
+            return false;
+        }
+    }
+    
+    /**
+     * Checks if the response was successful (status code 2xx).
+     * 
+     * @param response the response
+     * @return true if successful, false otherwise
+     */
+    public static boolean isSuccessful(Response response) {
+        if (response == null) {
+            return false;
+        }
+        
+        int statusCode = response.getStatusCode();
+        return statusCode >= 200 && statusCode < 300;
+    }
+    
+    /**
+     * Gets the response as a JSONObject.
+     * 
+     * @param response the response
+     * @return JSONObject representing the response, or null if invalid
+     */
+    public static JSONObject getResponseJson(Response response) {
+        if (response == null || response.getBody() == null) {
+            return null;
+        }
+        
+        try {
+            return new JSONObject(response.getBody().asString());
+        } catch (Exception e) {
+            logger.error("Error parsing response as JSON: " + e.getMessage(), e);
+            return null;
+        }
+    }
+    
+    /**
+     * Converts a map to a JSONObject.
+     * 
+     * @param map the map to convert
+     * @return JSONObject
+     */
+    public static JSONObject mapToJson(Map<String, Object> map) {
+        JSONObject json = new JSONObject();
+        if (map != null) {
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                json.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return json;
+    }
+}
+
+
