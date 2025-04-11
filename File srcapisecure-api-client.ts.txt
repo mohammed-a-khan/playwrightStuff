@@ -1,49 +1,43 @@
-package com.yourcompany.steps.api;
+@Regression
+@enabled:true
+@testCaseId:483439
+@description:Verify Asset Layout API with valid data
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.abc.customdataproviderimpl.DataProvider
+@sheet:testData
+@key:TC_34940
+Scenario: Verify Asset Layout API with valid input data
+    When I send a request to the asset layout API with data '${args[0]}'
+    Then the response status code should be 200
+    And the response should be successful
+    And the response should contain the field "status"
+    And the response field "status" should be "success"
 
-import java.util.Map;
+@Regression
+@enabled:true
+@testCaseId:483440
+@description:Verify Asset Layout API with invalid deal ID
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.abc.customdataproviderimpl.DataProvider
+@sheet:testData
+@key:TC_34941
+Scenario: Verify Asset Layout API with invalid deal ID
+    When I send a request to the asset layout API with data '${args[0]}'
+    Then the response status code should be 400
+    And the response should contain the field "error"
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
-import com.qmetry.qaf.automation.core.TestBaseProvider;
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.yourcompany.api.core.BaseAPIEndpoint;
-import com.yourcompany.api.core.GenericRestClient.ApiResponse;
-import com.yourcompany.api.endpoints.AssetLayoutEndpoint;
-
-/**
- * BDD step definitions for the Asset Layout API tests.
- * Extends BaseAPISteps to inherit common step definitions.
- */
-public class AssetLayoutSteps extends BaseAPISteps {
-    
-    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
-    private AssetLayoutEndpoint endpoint = new AssetLayoutEndpoint();
-    
-    @Override
-    protected BaseAPIEndpoint getEndpoint() {
-        return endpoint;
-    }
-    
-    /**
-     * Executes a request to the Asset Layout API using the current test data.
-     */
-    @QAFTestStep(description = "I send a request to the asset layout API")
-    public void iSendRequestToAssetLayoutAPI() {
-        Map<String, Object> testData = TestBaseProvider.instance().get().getContext().getTestData();
-        
-        try {
-            logger.info("Sending asset layout API request with data: " + testData);
-            ApiResponse response = endpoint.executeRequest(testData);
-            
-            Reporter.log("Request sent successfully.");
-            Reporter.log("Response status: " + endpoint.getStatusCode());
-            Reporter.log("Response body: " + endpoint.getResponseBody());
-            
-        } catch (Exception e) {
-            Reporter.log("Error sending request: " + e.getMessage());
-            throw e;
-        }
-    }
-}
+@Regression
+@enabled:true
+@testCaseId:483441
+@description:Verify Asset Layout API with invalid report date
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.abc.customdataproviderimpl.DataProvider
+@sheet:testData
+@key:TC_34942
+Scenario: Verify Asset Layout API with invalid report date
+    When I send a request to the asset layout API with data '${args[0]}'
+    Then the response status code should be 400
+    And the response field "error" should contain "Invalid date format"
