@@ -1323,3 +1323,974 @@ Feature: Asset Layout API Testing
     And the response should contain field "assets"
     And the response should contain a non-empty "assets" array
 
+testContextManager.java
+------------------------
+
+package com.qaf.framework.util;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import com.qmetry.qaf.automation.core.TestBaseProvider;
+
+/**
+ * Manages test context and data sharing between step definition classes.
+ * This ensures data persistence across different step definition instances.
+ */
+public class TestContextManager {
+    
+    private static final String TEST_DATA_KEY = "api.test.data";
+    private static final String API_RESPONSE_KEY = "api.response";
+    private static final String SERVICE_KEY_PREFIX = "api.service.";
+    
+    /**
+     * Gets the shared test data map.
+     * 
+     * @return map of test data
+     */
+    public static Map<String, Object> getTestData() {
+        Map<String, Object> testData = (Map<String, Object>) TestBaseProvider.instance().get()
+                .getContext().getProperty(TEST_DATA_KEY);
+        
+        if (testData == null) {
+            testData = new HashMap<>();
+            TestBaseProvider.instance().get().getContext().setProperty(TEST_DATA_KEY, testData);
+        }
+        
+        return testData;
+    }
+    
+    /**
+     * Sets a test data value.
+     * 
+     * @param key the key
+     * @param value the value
+     */
+    public static void setTestData(String key, Object value) {
+        Map<String, Object> testData = getTestData();
+        testData.put(key, value);
+    }
+    
+    /**
+     * Gets a test data value.
+     * 
+     * @param key the key
+     * @return the value, or null if not found
+     */
+    public static Object getTestDataValue(String key) {
+        return getTestData().get(key);
+    }
+    
+    /**
+     * Gets a test data value as a string.
+     * 
+     * @param key the key
+     * @return the value as a string, or null if not found
+     */
+    public static String getTestDataValueAsString(String key) {
+        Object value = getTestDataValue(key);
+        return value != null ? value.toString() : null;
+    }
+    
+    /**
+     * Clears all test data.
+     */
+    public static void clearTestData() {
+        getTestData().clear();
+    }
+    
+    /**
+     * Checks if test data contains a key.
+     * 
+     * @param key the key to check
+     * @return true if the key exists
+     */
+    public static boolean hasTestData(String key) {
+        return getTestData().containsKey(key);
+    }
+    
+    /**
+     * Stores the API response in the shared context.
+     * 
+     * @param response the API response
+     */
+    public static void setApiResponse(ApiResponse response) {
+        TestBaseProvider.instance().get().getContext().setProperty(API_RESPONSE_KEY, response);
+    }
+    
+    /**
+     * Gets the API response from the shared context.
+     * 
+     * @return the API response, or null if not set
+     */
+    public static ApiResponse getApiResponse() {
+        return (ApiResponse) TestBaseProvider.instance().get().getContext().getProperty(API_RESPONSE_KEY);
+    }
+    
+    /**
+     * Stores a service object in the shared context.
+     * 
+     * @param <T> the service type
+     * @param serviceClass the service class
+     * @param service the service instance
+     */
+    public static <T> void setService(Class<T> serviceClass, T service) {
+        String key = SERVICE_KEY_PREFIX + serviceClass.getName();
+        TestBaseProvider.instance().get().getContext().setProperty(key, service);
+    }
+    
+    /**
+     * Gets a service object from the shared context.
+     * 
+     * @param <T> the service type
+     * @param serviceClass the service class
+     * @return the service instance, or null if not set
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> T getService(Class<T> serviceClass) {
+        String key = SERVICE_KEY_PREFIX + serviceClass.getName();
+        return (T) TestBaseProvider.instance().get().getContext().getProperty(key);
+    }
+}
+
+ApiSteps.java
+----------------
+
+package com.qaf.framework.stepdefs;
+
+import static org.testng.Assert.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qaf.framework.service.ApiService;
+import com.qaf.framework.service.AssetLayoutService;
+import com.qaf.framework.util.ApiClientUtil;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.hamcrest.Matchers;
+import org.json.JSONObject;
+
+/**
+ * Base step definitions for API testing.
+ */
+public class ApiSteps {
+    
+    private static final Log logger = LogFactory.getLog(ApiSteps.class);
+    
+    /**
+     * Get or create the AssetLayoutService from context
+     */
+    protected AssetLayoutService getAssetLayoutService() {
+        AssetLayoutService service = TestContextManager.getService(AssetLayoutService.class);
+        if (service == null) {
+            service = new AssetLayoutService();
+            TestContextManager.setService(AssetLayoutService.class, service);
+        }
+        return service;
+    }
+    
+    /**
+     * Get the current API response from context
+     */
+    protected ApiResponse getResponse() {
+        return TestContextManager.getApiResponse();
+    }
+    
+    /**
+     * Set the current API response in context
+     */
+    protected void setResponse(ApiResponse response) {
+        TestContextManager.setApiResponse(response);
+    }
+    
+    /**
+     * Sends a request to an endpoint with a payload file.
+     * 
+     * @param method HTTP method (GET, POST, PUT, DELETE)
+     * @param endpoint API endpoint
+     * @param payloadFile payload file name
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a {string} request to {string} with payload {string}")
+    public void sendRequestWithPayload(String method, String endpoint, String payloadFile) throws Exception {
+        logger.info("Sending " + method + " request to " + endpoint + " with payload " + payloadFile);
+        
+        try {
+            String payload = ApiClientUtil.readPayload(payloadFile);
+            ApiResponse response = null;
+            
+            switch (method.toUpperCase()) {
+                case "GET":
+                    response = ApiClientUtil.sendGetRequest(endpoint, new HashMap<>());
+                    break;
+                case "POST":
+                    response = ApiClientUtil.sendPostRequest(endpoint, payload, new HashMap<>());
+                    break;
+                case "PUT":
+                    response = ApiClientUtil.sendPutRequest(endpoint, payload, new HashMap<>());
+                    break;
+                case "DELETE":
+                    response = ApiClientUtil.sendDeleteRequest(endpoint, new HashMap<>());
+                    break;
+                default:
+                    throw new IllegalArgumentException("Unsupported HTTP method: " + method);
+            }
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending request: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response status code matches the expected value.
+     * 
+     * @param expectedStatus the expected HTTP status code
+     */
+    @QAFTestStep(description = "the response status code should be {expectedStatus}")
+    public void verifyStatusCode(int expectedStatus) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying status code: expected=" + expectedStatus + ", actual=" + response.getStatusCode());
+        assertEquals(response.getStatusCode(), expectedStatus, "Response status code mismatch");
+    }
+    
+    /**
+     * Verifies that the response contains the specified text.
+     * 
+     * @param text the text to check for
+     */
+    @QAFTestStep(description = "the response should contain {string}")
+    public void responseShouldContain(String text) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains: " + text);
+        assertTrue(response.responseContains(text), "Response does not contain: " + text);
+    }
+    
+    /**
+     * Verifies that the response contains the specified field.
+     * 
+     * @param field the field to check for
+     */
+    @QAFTestStep(description = "the response should contain field {string}")
+    public void responseShouldContainField(String field) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains field: " + field);
+        assertTrue(response.hasJsonField(field), "Response does not contain field: " + field);
+    }
+    
+    /**
+     * Verifies that the response field has the expected value.
+     * 
+     * @param field the field to check
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the response field {string} should be {string}")
+    public void fieldShouldHaveValue(String field, String expectedValue) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field " + field + ": expected=" + expectedValue + ", actual=" + actualValue);
+        assertEquals(actualValue, expectedValue, "Field value mismatch for: " + field);
+    }
+    
+    /**
+     * Verifies that the response field contains the expected text.
+     * 
+     * @param field the field to check
+     * @param expectedText the text that should be contained
+     */
+    @QAFTestStep(description = "the response field {string} should contain {string}")
+    public void fieldShouldContain(String field, String expectedText) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field " + field + " contains: " + expectedText);
+        assertTrue(actualValue != null && actualValue.contains(expectedText), 
+                  "Field " + field + " does not contain: " + expectedText);
+    }
+    
+    /**
+     * Adds a key-value pair to the test data map.
+     * 
+     * @param key the key
+     * @param value the value
+     */
+    @QAFTestStep(description = "I set {string} to {string} in test data")
+    public void setTestData(String key, String value) {
+        TestContextManager.setTestData(key, value);
+        Reporter.log("Set test data: " + key + "=" + value);
+    }
+    
+    /**
+     * Clears all test data.
+     */
+    @QAFTestStep(description = "I clear all test data")
+    public void clearTestData() {
+        TestContextManager.clearTestData();
+        Reporter.log("Cleared all test data");
+    }
+    
+    /**
+     * Adds a header to the Asset Layout service.
+     * 
+     * @param headerName the header name
+     * @param headerValue the header value
+     */
+    @QAFTestStep(description = "I add header {string} with value {string}")
+    public void addHeader(String headerName, String headerValue) {
+        getAssetLayoutService().addHeader(headerName, headerValue);
+        Reporter.log("Added header: " + headerName + "=" + headerValue);
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with deal ID and report date.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with deal {string} and report date {string}")
+    public void sendAssetLayoutRequest(String dealId, String reportDate) throws Exception {
+        logger.info("Sending Asset Layout request with dealId: " + dealId + ", reportDate: " + reportDate);
+        
+        try {
+            ApiResponse response = getAssetLayoutService().submitRequest(dealId, reportDate);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with test data.
+     * 
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with test data")
+    public void sendAssetLayoutRequestWithTestData() throws Exception {
+        Map<String, Object> testData = TestContextManager.getTestData();
+        logger.info("Sending Asset Layout request with test data: " + testData);
+        
+        // Check if test data is empty and add required fields if needed
+        if (testData.isEmpty()) {
+            logger.warn("Test data is empty. Adding default values.");
+            testData.put("messageId", ApiClientUtil.generateMessageId());
+            testData.put("dealId", "838438"); // Default deal ID
+            testData.put("reportDate", "2024-12-09"); // Default report date
+        } else {
+            // Ensure messageId is present
+            if (!testData.containsKey("messageId")) {
+                testData.put("messageId", ApiClientUtil.generateMessageId());
+            }
+            
+            // Validate required fields
+            if (!testData.containsKey("dealId") || !testData.containsKey("reportDate")) {
+                logger.warn("Required fields missing in test data. Adding defaults.");
+                if (!testData.containsKey("dealId")) {
+                    testData.put("dealId", "838438"); // Default deal ID
+                }
+                if (!testData.containsKey("reportDate")) {
+                    testData.put("reportDate", "2024-12-09"); // Default report date
+                }
+            }
+        }
+        
+        try {
+            ApiResponse response = getAssetLayoutService().submitRequest(testData);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with test data.
+     * 
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with test data")
+    public void sendAssetLayoutRequestWithTestData() throws Exception {
+        Map<String, Object> testData = TestContextManager.getTestData();
+        logger.info("Sending Asset Layout request with test data: " + testData);
+        
+        // Check if test data is empty and add required fields if needed
+        if (testData.isEmpty()) {
+            logger.warn("Test data is empty. Adding default values.");
+            testData.put("messageId", ApiClientUtil.generateMessageId());
+            testData.put("dealId", "838438"); // Default deal ID
+            testData.put("reportDate", "2024-12-09"); // Default report date
+        } else {
+            // Ensure messageId is present
+            if (!testData.containsKey("messageId")) {
+                testData.put("messageId", ApiClientUtil.generateMessageId());
+            }
+            
+            // Validate required fields
+            if (!testData.containsKey("dealId") || !testData.containsKey("reportDate")) {
+                logger.warn("Required fields missing in test data. Adding defaults.");
+                if (!testData.containsKey("dealId")) {
+                    testData.put("dealId", "838438"); // Default deal ID
+                }
+                if (!testData.containsKey("reportDate")) {
+                    testData.put("reportDate", "2024-12-09"); // Default report date
+                }
+            }
+        }
+        
+        try {
+            ApiResponse response = getAssetLayoutService().submitRequest(testData);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with a payload file.
+     * 
+     * @param payloadFile the payload file name
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with payload file {string}")
+    public void sendAssetLayoutRequestWithPayloadFile(String payloadFile) throws Exception {
+        logger.info("Sending Asset Layout request with payload file: " + payloadFile);
+        
+        try {
+            ApiResponse response = getAssetLayoutService().submitRequestWithPayloadFile(payloadFile);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with advanced options.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date
+     * @param includeHistory whether to include history
+     * @param detailedView whether to use detailed view
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send an advanced request to Asset Layout API with deal {string}, report date {string}, includeHistory {boolean}, and detailedView {boolean}")
+    public void sendAdvancedAssetLayoutRequest(String dealId, String reportDate, boolean includeHistory, boolean detailedView) throws Exception {
+        logger.info("Sending advanced Asset Layout request");
+        
+        try {
+            ApiResponse response = getAssetLayoutService().submitAdvancedRequest(dealId, reportDate, includeHistory, detailedView);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Advanced Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending advanced Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending advanced Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response is successful (status code 2xx).
+     */
+    @QAFTestStep(description = "the response should be successful")
+    public void responseShouldBeSuccessful() {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response is successful");
+        assertTrue(response.isSuccessful(), "Response is not successful. Status code: " + response.getStatusCode());
+    }
+    
+    /**
+     * Verifies that the response contains a non-empty array field.
+     * 
+     * @param arrayField the array field to check
+     */
+    @QAFTestStep(description = "the response should contain a non-empty {string} array")
+    public void responseShouldContainNonEmptyArray(String arrayField) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        int arraySize = response.getArraySize(arrayField);
+        Reporter.log("Verifying array " + arrayField + " is non-empty. Size: " + arraySize);
+        assertTrue(arraySize > 0, "Array " + arrayField + " is empty or not found");
+    }
+    
+    /**
+     * Verifies that the array field has the expected size.
+     * 
+     * @param arrayField the array field to check
+     * @param expectedSize the expected size
+     */
+    @QAFTestStep(description = "the {string} array should have size {int}")
+    public void arrayShouldHaveSize(String arrayField, int expectedSize) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        int actualSize = response.getArraySize(arrayField);
+        Reporter.log("Verifying array " + arrayField + " size: expected=" + expectedSize + ", actual=" + actualSize);
+        assertEquals(actualSize, expectedSize, "Array size mismatch for: " + arrayField);
+    }
+    
+    /**
+     * Shows the current test data (for debugging).
+     */
+    @QAFTestStep(description = "I print all test data for debugging")
+    public void printAllTestData() {
+        Map<String, Object> data = TestContextManager.getTestData();
+        Reporter.log("=== Current Test Data ===");
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            Reporter.log(entry.getKey() + " = " + entry.getValue());
+        }
+    }
+}
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with test data.
+     * 
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with test data")
+    public void sendAssetLayoutRequestWithTestData() throws Exception {
+        Map<String, Object> testData = TestContextManager.getTestData();
+        logger.info("Sending Asset Layout request with test data: " + testData);
+        
+        // Check if test data is empty and add required fields if needed
+        if (testData.isEmpty()) {
+            logger.warn("Test data is empty. Adding default values.");
+            testData.put("messageId", ApiClientUtil.generateMessageId());
+            testData.put("dealId", "838438"); // Default deal ID
+            testData.put("reportDate", "2024-12-09"); // Default report date
+        } else {
+            // Ensure messageId is present
+            if (!testData.containsKey("messageId")) {
+                testData.put("messageId", ApiClientUtil.generateMessageId());
+            }
+            
+            // Validate required fields
+            if (!testData.containsKey("dealId") || !testData.containsKey("reportDate")) {
+                logger.warn("Required fields missing in test data. Adding defaults.");
+                if (!testData.containsKey("dealId")) {
+                    testData.put("dealId", "838438"); // Default deal ID
+                }
+                if (!testData.containsKey("reportDate")) {
+                    testData.put("reportDate", "2024-12-09"); // Default report date
+                }
+            }
+        }
+        
+        try {
+            response = assetLayoutService.submitRequest(testData);
+            
+            Reporter.log("Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with a payload file.
+     * 
+     * @param payloadFile the payload file name
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Asset Layout API with payload file {string}")
+    public void sendAssetLayoutRequestWithPayloadFile(String payloadFile) throws Exception {
+        logger.info("Sending Asset Layout request with payload file: " + payloadFile);
+        
+        try {
+            response = assetLayoutService.submitRequestWithPayloadFile(payloadFile);
+            
+            Reporter.log("Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with advanced options.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date
+     * @param includeHistory whether to include history
+     * @param detailedView whether to use detailed view
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send an advanced request to Asset Layout API with deal {string}, report date {string}, includeHistory {boolean}, and detailedView {boolean}")
+    public void sendAdvancedAssetLayoutRequest(String dealId, String reportDate, boolean includeHistory, boolean detailedView) throws Exception {
+        logger.info("Sending advanced Asset Layout request");
+        
+        try {
+            response = assetLayoutService.submitAdvancedRequest(dealId, reportDate, includeHistory, detailedView);
+            
+            Reporter.log("Advanced Asset Layout request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending advanced Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending advanced Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response is successful (status code 2xx).
+     */
+    @QAFTestStep(description = "the response should be successful")
+    public void responseShouldBeSuccessful() {
+        Reporter.log("Verifying response is successful");
+        assertTrue(response.isSuccessful(), "Response is not successful. Status code: " + response.getStatusCode());
+    }
+    
+    /**
+     * Verifies that the response contains a non-empty array field.
+     * 
+     * @param arrayField the array field to check
+     */
+    @QAFTestStep(description = "the response should contain a non-empty {string} array")
+    public void responseShouldContainNonEmptyArray(String arrayField) {
+        int arraySize = response.getArraySize(arrayField);
+        Reporter.log("Verifying array " + arrayField + " is non-empty. Size: " + arraySize);
+        assertTrue(arraySize > 0, "Array " + arrayField + " is empty or not found");
+    }
+    
+    /**
+     * Verifies that the array field has the expected size.
+     * 
+     * @param arrayField the array field to check
+     * @param expectedSize the expected size
+     */
+    @QAFTestStep(description = "the {string} array should have size {int}")
+    public void arrayShouldHaveSize(String arrayField, int expectedSize) {
+        int actualSize = response.getArraySize(arrayField);
+        Reporter.log("Verifying array " + arrayField + " size: expected=" + expectedSize + ", actual=" + actualSize);
+        assertEquals(actualSize, expectedSize, "Array size mismatch for: " + arrayField);
+    }
+}Field + " size: expected=" + expectedSize + ", actual=" + actualSize);
+        assertEquals(actualSize, expectedSize, "Array size mismatch for: " + arrayField);
+    }
+}
+
+AssetLayoutSteps.java
+-------------------------
+
+package com.qaf.framework.stepdefs;
+
+import static org.testng.Assert.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qaf.framework.service.AssetLayoutService;
+import com.qaf.framework.util.ApiClientUtil;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
+
+/**
+ * Step definitions specifically for Asset Layout API testing.
+ */
+public class AssetLayoutSteps extends ApiSteps {
+    
+    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
+    private static final String ASSET_LAYOUT_ENDPOINT = "/api/v1/spc/assetlayout";
+    
+    /**
+     * Sends a request to the Asset Layout API with a payload file.
+     * 
+     * @param payloadFile the payload file name
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to the Asset Layout API with payload {string}")
+    public void sendAssetLayoutRequestWithFile(String payloadFile) throws Exception {
+        sendRequestWithPayload("POST", ASSET_LAYOUT_ENDPOINT, payloadFile);
+    }
+    
+    /**
+     * Sends a request to the Asset Layout API with deal ID, report date, and options.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date
+     * @param includeHistory whether to include history
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to the Asset Layout API with deal {string}, report date {string}, and includeHistory {boolean}")
+    public void sendAssetLayoutRequestWithOptions(String dealId, String reportDate, boolean includeHistory) throws Exception {
+        logger.info("Sending Asset Layout request with options");
+        
+        Map<String, Object> data = new HashMap<>();
+        data.put("dealId", dealId);
+        data.put("reportDate", reportDate);
+        
+        Map<String, Object> options = new HashMap<>();
+        options.put("includeHistory", includeHistory);
+        data.put("options", options);
+        
+        try {
+            ApiResponse response = getAssetLayoutService().submitRequest(data);
+            
+            // Store response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request with options sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
+            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response contains asset data.
+     */
+    @QAFTestStep(description = "the response should contain asset data")
+    public void responseShouldContainAssetData() {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains asset data");
+        assertTrue(response.hasJsonField("assets"), "Response does not contain assets field");
+        assertTrue(response.getArraySize("assets") > 0, "Assets array is empty");
+    }
+    
+    /**
+     * Verifies that the asset with the specified ID exists in the response.
+     * 
+     * @param assetId the asset ID to check for
+     */
+    @QAFTestStep(description = "the response should contain asset with ID {string}")
+    public void responseShouldContainAssetWithId(String assetId) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains asset with ID: " + assetId);
+        
+        boolean found = false;
+        int assetCount = response.getArraySize("assets");
+        
+        for (int i = 0; i < assetCount; i++) {
+            try {
+                JSONObject asset = response.getArrayItem("assets", i);
+                String currentId = asset.has("assetId") ? asset.getString("assetId") : "";
+                if (assetId.equals(currentId)) {
+                    found = true;
+                    break;
+                }
+            } catch (Exception e) {
+                // Continue checking
+                logger.debug("Error checking asset ID: " + e.getMessage());
+            }
+        }
+        
+        assertTrue(found, "Asset with ID " + assetId + " not found in response");
+    }
+    
+    /**
+     * Verifies that the response contains the specified layout type.
+     * 
+     * @param layoutType the layout type to check for
+     */
+    @QAFTestStep(description = "the response should contain layout type {string}")
+    public void responseShouldContainLayoutType(String layoutType) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains layout type: " + layoutType);
+        
+        boolean found = false;
+        int layoutCount = response.getArraySize("layout");
+        
+        for (int i = 0; i < layoutCount; i++) {
+            try {
+                JSONObject layout = response.getArrayItem("layout", i);
+                String currentType = layout.has("type") ? layout.getString("type") : "";
+                if (layoutType.equals(currentType)) {
+                    found = true;
+                    break;
+                }
+            } catch (Exception e) {
+                // Continue checking
+                logger.debug("Error checking layout type: " + e.getMessage());
+            }
+        }
+        
+        assertTrue(found, "Layout type " + layoutType + " not found in response");
+    }
+    
+    /**
+     * Sets up a basic asset layout test data.
+     * 
+     * @param dealId the deal ID
+     * @param reportDate the report date
+     */
+    @QAFTestStep(description = "I set up basic asset layout test data with deal {string} and report date {string}")
+    public void setupBasicAssetLayoutTestData(String dealId, String reportDate) {
+        // Clear existing test data
+        TestContextManager.clearTestData();
+        
+        // Set new test data values
+        TestContextManager.setTestData("dealId", dealId);
+        TestContextManager.setTestData("reportDate", reportDate);
+        TestContextManager.setTestData("messageId", ApiClientUtil.generateMessageId());
+        
+        logger.info("Set up basic asset layout test data: dealId=" + dealId + ", reportDate=" + reportDate);
+        Reporter.log("Set up basic asset layout test data with dealId=" + dealId + ", reportDate=" + reportDate);
+        
+        // Debug log to verify test data is stored
+        Map<String, Object> testData = TestContextManager.getTestData();
+        logger.info("Verification - Current test data: " + testData);
+    }
+    
+    /**
+     * Dumps the current test data for debugging.
+     */
+    @QAFTestStep(description = "I verify asset layout test data")
+    public void verifyAssetLayoutTestData() {
+        Map<String, Object> testData = TestContextManager.getTestData();
+        
+        Reporter.log("=== Asset Layout Test Data ===");
+        Reporter.log("Deal ID: " + testData.getOrDefault("dealId", "NOT SET"));
+        Reporter.log("Report Date: " + testData.getOrDefault("reportDate", "NOT SET"));
+        Reporter.log("Message ID: " + testData.getOrDefault("messageId", "NOT SET"));
+        
+        // Also verify in logs for debugging
+        logger.info("Verification - Deal ID: " + testData.getOrDefault("dealId", "NOT SET"));
+        logger.info("Verification - Report Date: " + testData.getOrDefault("reportDate", "NOT SET"));
+        logger.info("Verification - Message ID: " + testData.getOrDefault("messageId", "NOT SET"));
+    }
+}
+}
+
