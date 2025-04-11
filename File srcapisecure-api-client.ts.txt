@@ -61,3 +61,17 @@ public class HttpUtil {
         }
     }
 }
+
+String payload = "{\n" +
+        "  \"messageId\": \"Test-123\",\n" +
+        "  \"dealId\": 838438,\n" +
+        "  \"reportDate\": \"2024-12-09\"\n" +
+        "}";
+
+String url = "https://ktgapi-sit.ksmls.americas.ishare.net/api/v1/spc/assetlayout";
+String certPath = "resources/certs/KHANonProd.pfx";
+String certPassword = "kha#123!";
+
+String response = HttpUtil.postWithPfxCert(url, payload, certPath, certPassword);
+System.out.println(response);
+
