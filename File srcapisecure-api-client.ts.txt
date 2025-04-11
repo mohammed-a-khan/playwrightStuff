@@ -1,2090 +1,269 @@
-ApiClientUtil.java
--------------------
+// Add this method to your existing ApiClientUtil class
 
-package com.qaf.framework.util;
+/**
+ * Processes a payload template by replacing placeholders with values from a data map.
+ * Handles various data types appropriately (keeping numbers unquoted, etc.)
+ *
+ * @param template the template string with placeholders like ${variable}
+ * @param data the map containing values to substitute
+ * @return the processed template with all placeholders replaced
+ */
+public static String processTemplate(String template, Map<String, Object> data) {
+    if (template == null || data == null) {
+        return template;
+    }
+    
+    String result = template;
+    
+    for (Map.Entry<String, Object> entry : data.entrySet()) {
+        String key = entry.getKey();
+        Object value = entry.getValue();
+        String placeholder = "${" + key + "}";
+        
+        // Handle different types appropriately
+        if (value instanceof Number) {
+            // Replace with the raw numeric value (no quotes)
+            result = result.replace("\"" + placeholder + "\"", value.toString());
+            // Also handle the case where there are no quotes
+            result = result.replace(placeholder, value.toString());
+        } else if (value instanceof Boolean) {
+            // For boolean values, convert to lowercase true/false 
+            result = result.replace("\"" + placeholder + "\"", value.toString().toLowerCase());
+            result = result.replace(placeholder, value.toString().toLowerCase());
+        } else {
+            // For string values, preserve the quotes if they exist
+            result = result.replace(placeholder, value != null ? value.toString() : "");
+        }
+    }
+    
+    return result;
+}
 
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import org.apache.commons.io.IOUtils;
-import org.json.JSONObject;
+
+package com.qaf.framework.stepdefs;
+
+import static org.testng.Assert.*;
+
+import java.util.Map;
+
+import com.qaf.framework.util.ApiClientUtil;
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-import javax.net.ssl.*;
-import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
-
 /**
- * Utility class for making API requests using native HTTP connections with certificate authentication.
+ * Steps for Asset Layout API testing with Excel data.
  */
-public class ApiClientUtil {
-    private static final Log logger = LogFactory.getLog(ApiClientUtil.class);
-
+public class AssetLayoutExcelSteps extends ApiSteps {
+    
+    private static final Log logger = LogFactory.getLog(AssetLayoutExcelSteps.class);
+    
     /**
-     * Creates an SSLSocketFactory with the certificate from properties.
+     * Sends a request to Asset Layout API with data from Excel.
      * 
-     * @return SSLSocketFactory configured with the certificate
-     * @throws Exception if there's an error setting up the SSL context
+     * @param excelData Map containing data from Excel
+     * @throws Exception if an error occurs
      */
-    private static SSLSocketFactory getSSLSocketFactory() throws Exception {
-        String certPath = ConfigurationManager.getBundle().getString("certificate.path");
-        String certPassword = ConfigurationManager.getBundle().getString("certificate.password");
-
-        logger.info("Setting up SSL with certificate: " + certPath);
+    @QAFTestStep(description = "I send a request to Asset Layout API with Excel data {excelData}")
+    public void sendRequestWithExcelData(Map<String, Object> excelData) throws Exception {
+        logger.info("Sending Asset Layout request with Excel data: " + excelData);
         
-        // Check if certificate file exists
-        File certFile = new File(certPath);
-        if (!certFile.exists()) {
-            logger.error("Certificate file not found: " + certPath);
-            throw new FileNotFoundException("Certificate file not found: " + certPath);
-        }
-
-        // Load the keystore
-        KeyStore keyStore = KeyStore.getInstance("PKCS12");
-        try (InputStream keyInput = new FileInputStream(certPath)) {
-            keyStore.load(keyInput, certPassword.toCharArray());
-        }
-
-        // Set up key manager
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
-        kmf.init(keyStore, certPassword.toCharArray());
-
-        // Create a trust manager that trusts all certificates
-        X509TrustManager trustAllManager = new X509TrustManager() {
-            @Override
-            public void checkClientTrusted(X509Certificate[] chain, String authType) {
-                // Trust all client certificates
+        try {
+            // Ensure messageId is present
+            if (!excelData.containsKey("messageId")) {
+                excelData.put("messageId", ApiClientUtil.generateMessageId());
             }
-
-            @Override
-            public void checkServerTrusted(X509Certificate[] chain, String authType) {
-                // Trust all server certificates
-            }
-
-            @Override
-            public X509Certificate[] getAcceptedIssuers() {
-                return new X509Certificate[0];
-            }
-        };
-
-        // Set up the SSL context
-        SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
-        sslContext.init(kmf.getKeyManagers(), new TrustManager[] { trustAllManager }, new SecureRandom());
-        return sslContext.getSocketFactory();
-    }
-
-    /**
-     * Sends an HTTP request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint (path)
-     * @param method the HTTP method (GET, POST, PUT, DELETE)
-     * @param payload the request payload (null for GET requests)
-     * @param headers additional request headers
-     * @return ApiResponse object containing status code and response body
-     * @throws Exception if there's an error making the request
-     */
-    public static ApiResponse sendRequest(String endpoint, String method, String payload, Map<String, String> headers) throws Exception {
-        String baseUrl = ConfigurationManager.getBundle().getString("base.url");
-        boolean useProxy = Boolean.parseBoolean(ConfigurationManager.getBundle().getString("proxy.enabled", "false"));
-
-        // Ensure endpoint starts with / if base URL doesn't end with /
-        if (!baseUrl.endsWith("/") && !endpoint.startsWith("/")) {
-            endpoint = "/" + endpoint;
-        }
-        
-        String fullUrl = baseUrl + endpoint;
-        logger.info("Sending " + method + " request to: " + fullUrl);
-        
-        // Create connection
-        URL url = new URL(fullUrl);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-        // Configure SSL for HTTPS connections
-        if (conn instanceof HttpsURLConnection httpsConn) {
-            logger.info("Configuring HTTPS connection with certificate");
-            httpsConn.setSSLSocketFactory(getSSLSocketFactory());
-            httpsConn.setHostnameVerifier((hostname, session) -> true); // Trust all hostnames
-        }
-
-        // Configure proxy if enabled
-        if (useProxy) {
-            String proxyHost = ConfigurationManager.getBundle().getString("proxy.host");
-            String proxyPort = ConfigurationManager.getBundle().getString("proxy.port");
-            logger.info("Using proxy: " + proxyHost + ":" + proxyPort);
-            System.setProperty("https.proxyHost", proxyHost);
-            System.setProperty("https.proxyPort", proxyPort);
-        } else {
-            // Clear proxy settings
-            System.setProperty("https.proxyHost", "");
-            System.setProperty("https.proxyPort", "");
-        }
-
-        // Configure request
-        conn.setRequestMethod(method.toUpperCase());
-        conn.setDoInput(true);
-        
-        // Set default headers
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setRequestProperty("Accept", "application/json");
-        
-        // Set custom headers
-        if (headers != null) {
-            for (Map.Entry<String, String> header : headers.entrySet()) {
-                conn.setRequestProperty(header.getKey(), header.getValue());
-            }
-        }
-
-        // Set timeout properties
-        int timeout = Integer.parseInt(ConfigurationManager.getBundle().getString("connection.timeout", "30000"));
-        conn.setConnectTimeout(timeout);
-        conn.setReadTimeout(timeout);
-
-        // Send payload for POST, PUT, PATCH requests
-        if (payload != null && !payload.isEmpty() && 
-            (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT") || method.equalsIgnoreCase("PATCH"))) {
-            conn.setDoOutput(true);
-            logger.debug("Request payload: " + payload);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(payload.getBytes(StandardCharsets.UTF_8));
-                os.flush();
-            }
-        }
-
-        // Get response
-        int statusCode = conn.getResponseCode();
-        logger.info("Response status code: " + statusCode);
-
-        // Read response body
-        String responseBody;
-        try (InputStream is = (statusCode >= 200 && statusCode < 300) ? 
-             conn.getInputStream() : conn.getErrorStream()) {
-            responseBody = IOUtils.toString(is, StandardCharsets.UTF_8);
-        }
-        
-        logger.debug("Response body: " + responseBody);
-        
-        // Create and return the API response
-        ApiResponse response = new ApiResponse(statusCode, responseBody, conn.getHeaderFields());
-        return response;
-    }
-
-    /**
-     * Sends a GET request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @param headers request headers
-     * @return ApiResponse containing status code and response body
-     * @throws Exception if there's an error making the request
-     */
-    public static ApiResponse sendGetRequest(String endpoint, Map<String, String> headers) throws Exception {
-        return sendRequest(endpoint, "GET", null, headers);
-    }
-
-    /**
-     * Sends a POST request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @param payload request payload
-     * @param headers request headers
-     * @return ApiResponse containing status code and response body
-     * @throws Exception if there's an error making the request
-     */
-    public static ApiResponse sendPostRequest(String endpoint, String payload, Map<String, String> headers) throws Exception {
-        return sendRequest(endpoint, "POST", payload, headers);
-    }
-
-    /**
-     * Sends a PUT request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @param payload request payload
-     * @param headers request headers
-     * @return ApiResponse containing status code and response body
-     * @throws Exception if there's an error making the request
-     */
-    public static ApiResponse sendPutRequest(String endpoint, String payload, Map<String, String> headers) throws Exception {
-        return sendRequest(endpoint, "PUT", payload, headers);
-    }
-
-    /**
-     * Sends a DELETE request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @param headers request headers
-     * @return ApiResponse containing status code and response body
-     * @throws Exception if there's an error making the request
-     */
-    public static ApiResponse sendDeleteRequest(String endpoint, Map<String, String> headers) throws Exception {
-        return sendRequest(endpoint, "DELETE", null, headers);
-    }
-
-    /**
-     * Loads a payload file from the configured payload directory.
-     * 
-     * @param fileName name of the payload file
-     * @return the content of the payload file as a string
-     * @throws IOException if there's an error reading the file
-     */
-    public static String readPayload(String fileName) throws IOException {
-        String payloadDir = ConfigurationManager.getBundle().getString("payload.dir");
-        String path = payloadDir + "/" + fileName;
-        
-        File payloadFile = new File(path);
-        if (!payloadFile.exists()) {
-            logger.error("Payload file not found: " + path);
-            throw new FileNotFoundException("Payload file not found: " + path);
-        }
-        
-        logger.info("Reading payload from: " + path);
-        try (InputStream is = new FileInputStream(path)) {
-            return IOUtils.toString(is, StandardCharsets.UTF_8);
+            
+            // Read the payload template
+            String payloadTemplate = ApiClientUtil.readPayload("assetlayout_payload.json");
+            
+            // Process the template to replace placeholders with values from Excel data
+            String payload = processPayloadTemplate(payloadTemplate, excelData);
+            logger.debug("Processed payload: " + payload);
+            
+            // Send the request
+            ApiResponse response = ApiClientUtil.sendPostRequest("/api/v1/spc/assetlayout", payload, getAssetLayoutService().getHeaders());
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request with Excel data sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request with Excel data: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
         }
     }
     
     /**
-     * Substitutes variables in a payload template with values from a map.
+     * Process a payload template by replacing placeholders with values.
      * 
-     * @param payloadTemplate the template with placeholders like ${variable}
-     * @param values map of variable names to values
-     * @return the processed payload with variables replaced
+     * @param template the payload template with placeholders
+     * @param data map of values to substitute
+     * @return processed payload string
      */
-    public static String processPayload(String payloadTemplate, Map<String, Object> values) {
-        if (values == null || values.isEmpty()) {
-            return payloadTemplate;
-        }
+    private String processPayloadTemplate(String template, Map<String, Object> data) {
+        String result = template;
         
-        String result = payloadTemplate;
-        for (Map.Entry<String, Object> entry : values.entrySet()) {
-            String placeholder = "${" + entry.getKey() + "}";
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            String key = entry.getKey();
             Object value = entry.getValue();
-            String valueStr = value != null ? value.toString() : "";
-            result = result.replace(placeholder, valueStr);
+            String placeholder = "${" + key + "}";
+            
+            // Special handling for numeric values to avoid quoting them
+            if (value instanceof Number) {
+                // Replace with the raw value (no quotes)
+                result = result.replace("\"" + placeholder + "\"", value.toString());
+                // Also handle the case where there are no quotes
+                result = result.replace(placeholder, value.toString());
+            } else {
+                // For string values, preserve the quotes if they exist
+                result = result.replace(placeholder, value != null ? value.toString() : "");
+            }
         }
         
         return result;
     }
     
     /**
-     * Generates a unique message ID for API requests.
+     * Loads Excel data into the test context for later use.
      * 
-     * @return a unique message ID string
+     * @param excelData map containing Excel data
      */
-    public static String generateMessageId() {
-        return "Test-" + UUID.randomUUID().toString();
-    }
-    
-    /**
-     * Creates a basic API payload with common fields.
-     * 
-     * @param additionalFields additional fields to include in the payload
-     * @return JSON string payload
-     */
-    public static String createBasicPayload(Map<String, Object> additionalFields) {
-        JSONObject payload = new JSONObject();
-        payload.put("messageId", generateMessageId());
+    @QAFTestStep(description = "I load Asset Layout test data from Excel {excelData}")
+    public void loadExcelData(Map<String, Object> excelData) {
+        logger.info("Loading test data from Excel: " + excelData);
         
-        if (additionalFields != null) {
-            for (Map.Entry<String, Object> entry : additionalFields.entrySet()) {
-                payload.put(entry.getKey(), entry.getValue());
-            }
-        }
-        
-        return payload.toString();
-    }
-}
-
-
-ApiResponse.java
-----------------------
-
-package com.qaf.framework.util;
-
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * Class representing an API response with status code, body, and headers.
- */
-public class ApiResponse {
-    private final int statusCode;
-    private final String responseBody;
-    private final Map<String, List<String>> headers;
-
-    /**
-     * Constructor for ApiResponse.
-     * 
-     * @param statusCode the HTTP status code
-     * @param responseBody the response body as a string
-     * @param headers response headers
-     */
-    public ApiResponse(int statusCode, String responseBody, Map<String, List<String>> headers) {
-        this.statusCode = statusCode;
-        this.responseBody = responseBody;
-        this.headers = headers;
-    }
-
-    /**
-     * Gets the HTTP status code.
-     * 
-     * @return the HTTP status code
-     */
-    public int getStatusCode() {
-        return statusCode;
-    }
-
-    /**
-     * Gets the response body as a string.
-     * 
-     * @return the response body
-     */
-    public String getResponseBody() {
-        return responseBody;
-    }
-
-    /**
-     * Gets the response headers.
-     * 
-     * @return map of header names to values
-     */
-    public Map<String, List<String>> getHeaders() {
-        return headers;
-    }
-
-    /**
-     * Checks if the response was successful (status code 2xx).
-     * 
-     * @return true if the status code is between 200 and 299
-     */
-    public boolean isSuccessful() {
-        return statusCode >= 200 && statusCode < 300;
-    }
-
-    /**
-     * Gets a header value.
-     * 
-     * @param headerName the header name
-     * @return the first value of the header, or null if not found
-     */
-    public String getHeader(String headerName) {
-        List<String> values = headers.get(headerName);
-        return (values != null && !values.isEmpty()) ? values.get(0) : null;
-    }
-
-    /**
-     * Gets the response as a JSONObject.
-     * 
-     * @return JSONObject representing the response, or null if not valid JSON
-     */
-    public JSONObject getJsonObject() {
-        try {
-            if (responseBody != null && !responseBody.isEmpty()) {
-                return new JSONObject(responseBody);
-            }
-        } catch (JSONException e) {
-            // Not a valid JSON object
-        }
-        return null;
-    }
-
-    /**
-     * Gets the response as a JSONArray.
-     * 
-     * @return JSONArray representing the response, or null if not valid JSON array
-     */
-    public JSONArray getJsonArray() {
-        try {
-            if (responseBody != null && !responseBody.isEmpty()) {
-                return new JSONArray(responseBody);
-            }
-        } catch (JSONException e) {
-            // Not a valid JSON array
-        }
-        return null;
-    }
-
-    /**
-     * Gets a value from the JSON response by key.
-     * 
-     * @param key the JSON key
-     * @return the value as a string, or null if not found
-     */
-    public String getValueFromJson(String key) {
-        JSONObject json = getJsonObject();
-        if (json != null && json.has(key)) {
-            return json.get(key).toString();
-        }
-        return null;
-    }
-
-    /**
-     * Checks if a field exists in the JSON response.
-     * 
-     * @param field the field name
-     * @return true if the field exists, false otherwise
-     */
-    public boolean hasJsonField(String field) {
-        JSONObject json = getJsonObject();
-        return json != null && json.has(field);
-    }
-
-    /**
-     * Gets a nested value from the JSON response using dot notation.
-     * 
-     * @param path the dot-notated path (e.g., "data.user.name")
-     * @return the value as a string, or null if not found
-     */
-    public String getNestedValue(String path) {
-        try {
-            JSONObject json = getJsonObject();
-            if (json == null) {
-                return null;
-            }
-            
-            String[] parts = path.split("\\.");
-            Object current = json;
-            
-            for (String part : parts) {
-                if (current instanceof JSONObject) {
-                    JSONObject currentJson = (JSONObject) current;
-                    if (!currentJson.has(part)) {
-                        return null;
-                    }
-                    current = currentJson.get(part);
-                } else {
-                    return null;
-                }
-            }
-            
-            return current != null ? current.toString() : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /**
-     * Checks if the response body contains a specific text.
-     * 
-     * @param text the text to check for
-     * @return true if the response body contains the text
-     */
-    public boolean responseContains(String text) {
-        return responseBody != null && responseBody.contains(text);
-    }
-    
-    /**
-     * Gets an item from a JSON array in the response.
-     * 
-     * @param arrayField the field name of the array
-     * @param index the index of the item in the array
-     * @return the JSON object at the specified index
-     */
-    public JSONObject getArrayItem(String arrayField, int index) {
-        try {
-            JSONObject json = getJsonObject();
-            if (json != null && json.has(arrayField)) {
-                JSONArray array = json.getJSONArray(arrayField);
-                if (index < array.length()) {
-                    return array.getJSONObject(index);
-                }
-            }
-        } catch (Exception e) {
-            // Not a valid JSON structure
-        }
-        return null;
-    }
-    
-    /**
-     * Gets the size of an array in the JSON response.
-     * 
-     * @param arrayField the field name of the array
-     * @return the size of the array, or -1 if not found
-     */
-    public int getArraySize(String arrayField) {
-        try {
-            JSONObject json = getJsonObject();
-            if (json != null && json.has(arrayField)) {
-                JSONArray array = json.getJSONArray(arrayField);
-                return array.length();
-            }
-        } catch (Exception e) {
-            // Not a valid JSON structure
-        }
-        return -1;
-    }
-    
-    /**
-     * Returns a string representation of the response.
-     * 
-     * @return string representation of the response
-     */
-    @Override
-    public String toString() {
-        return "Status Code: " + statusCode + "\nBody: " + responseBody;
-    }
-}
-
-ApiService.java
-------------------
-
-package com.qaf.framework.service;
-
-import com.qaf.framework.util.ApiClientUtil;
-import com.qaf.framework.util.ApiResponse;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
-import java.util.HashMap;
-import java.util.Map;
-
-/**
- * Base service class for API operations.
- * Provides common functionality for all API services.
- */
-public abstract class ApiService {
-    
-    protected static final Log logger = LogFactory.getLog(ApiService.class);
-    protected Map<String, String> headers;
-    
-    /**
-     * Constructor for ApiService.
-     * Initializes default headers.
-     */
-    public ApiService() {
-        this.headers = new HashMap<>();
-        initializeHeaders();
-    }
-    
-    /**
-     * Initializes default headers.
-     * Override this method in subclasses to add service-specific headers.
-     */
-    protected void initializeHeaders() {
-        headers.put("Content-Type", "application/json");
-        headers.put("Accept", "application/json");
-    }
-    
-    /**
-     * Adds a header to the request.
-     * 
-     * @param name header name
-     * @param value header value
-     * @return this service for chaining
-     */
-    public ApiService addHeader(String name, String value) {
-        headers.put(name, value);
-        return this;
-    }
-    
-    /**
-     * Adds multiple headers to the request.
-     * 
-     * @param newHeaders map of headers to add
-     * @return this service for chaining
-     */
-    public ApiService addHeaders(Map<String, String> newHeaders) {
-        if (newHeaders != null) {
-            headers.putAll(newHeaders);
-        }
-        return this;
-    }
-    
-    /**
-     * Sends a GET request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @return ApiResponse containing the response
-     */
-    protected ApiResponse get(String endpoint) {
-        try {
-            return ApiClientUtil.sendGetRequest(endpoint, headers);
-        } catch (Exception e) {
-            logger.error("Error sending GET request to " + endpoint, e);
-            throw new RuntimeException("Failed to send GET request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sends a POST request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @param payload the request payload
-     * @return ApiResponse containing the response
-     */
-    protected ApiResponse post(String endpoint, String payload) {
-        try {
-            return ApiClientUtil.sendPostRequest(endpoint, payload, headers);
-        } catch (Exception e) {
-            logger.error("Error sending POST request to " + endpoint, e);
-            throw new RuntimeException("Failed to send POST request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sends a POST request to the specified endpoint with a payload from a file.
-     * 
-     * @param endpoint the API endpoint
-     * @param payloadFileName name of the payload file
-     * @return ApiResponse containing the response
-     */
-    protected ApiResponse postWithPayloadFile(String endpoint, String payloadFileName) {
-        try {
-            String payload = ApiClientUtil.readPayload(payloadFileName);
-            return post(endpoint, payload);
-        } catch (Exception e) {
-            logger.error("Error sending POST request with payload file to " + endpoint, e);
-            throw new RuntimeException("Failed to send POST request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sends a POST request to the specified endpoint with a payload from a file and variable substitution.
-     * 
-     * @param endpoint the API endpoint
-     * @param payloadFileName name of the payload file
-     * @param values map of variable names to values for substitution
-     * @return ApiResponse containing the response
-     */
-    protected ApiResponse postWithPayloadFile(String endpoint, String payloadFileName, Map<String, Object> values) {
-        try {
-            String payload = ApiClientUtil.readPayload(payloadFileName);
-            payload = ApiClientUtil.processPayload(payload, values);
-            return post(endpoint, payload);
-        } catch (Exception e) {
-            logger.error("Error sending POST request with processed payload file to " + endpoint, e);
-            throw new RuntimeException("Failed to send POST request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sends a PUT request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @param payload the request payload
-     * @return ApiResponse containing the response
-     */
-    protected ApiResponse put(String endpoint, String payload) {
-        try {
-            return ApiClientUtil.sendPutRequest(endpoint, payload, headers);
-        } catch (Exception e) {
-            logger.error("Error sending PUT request to " + endpoint, e);
-            throw new RuntimeException("Failed to send PUT request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sends a DELETE request to the specified endpoint.
-     * 
-     * @param endpoint the API endpoint
-     * @return ApiResponse containing the response
-     */
-    protected ApiResponse delete(String endpoint) {
-        try {
-            return ApiClientUtil.sendDeleteRequest(endpoint, headers);
-        } catch (Exception e) {
-            logger.error("Error sending DELETE request to " + endpoint, e);
-            throw new RuntimeException("Failed to send DELETE request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Creates a basic payload with common fields.
-     * 
-     * @param additionalFields additional fields to include in the payload
-     * @return JSON string payload
-     */
-    protected String createBasicPayload(Map<String, Object> additionalFields) {
-        return ApiClientUtil.createBasicPayload(additionalFields);
-    }
-}
-
-AssetLayoutService.java
---------------------------
-
-package com.qaf.framework.service;
-
-import com.qaf.framework.util.ApiClientUtil;
-import com.qaf.framework.util.ApiResponse;
-
-import java.util.HashMap;
-import java.util.Map;
-
-/**
- * Service class for Asset Layout API operations.
- */
-public class AssetLayoutService extends ApiService {
-    
-    private static final String ENDPOINT = "/api/v1/spc/assetlayout";
-    private static final String DEFAULT_PAYLOAD_FILE = "assetlayout.json";
-    
-    /**
-     * Default constructor.
-     */
-    public AssetLayoutService() {
-        super();
-    }
-    
-    /**
-     * Sends a request to Asset Layout API with basic payload.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse submitRequest(String dealId, String reportDate) {
-        Map<String, Object> payloadData = new HashMap<>();
-        payloadData.put("messageId", ApiClientUtil.generateMessageId());
-        payloadData.put("dealId", dealId);
-        payloadData.put("reportDate", reportDate);
-        
-        logger.info("Sending Asset Layout request with dealId: " + dealId + ", reportDate: " + reportDate);
-        return post(ENDPOINT, createBasicPayload(payloadData));
-    }
-    
-    /**
-     * Sends a request to Asset Layout API with custom data.
-     * 
-     * @param data map of custom data fields
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse submitRequest(Map<String, Object> data) {
-        // Ensure messageId is present
-        if (!data.containsKey("messageId")) {
-            data.put("messageId", ApiClientUtil.generateMessageId());
-        }
-        
-        logger.info("Sending Asset Layout request with custom data: " + data);
-        return post(ENDPOINT, createBasicPayload(data));
-    }
-    
-    /**
-     * Sends a request to Asset Layout API using a payload file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse submitRequestWithPayloadFile(String payloadFileName) {
-        logger.info("Sending Asset Layout request with payload file: " + payloadFileName);
-        return postWithPayloadFile(ENDPOINT, payloadFileName);
-    }
-    
-    /**
-     * Sends a request to Asset Layout API using the default payload file with variable substitution.
-     * 
-     * @param values map of variable names to values for substitution
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse submitRequestWithDefaultPayload(Map<String, Object> values) {
-        logger.info("Sending Asset Layout request with default payload and values: " + values);
-        return postWithPayloadFile(ENDPOINT, DEFAULT_PAYLOAD_FILE, values);
-    }
-    
-    /**
-     * Sends a request to Asset Layout API using a custom payload file with variable substitution.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param values map of variable names to values for substitution
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse submitRequestWithPayload(String payloadFileName, Map<String, Object> values) {
-        logger.info("Sending Asset Layout request with payload file: " + payloadFileName + " and values: " + values);
-        return postWithPayloadFile(ENDPOINT, payloadFileName, values);
-    }
-    
-    /**
-     * Sends a request to Asset Layout API with advanced options.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @param includeHistory whether to include history
-     * @param detailedView whether to use detailed view
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse submitAdvancedRequest(String dealId, String reportDate, boolean includeHistory, boolean detailedView) {
-        Map<String, Object> payloadData = new HashMap<>();
-        payloadData.put("messageId", ApiClientUtil.generateMessageId());
-        payloadData.put("dealId", dealId);
-        payloadData.put("reportDate", reportDate);
-        
-        // Add options
-        Map<String, Object> options = new HashMap<>();
-        options.put("includeHistory", includeHistory);
-        options.put("detailedView", detailedView);
-        payloadData.put("options", options);
-        
-        logger.info("Sending Advanced Asset Layout request with options: includeHistory=" + 
-                    includeHistory + ", detailedView=" + detailedView);
-        return post(ENDPOINT, createBasicPayload(payloadData));
-    }
-}
-
-ApiSteps.java
----------------
-
-package com.qaf.framework.stepdefs;
-
-import static org.testng.Assert.*;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import com.qaf.framework.util.ApiResponse;
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qaf.framework.service.ApiService;
-import com.qaf.framework.service.AssetLayoutService;
-import com.qaf.framework.util.ApiClientUtil;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.hamcrest.Matchers;
-import org.json.JSONObject;
-
-/**
- * Base step definitions for API testing.
- */
-public class ApiSteps {
-    
-    private static final Log logger = LogFactory.getLog(ApiSteps.class);
-    
-    protected ApiResponse response;
-    protected AssetLayoutService assetLayoutService = new AssetLayoutService();
-    protected Map<String, Object> testData = new HashMap<>();
-    
-    /**
-     * Sends a request to an endpoint with a payload file.
-     * 
-     * @param method HTTP method (GET, POST, PUT, DELETE)
-     * @param endpoint API endpoint
-     * @param payloadFile payload file name
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a {string} request to {string} with payload {string}")
-    public void sendRequestWithPayload(String method, String endpoint, String payloadFile) throws Exception {
-        logger.info("Sending " + method + " request to " + endpoint + " with payload " + payloadFile);
-        
-        try {
-            String payload = ApiClientUtil.readPayload(payloadFile);
-            
-            switch (method.toUpperCase()) {
-                case "GET":
-                    response = ApiClientUtil.sendGetRequest(endpoint, new HashMap<>());
-                    break;
-                case "POST":
-                    response = ApiClientUtil.sendPostRequest(endpoint, payload, new HashMap<>());
-                    break;
-                case "PUT":
-                    response = ApiClientUtil.sendPutRequest(endpoint, payload, new HashMap<>());
-                    break;
-                case "DELETE":
-                    response = ApiClientUtil.sendDeleteRequest(endpoint, new HashMap<>());
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unsupported HTTP method: " + method);
-            }
-            
-            Reporter.log("Request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending request: " + e.getMessage(), e);
-            Reporter.log("Error sending request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Verifies that the response status code matches the expected value.
-     * 
-     * @param expectedStatus the expected HTTP status code
-     */
-    @QAFTestStep(description = "the response status code should be {expectedStatus}")
-    public void verifyStatusCode(int expectedStatus) {
-        Reporter.log("Verifying status code: expected=" + expectedStatus + ", actual=" + response.getStatusCode());
-        assertEquals(response.getStatusCode(), expectedStatus, "Response status code mismatch");
-    }
-    
-    /**
-     * Verifies that the response contains the specified text.
-     * 
-     * @param text the text to check for
-     */
-    @QAFTestStep(description = "the response should contain {string}")
-    public void responseShouldContain(String text) {
-        Reporter.log("Verifying response contains: " + text);
-        assertTrue(response.responseContains(text), "Response does not contain: " + text);
-    }
-    
-    /**
-     * Verifies that the response contains the specified field.
-     * 
-     * @param field the field to check for
-     */
-    @QAFTestStep(description = "the response should contain field {string}")
-    public void responseShouldContainField(String field) {
-        Reporter.log("Verifying response contains field: " + field);
-        assertTrue(response.hasJsonField(field), "Response does not contain field: " + field);
-    }
-    
-    /**
-     * Verifies that the response field has the expected value.
-     * 
-     * @param field the field to check
-     * @param expectedValue the expected value
-     */
-    @QAFTestStep(description = "the response field {string} should be {string}")
-    public void fieldShouldHaveValue(String field, String expectedValue) {
-        String actualValue = response.getValueFromJson(field);
-        Reporter.log("Verifying field " + field + ": expected=" + expectedValue + ", actual=" + actualValue);
-        assertEquals(actualValue, expectedValue, "Field value mismatch for: " + field);
-    }
-    
-    /**
-     * Verifies that the response field contains the expected text.
-     * 
-     * @param field the field to check
-     * @param expectedText the text that should be contained
-     */
-    @QAFTestStep(description = "the response field {string} should contain {string}")
-    public void fieldShouldContain(String field, String expectedText) {
-        String actualValue = response.getValueFromJson(field);
-        Reporter.log("Verifying field " + field + " contains: " + expectedText);
-        assertTrue(actualValue != null && actualValue.contains(expectedText), 
-                  "Field " + field + " does not contain: " + expectedText);
-    }
-    
-    /**
-     * Adds a key-value pair to the test data map.
-     * 
-     * @param key the key
-     * @param value the value
-     */
-    @QAFTestStep(description = "I set {string} to {string} in test data")
-    public void setTestData(String key, String value) {
-        testData.put(key, value);
-        Reporter.log("Set test data: " + key + "=" + value);
-    }
-    
-    /**
-     * Clears all test data.
-     */
-    @QAFTestStep(description = "I clear all test data")
-    public void clearTestData() {
-        testData.clear();
-        Reporter.log("Cleared all test data");
-    }
-    
-    /**
-     * Adds a header to the Asset Layout service.
-     * 
-     * @param headerName the header name
-     * @param headerValue the header value
-     */
-    @QAFTestStep(description = "I add header {string} with value {string}")
-    public void addHeader(String headerName, String headerValue) {
-        assetLayoutService.addHeader(headerName, headerValue);
-        Reporter.log("Added header: " + headerName + "=" + headerValue);
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with deal ID and report date.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to Asset Layout API with deal {string} and report date {string}")
-    public void sendAssetLayoutRequest(String dealId, String reportDate) throws Exception {
-        logger.info("Sending Asset Layout request with dealId: " + dealId + ", reportDate: " + reportDate);
-        
-        try {
-            response = assetLayoutService.submitRequest(dealId, reportDate);
-            
-            Reporter.log("Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with test data.
-     * 
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to Asset Layout API with test data")
-    public void sendAssetLayoutRequestWithTestData() throws Exception {
-        logger.info("Sending Asset Layout request with test data: " + testData);
-        
-        try {
-            response = assetLayoutService.submitRequest(testData);
-            
-            Reporter.log("Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with a payload file.
-     * 
-     * @param payloadFile the payload file name
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to Asset Layout API with payload file {string}")
-    public void sendAssetLayoutRequestWithPayloadFile(String payloadFile) throws Exception {
-        logger.info("Sending Asset Layout request with payload file: " + payloadFile);
-        
-        try {
-            response = assetLayoutService.submitRequestWithPayloadFile(payloadFile);
-            
-            Reporter.log("Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with advanced options.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @param includeHistory whether to include history
-     * @param detailedView whether to use detailed view
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send an advanced request to Asset Layout API with deal {string}, report date {string}, includeHistory {boolean}, and detailedView {boolean}")
-    public void sendAdvancedAssetLayoutRequest(String dealId, String reportDate, boolean includeHistory, boolean detailedView) throws Exception {
-        logger.info("Sending advanced Asset Layout request");
-        
-        try {
-            response = assetLayoutService.submitAdvancedRequest(dealId, reportDate, includeHistory, detailedView);
-            
-            Reporter.log("Advanced Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending advanced Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending advanced Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Verifies that the response is successful (status code 2xx).
-     */
-    @QAFTestStep(description = "the response should be successful")
-    public void responseShouldBeSuccessful() {
-        Reporter.log("Verifying response is successful");
-        assertTrue(response.isSuccessful(), "Response is not successful. Status code: " + response.getStatusCode());
-    }
-    
-    /**
-     * Verifies that the response contains a non-empty array field.
-     * 
-     * @param arrayField the array field to check
-     */
-    @QAFTestStep(description = "the response should contain a non-empty {string} array")
-    public void responseShouldContainNonEmptyArray(String arrayField) {
-        int arraySize = response.getArraySize(arrayField);
-        Reporter.log("Verifying array " + arrayField + " is non-empty. Size: " + arraySize);
-        assertTrue(arraySize > 0, "Array " + arrayField + " is empty or not found");
-    }
-    
-    /**
-     * Verifies that the array field has the expected size.
-     * 
-     * @param arrayField the array field to check
-     * @param expectedSize the expected size
-     */
-    @QAFTestStep(description = "the {string} array should have size {int}")
-    public void arrayShouldHaveSize(String arrayField, int expectedSize) {
-        int actualSize = response.getArraySize(arrayField);
-        Reporter.log("Verifying array " + arrayField + " size: expected=" + expectedSize + ", actual=" + actualSize);
-        assertEquals(actualSize, expectedSize, "Array size mismatch for: " + arrayField);
-    }
-}
-
-AssetLayoutSteps.java
-----------------------
-
-package com.qaf.framework.stepdefs;
-
-import static org.testng.Assert.*;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import com.qaf.framework.util.ApiResponse;
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qaf.framework.service.AssetLayoutService;
-import com.qaf.framework.util.ApiClientUtil;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
-/**
- * Step definitions specifically for Asset Layout API testing.
- */
-public class AssetLayoutSteps extends ApiSteps {
-    
-    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
-    private static final String ASSET_LAYOUT_ENDPOINT = "/api/v1/spc/assetlayout";
-    
-    /**
-     * Sends a request to the Asset Layout API with a payload file.
-     * 
-     * @param payloadFile the payload file name
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to the Asset Layout API with payload {string}")
-    public void sendAssetLayoutRequestWithFile(String payloadFile) throws Exception {
-        sendRequestWithPayload("POST", ASSET_LAYOUT_ENDPOINT, payloadFile);
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with deal ID, report date, and options.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @param includeHistory whether to include history
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to the Asset Layout API with deal {string}, report date {string}, and includeHistory {boolean}")
-    public void sendAssetLayoutRequestWithOptions(String dealId, String reportDate, boolean includeHistory) throws Exception {
-        logger.info("Sending Asset Layout request with options");
-        
-        Map<String, Object> data = new HashMap<>();
-        data.put("dealId", dealId);
-        data.put("reportDate", reportDate);
-        
-        Map<String, Object> options = new HashMap<>();
-        options.put("includeHistory", includeHistory);
-        data.put("options", options);
-        
-        try {
-            response = assetLayoutService.submitRequest(data);
-            
-            Reporter.log("Asset Layout request with options sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Verifies that the response contains asset data.
-     */
-    @QAFTestStep(description = "the response should contain asset data")
-    public void responseShouldContainAssetData() {
-        Reporter.log("Verifying response contains asset data");
-        assertTrue(response.hasJsonField("assets"), "Response does not contain assets field");
-        assertTrue(response.getArraySize("assets") > 0, "Assets array is empty");
-    }
-    
-    /**
-     * Verifies that the asset with the specified ID exists in the response.
-     * 
-     * @param assetId the asset ID to check for
-     */
-    @QAFTestStep(description = "the response should contain asset with ID {string}")
-    public void responseShouldContainAssetWithId(String assetId) {
-        Reporter.log("Verifying response contains asset with ID: " + assetId);
-        
-        boolean found = false;
-        int assetCount = response.getArraySize("assets");
-        
-        for (int i = 0; i < assetCount; i++) {
-            try {
-                String currentId = response.getArrayItem("assets", i).getString("assetId");
-                if (assetId.equals(currentId)) {
-                    found = true;
-                    break;
-                }
-            } catch (Exception e) {
-                // Continue checking
-            }
-        }
-        
-        assertTrue(found, "Asset with ID " + assetId + " not found in response");
-    }
-    
-    /**
-     * Verifies that the response contains the specified layout type.
-     * 
-     * @param layoutType the layout type to check for
-     */
-    @QAFTestStep(description = "the response should contain layout type {string}")
-    public void responseShouldContainLayoutType(String layoutType) {
-        Reporter.log("Verifying response contains layout type: " + layoutType);
-        
-        boolean found = false;
-        int layoutCount = response.getArraySize("layout");
-        
-        for (int i = 0; i < layoutCount; i++) {
-            try {
-                String currentType = response.getArrayItem("layout", i).getString("type");
-                if (layoutType.equals(currentType)) {
-                    found = true;
-                    break;
-                }
-            } catch (Exception e) {
-                // Continue checking
-            }
-        }
-        
-        assertTrue(found, "Layout type " + layoutType + " not found in response");
-    }
-    
-    /**
-     * Sets up a basic asset layout test data.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     */
-    @QAFTestStep(description = "I set up basic asset layout test data with deal {string} and report date {string}")
-    public void setupBasicAssetLayoutTestData(String dealId, String reportDate) {
-        clearTestData();
-        setTestData("dealId", dealId);
-        setTestData("reportDate", reportDate);
-        setTestData("messageId", ApiClientUtil.generateMessageId());
-        
-        Reporter.log("Set up basic asset layout test data with dealId=" + dealId + ", reportDate=" + reportDate);
-    }
-}
-
-assetLayout.feature
---------------------
-
-Feature: Asset Layout API Testing
-  As a user of the Asset Layout API
-  I want to verify the API functionality
-  So that I can ensure it meets business requirements
-
-  @Smoke
-  Scenario: Verify Asset Layout API with valid data
-    Given I set up basic asset layout test data with deal "838438" and report date "2024-12-09"
-    When I send a request to Asset Layout API with test data
-    Then the response status code should be 200
-    And the response should be successful
-    And the response should contain field "messageId"
-    And the response should contain field "status"
-
-  @Regression
-  Scenario: Verify Asset Layout API with custom payload file
-    When I send a request to the Asset Layout API with payload "assetlayout.json"
-    Then the response status code should be 200
-    And the response should be successful
-    And the response should contain field "status"
-
-  @Regression
-  Scenario: Verify Asset Layout API with direct request
-    When I send a request to Asset Layout API with deal "838438" and report date "2024-12-09"
-    Then the response status code should be 200
-    And the response should be successful
-    And the response should contain field "status"
-
-  @Regression
-  Scenario: Verify Asset Layout API includes assets data
-    When I send a request to Asset Layout API with deal "838438" and report date "2024-12-09"
-    Then the response status code should be 200
-    And the response should be successful
-    And the response should contain field "assets"
-    And the response should contain a non-empty "assets" array
-
-testContextManager.java
-------------------------
-
-package com.qaf.framework.util;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import com.qmetry.qaf.automation.core.TestBaseProvider;
-
-/**
- * Manages test context and data sharing between step definition classes.
- * This ensures data persistence across different step definition instances.
- */
-public class TestContextManager {
-    
-    private static final String TEST_DATA_KEY = "api.test.data";
-    private static final String API_RESPONSE_KEY = "api.response";
-    private static final String SERVICE_KEY_PREFIX = "api.service.";
-    
-    /**
-     * Gets the shared test data map.
-     * 
-     * @return map of test data
-     */
-    public static Map<String, Object> getTestData() {
-        Map<String, Object> testData = (Map<String, Object>) TestBaseProvider.instance().get()
-                .getContext().getProperty(TEST_DATA_KEY);
-        
-        if (testData == null) {
-            testData = new HashMap<>();
-            TestBaseProvider.instance().get().getContext().setProperty(TEST_DATA_KEY, testData);
-        }
-        
-        return testData;
-    }
-    
-    /**
-     * Sets a test data value.
-     * 
-     * @param key the key
-     * @param value the value
-     */
-    public static void setTestData(String key, Object value) {
-        Map<String, Object> testData = getTestData();
-        testData.put(key, value);
-    }
-    
-    /**
-     * Gets a test data value.
-     * 
-     * @param key the key
-     * @return the value, or null if not found
-     */
-    public static Object getTestDataValue(String key) {
-        return getTestData().get(key);
-    }
-    
-    /**
-     * Gets a test data value as a string.
-     * 
-     * @param key the key
-     * @return the value as a string, or null if not found
-     */
-    public static String getTestDataValueAsString(String key) {
-        Object value = getTestDataValue(key);
-        return value != null ? value.toString() : null;
-    }
-    
-    /**
-     * Clears all test data.
-     */
-    public static void clearTestData() {
-        getTestData().clear();
-    }
-    
-    /**
-     * Checks if test data contains a key.
-     * 
-     * @param key the key to check
-     * @return true if the key exists
-     */
-    public static boolean hasTestData(String key) {
-        return getTestData().containsKey(key);
-    }
-    
-    /**
-     * Stores the API response in the shared context.
-     * 
-     * @param response the API response
-     */
-    public static void setApiResponse(ApiResponse response) {
-        TestBaseProvider.instance().get().getContext().setProperty(API_RESPONSE_KEY, response);
-    }
-    
-    /**
-     * Gets the API response from the shared context.
-     * 
-     * @return the API response, or null if not set
-     */
-    public static ApiResponse getApiResponse() {
-        return (ApiResponse) TestBaseProvider.instance().get().getContext().getProperty(API_RESPONSE_KEY);
-    }
-    
-    /**
-     * Stores a service object in the shared context.
-     * 
-     * @param <T> the service type
-     * @param serviceClass the service class
-     * @param service the service instance
-     */
-    public static <T> void setService(Class<T> serviceClass, T service) {
-        String key = SERVICE_KEY_PREFIX + serviceClass.getName();
-        TestBaseProvider.instance().get().getContext().setProperty(key, service);
-    }
-    
-    /**
-     * Gets a service object from the shared context.
-     * 
-     * @param <T> the service type
-     * @param serviceClass the service class
-     * @return the service instance, or null if not set
-     */
-    @SuppressWarnings("unchecked")
-    public static <T> T getService(Class<T> serviceClass) {
-        String key = SERVICE_KEY_PREFIX + serviceClass.getName();
-        return (T) TestBaseProvider.instance().get().getContext().getProperty(key);
-    }
-}
-
-ApiSteps.java
-----------------
-
-package com.qaf.framework.stepdefs;
-
-import static org.testng.Assert.*;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import com.qaf.framework.util.ApiResponse;
-import com.qaf.framework.util.TestContextManager;
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qaf.framework.service.ApiService;
-import com.qaf.framework.service.AssetLayoutService;
-import com.qaf.framework.util.ApiClientUtil;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.hamcrest.Matchers;
-import org.json.JSONObject;
-
-/**
- * Base step definitions for API testing.
- */
-public class ApiSteps {
-    
-    private static final Log logger = LogFactory.getLog(ApiSteps.class);
-    
-    /**
-     * Get or create the AssetLayoutService from context
-     */
-    protected AssetLayoutService getAssetLayoutService() {
-        AssetLayoutService service = TestContextManager.getService(AssetLayoutService.class);
-        if (service == null) {
-            service = new AssetLayoutService();
-            TestContextManager.setService(AssetLayoutService.class, service);
-        }
-        return service;
-    }
-    
-    /**
-     * Get the current API response from context
-     */
-    protected ApiResponse getResponse() {
-        return TestContextManager.getApiResponse();
-    }
-    
-    /**
-     * Set the current API response in context
-     */
-    protected void setResponse(ApiResponse response) {
-        TestContextManager.setApiResponse(response);
-    }
-    
-    /**
-     * Sends a request to an endpoint with a payload file.
-     * 
-     * @param method HTTP method (GET, POST, PUT, DELETE)
-     * @param endpoint API endpoint
-     * @param payloadFile payload file name
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a {string} request to {string} with payload {string}")
-    public void sendRequestWithPayload(String method, String endpoint, String payloadFile) throws Exception {
-        logger.info("Sending " + method + " request to " + endpoint + " with payload " + payloadFile);
-        
-        try {
-            String payload = ApiClientUtil.readPayload(payloadFile);
-            ApiResponse response = null;
-            
-            switch (method.toUpperCase()) {
-                case "GET":
-                    response = ApiClientUtil.sendGetRequest(endpoint, new HashMap<>());
-                    break;
-                case "POST":
-                    response = ApiClientUtil.sendPostRequest(endpoint, payload, new HashMap<>());
-                    break;
-                case "PUT":
-                    response = ApiClientUtil.sendPutRequest(endpoint, payload, new HashMap<>());
-                    break;
-                case "DELETE":
-                    response = ApiClientUtil.sendDeleteRequest(endpoint, new HashMap<>());
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unsupported HTTP method: " + method);
-            }
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending request: " + e.getMessage(), e);
-            Reporter.log("Error sending request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Verifies that the response status code matches the expected value.
-     * 
-     * @param expectedStatus the expected HTTP status code
-     */
-    @QAFTestStep(description = "the response status code should be {expectedStatus}")
-    public void verifyStatusCode(int expectedStatus) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying status code: expected=" + expectedStatus + ", actual=" + response.getStatusCode());
-        assertEquals(response.getStatusCode(), expectedStatus, "Response status code mismatch");
-    }
-    
-    /**
-     * Verifies that the response contains the specified text.
-     * 
-     * @param text the text to check for
-     */
-    @QAFTestStep(description = "the response should contain {string}")
-    public void responseShouldContain(String text) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying response contains: " + text);
-        assertTrue(response.responseContains(text), "Response does not contain: " + text);
-    }
-    
-    /**
-     * Verifies that the response contains the specified field.
-     * 
-     * @param field the field to check for
-     */
-    @QAFTestStep(description = "the response should contain field {string}")
-    public void responseShouldContainField(String field) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying response contains field: " + field);
-        assertTrue(response.hasJsonField(field), "Response does not contain field: " + field);
-    }
-    
-    /**
-     * Verifies that the response field has the expected value.
-     * 
-     * @param field the field to check
-     * @param expectedValue the expected value
-     */
-    @QAFTestStep(description = "the response field {string} should be {string}")
-    public void fieldShouldHaveValue(String field, String expectedValue) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        String actualValue = response.getValueFromJson(field);
-        Reporter.log("Verifying field " + field + ": expected=" + expectedValue + ", actual=" + actualValue);
-        assertEquals(actualValue, expectedValue, "Field value mismatch for: " + field);
-    }
-    
-    /**
-     * Verifies that the response field contains the expected text.
-     * 
-     * @param field the field to check
-     * @param expectedText the text that should be contained
-     */
-    @QAFTestStep(description = "the response field {string} should contain {string}")
-    public void fieldShouldContain(String field, String expectedText) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        String actualValue = response.getValueFromJson(field);
-        Reporter.log("Verifying field " + field + " contains: " + expectedText);
-        assertTrue(actualValue != null && actualValue.contains(expectedText), 
-                  "Field " + field + " does not contain: " + expectedText);
-    }
-    
-    /**
-     * Adds a key-value pair to the test data map.
-     * 
-     * @param key the key
-     * @param value the value
-     */
-    @QAFTestStep(description = "I set {string} to {string} in test data")
-    public void setTestData(String key, String value) {
-        TestContextManager.setTestData(key, value);
-        Reporter.log("Set test data: " + key + "=" + value);
-    }
-    
-    /**
-     * Clears all test data.
-     */
-    @QAFTestStep(description = "I clear all test data")
-    public void clearTestData() {
-        TestContextManager.clearTestData();
-        Reporter.log("Cleared all test data");
-    }
-    
-    /**
-     * Adds a header to the Asset Layout service.
-     * 
-     * @param headerName the header name
-     * @param headerValue the header value
-     */
-    @QAFTestStep(description = "I add header {string} with value {string}")
-    public void addHeader(String headerName, String headerValue) {
-        getAssetLayoutService().addHeader(headerName, headerValue);
-        Reporter.log("Added header: " + headerName + "=" + headerValue);
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with deal ID and report date.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to Asset Layout API with deal {string} and report date {string}")
-    public void sendAssetLayoutRequest(String dealId, String reportDate) throws Exception {
-        logger.info("Sending Asset Layout request with dealId: " + dealId + ", reportDate: " + reportDate);
-        
-        try {
-            ApiResponse response = getAssetLayoutService().submitRequest(dealId, reportDate);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with test data.
-     * 
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to Asset Layout API with test data")
-    public void sendAssetLayoutRequestWithTestData() throws Exception {
-        Map<String, Object> testData = TestContextManager.getTestData();
-        logger.info("Sending Asset Layout request with test data: " + testData);
-        
-        // Check if test data is empty and add required fields if needed
-        if (testData.isEmpty()) {
-            logger.warn("Test data is empty. Adding default values.");
-            testData.put("messageId", ApiClientUtil.generateMessageId());
-            testData.put("dealId", "838438"); // Default deal ID
-            testData.put("reportDate", "2024-12-09"); // Default report date
-        } else {
-            // Ensure messageId is present
-            if (!testData.containsKey("messageId")) {
-                testData.put("messageId", ApiClientUtil.generateMessageId());
-            }
-            
-            // Validate required fields
-            if (!testData.containsKey("dealId") || !testData.containsKey("reportDate")) {
-                logger.warn("Required fields missing in test data. Adding defaults.");
-                if (!testData.containsKey("dealId")) {
-                    testData.put("dealId", "838438"); // Default deal ID
-                }
-                if (!testData.containsKey("reportDate")) {
-                    testData.put("reportDate", "2024-12-09"); // Default report date
-                }
-            }
-        }
-        
-        try {
-            ApiResponse response = getAssetLayoutService().submitRequest(testData);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with a payload file.
-     * 
-     * @param payloadFile the payload file name
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to Asset Layout API with payload file {string}")
-    public void sendAssetLayoutRequestWithPayloadFile(String payloadFile) throws Exception {
-        logger.info("Sending Asset Layout request with payload file: " + payloadFile);
-        
-        try {
-            ApiResponse response = getAssetLayoutService().submitRequestWithPayloadFile(payloadFile);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with advanced options.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @param includeHistory whether to include history
-     * @param detailedView whether to use detailed view
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send an advanced request to Asset Layout API with deal {string}, report date {string}, includeHistory {boolean}, and detailedView {boolean}")
-    public void sendAdvancedAssetLayoutRequest(String dealId, String reportDate, boolean includeHistory, boolean detailedView) throws Exception {
-        logger.info("Sending advanced Asset Layout request");
-        
-        try {
-            ApiResponse response = getAssetLayoutService().submitAdvancedRequest(dealId, reportDate, includeHistory, detailedView);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Advanced Asset Layout request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending advanced Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending advanced Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Verifies that the response is successful (status code 2xx).
-     */
-    @QAFTestStep(description = "the response should be successful")
-    public void responseShouldBeSuccessful() {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying response is successful");
-        assertTrue(response.isSuccessful(), "Response is not successful. Status code: " + response.getStatusCode());
-    }
-    
-    /**
-     * Verifies that the response contains a non-empty array field.
-     * 
-     * @param arrayField the array field to check
-     */
-    @QAFTestStep(description = "the response should contain a non-empty {string} array")
-    public void responseShouldContainNonEmptyArray(String arrayField) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        int arraySize = response.getArraySize(arrayField);
-        Reporter.log("Verifying array " + arrayField + " is non-empty. Size: " + arraySize);
-        assertTrue(arraySize > 0, "Array " + arrayField + " is empty or not found");
-    }
-    
-    /**
-     * Verifies that the array field has the expected size.
-     * 
-     * @param arrayField the array field to check
-     * @param expectedSize the expected size
-     */
-    @QAFTestStep(description = "the {string} array should have size {int}")
-    public void arrayShouldHaveSize(String arrayField, int expectedSize) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        int actualSize = response.getArraySize(arrayField);
-        Reporter.log("Verifying array " + arrayField + " size: expected=" + expectedSize + ", actual=" + actualSize);
-        assertEquals(actualSize, expectedSize, "Array size mismatch for: " + arrayField);
-    }
-    
-    /**
-     * Shows the current test data (for debugging).
-     */
-    @QAFTestStep(description = "I print all test data for debugging")
-    public void printAllTestData() {
-        Map<String, Object> data = TestContextManager.getTestData();
-        Reporter.log("=== Current Test Data ===");
-        for (Map.Entry<String, Object> entry : data.entrySet()) {
-            Reporter.log(entry.getKey() + " = " + entry.getValue());
-        }
-    }
-}
-
-AssetLayoutSteps.java
--------------------------
-
-package com.qaf.framework.stepdefs;
-
-import static org.testng.Assert.*;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import com.qaf.framework.util.ApiResponse;
-import com.qaf.framework.util.TestContextManager;
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qaf.framework.service.AssetLayoutService;
-import com.qaf.framework.util.ApiClientUtil;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONObject;
-
-/**
- * Step definitions specifically for Asset Layout API testing.
- */
-public class AssetLayoutSteps extends ApiSteps {
-    
-    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
-    private static final String ASSET_LAYOUT_ENDPOINT = "/api/v1/spc/assetlayout";
-    
-    /**
-     * Sends a request to the Asset Layout API with a payload file.
-     * 
-     * @param payloadFile the payload file name
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to the Asset Layout API with payload {string}")
-    public void sendAssetLayoutRequestWithFile(String payloadFile) throws Exception {
-        sendRequestWithPayload("POST", ASSET_LAYOUT_ENDPOINT, payloadFile);
-    }
-    
-    /**
-     * Sends a request to the Asset Layout API with deal ID, report date, and options.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     * @param includeHistory whether to include history
-     * @throws Exception if an error occurs
-     */
-    @QAFTestStep(description = "I send a request to the Asset Layout API with deal {string}, report date {string}, and includeHistory {boolean}")
-    public void sendAssetLayoutRequestWithOptions(String dealId, String reportDate, boolean includeHistory) throws Exception {
-        logger.info("Sending Asset Layout request with options");
-        
-        Map<String, Object> data = new HashMap<>();
-        data.put("dealId", dealId);
-        data.put("reportDate", reportDate);
-        
-        Map<String, Object> options = new HashMap<>();
-        options.put("includeHistory", includeHistory);
-        data.put("options", options);
-        
-        try {
-            ApiResponse response = getAssetLayoutService().submitRequest(data);
-            
-            // Store response in context
-            setResponse(response);
-            
-            Reporter.log("Asset Layout request with options sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Asset Layout request: " + e.getMessage(), e);
-            Reporter.log("Error sending Asset Layout request: " + e.getMessage());
-            throw e;
-        }
-    }
-    
-    /**
-     * Verifies that the response contains asset data.
-     */
-    @QAFTestStep(description = "the response should contain asset data")
-    public void responseShouldContainAssetData() {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying response contains asset data");
-        assertTrue(response.hasJsonField("assets"), "Response does not contain assets field");
-        assertTrue(response.getArraySize("assets") > 0, "Assets array is empty");
-    }
-    
-    /**
-     * Verifies that the asset with the specified ID exists in the response.
-     * 
-     * @param assetId the asset ID to check for
-     */
-    @QAFTestStep(description = "the response should contain asset with ID {string}")
-    public void responseShouldContainAssetWithId(String assetId) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying response contains asset with ID: " + assetId);
-        
-        boolean found = false;
-        int assetCount = response.getArraySize("assets");
-        
-        for (int i = 0; i < assetCount; i++) {
-            try {
-                JSONObject asset = response.getArrayItem("assets", i);
-                String currentId = asset.has("assetId") ? asset.getString("assetId") : "";
-                if (assetId.equals(currentId)) {
-                    found = true;
-                    break;
-                }
-            } catch (Exception e) {
-                // Continue checking
-                logger.debug("Error checking asset ID: " + e.getMessage());
-            }
-        }
-        
-        assertTrue(found, "Asset with ID " + assetId + " not found in response");
-    }
-    
-    /**
-     * Verifies that the response contains the specified layout type.
-     * 
-     * @param layoutType the layout type to check for
-     */
-    @QAFTestStep(description = "the response should contain layout type {string}")
-    public void responseShouldContainLayoutType(String layoutType) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            fail("No response available. Make sure to send a request first.");
-            return;
-        }
-        
-        Reporter.log("Verifying response contains layout type: " + layoutType);
-        
-        boolean found = false;
-        int layoutCount = response.getArraySize("layout");
-        
-        for (int i = 0; i < layoutCount; i++) {
-            try {
-                JSONObject layout = response.getArrayItem("layout", i);
-                String currentType = layout.has("type") ? layout.getString("type") : "";
-                if (layoutType.equals(currentType)) {
-                    found = true;
-                    break;
-                }
-            } catch (Exception e) {
-                // Continue checking
-                logger.debug("Error checking layout type: " + e.getMessage());
-            }
-        }
-        
-        assertTrue(found, "Layout type " + layoutType + " not found in response");
-    }
-    
-    /**
-     * Sets up a basic asset layout test data.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date
-     */
-    @QAFTestStep(description = "I set up basic asset layout test data with deal {string} and report date {string}")
-    public void setupBasicAssetLayoutTestData(String dealId, String reportDate) {
         // Clear existing test data
         TestContextManager.clearTestData();
         
-        // Set new test data values
-        TestContextManager.setTestData("dealId", dealId);
-        TestContextManager.setTestData("reportDate", reportDate);
-        TestContextManager.setTestData("messageId", ApiClientUtil.generateMessageId());
+        // Store Excel data in test context
+        for (Map.Entry<String, Object> entry : excelData.entrySet()) {
+            TestContextManager.setTestData(entry.getKey(), entry.getValue());
+        }
         
-        logger.info("Set up basic asset layout test data: dealId=" + dealId + ", reportDate=" + reportDate);
-        Reporter.log("Set up basic asset layout test data with dealId=" + dealId + ", reportDate=" + reportDate);
+        // Ensure messageId is present
+        if (!TestContextManager.hasTestData("messageId")) {
+            TestContextManager.setTestData("messageId", ApiClientUtil.generateMessageId());
+        }
         
-        // Debug log to verify test data is stored
-        Map<String, Object> testData = TestContextManager.getTestData();
-        logger.info("Verification - Current test data: " + testData);
+        Reporter.log("Loaded Asset Layout test data from Excel");
     }
     
     /**
-     * Dumps the current test data for debugging.
+     * Sends a request to Asset Layout API using a specific payload template with data from Excel.
+     * 
+     * @param templateFile the payload template filename
+     * @param excelData map containing Excel data
+     * @throws Exception if an error occurs
      */
-    @QAFTestStep(description = "I verify asset layout test data")
-    public void verifyAssetLayoutTestData() {
-        Map<String, Object> testData = TestContextManager.getTestData();
+    @QAFTestStep(description = "I send a request to Asset Layout API with template {templateFile} and Excel data {excelData}")
+    public void sendRequestWithTemplateAndExcelData(String templateFile, Map<String, Object> excelData) throws Exception {
+        logger.info("Sending Asset Layout request with template " + templateFile + " and Excel data: " + excelData);
         
-        Reporter.log("=== Asset Layout Test Data ===");
-        Reporter.log("Deal ID: " + testData.getOrDefault("dealId", "NOT SET"));
-        Reporter.log("Report Date: " + testData.getOrDefault("reportDate", "NOT SET"));
-        Reporter.log("Message ID: " + testData.getOrDefault("messageId", "NOT SET"));
-        
-        // Also verify in logs for debugging
-        logger.info("Verification - Deal ID: " + testData.getOrDefault("dealId", "NOT SET"));
-        logger.info("Verification - Report Date: " + testData.getOrDefault("reportDate", "NOT SET"));
-        logger.info("Verification - Message ID: " + testData.getOrDefault("messageId", "NOT SET"));
+        try {
+            // Ensure messageId is present
+            if (!excelData.containsKey("messageId")) {
+                excelData.put("messageId", ApiClientUtil.generateMessageId());
+            }
+            
+            // Read the payload template
+            String payloadTemplate = ApiClientUtil.readPayload(templateFile);
+            
+            // Process the template to replace placeholders with values from Excel data
+            String payload = processPayloadTemplate(payloadTemplate, excelData);
+            logger.debug("Processed payload: " + payload);
+            
+            // Send the request
+            ApiResponse response = ApiClientUtil.sendPostRequest("/api/v1/spc/assetlayout", payload, getAssetLayoutService().getHeaders());
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Asset Layout request with template and Excel data sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Asset Layout request with template and Excel data: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Show all data from Excel for debugging.
+     * 
+     * @param excelData map containing Excel data
+     */
+    @QAFTestStep(description = "I print Excel data {excelData}")
+    public void printExcelData(Map<String, Object> excelData) {
+        Reporter.log("=== Excel Data ===");
+        for (Map.Entry<String, Object> entry : excelData.entrySet()) {
+            Reporter.log("  " + entry.getKey() + " = " + entry.getValue() + 
+                        " (Type: " + (entry.getValue() != null ? entry.getValue().getClass().getSimpleName() : "null") + ")");
+        }
     }
 }
-}
 
+
+@Regression
+@AssetLayout
+Feature: Asset Layout API Testing with Excel Data
+  As a user of the Asset Layout API
+  I want to send requests using data from Excel
+  So that I can test various scenarios efficiently
+
+@Smoke
+@TestCaseId:TC_34950
+@Description:Verify Asset Layout API with Excel data
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:TC_34950
+Scenario: Verify Asset Layout API using Excel data
+  Given I print Excel data '${args[0]}'
+  When I send a request to Asset Layout API with Excel data '${args[0]}'
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "status"
+  And the response field "status" should be "success"
+
+@Regression
+@TestCaseId:TC_34951
+@Description:Verify Asset Layout API with specific template and Excel data
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:TC_34951
+Scenario: Verify Asset Layout API with custom template and Excel data
+  When I send a request to Asset Layout API with template "assetlayout_payload.json" and Excel data '${args[0]}'
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "status"
+  And the response field "status" should be "success"
+
+@Regression
+@TestCaseId:TC_34952
+@Description:Verify Asset Layout API with loaded Excel data
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:TC_34952
+Scenario: Verify Asset Layout API with pre-loaded Excel data
+  Given I load Asset Layout test data from Excel '${args[0]}'
+  When I send a request to Asset Layout API with test data
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "status"
+  And the response field "status" should be "success"
