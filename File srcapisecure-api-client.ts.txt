@@ -1,1770 +1,216 @@
-genericRestClient.java
----------------------
-package com.mycompany.api.core;
+Project Structure:
 
-import java.util.HashMap;
-import java.util.Map;
+src/main/java
+├── com.mycompany.www.api.core
+│   ├── BaseSecureApiClient.java
+│   └── ApiResponse.java
+├── com.mycompany.www.api.endpoints
+│   └── AssetLayoutApi.java
+├── com.mycompany.www.api.steps
+│   ├── BaseApiSteps.java
+│   └── AssetLayoutSteps.java
+├── com.mycompany.www.api.utils
+│   ├── CertificateManager.java
+│   ├── JsonPayloadUtil.java
+│   ├── ExcelUtil.java
+│   └── ApiUtil.java
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+src/test/resources
+├── certificates
+│   └── KHANonProd.pfx
+├── payloads
+│   └── assetlayout_payload.json
+├── environment
+│   └── application.properties
+│   └── testdata
+│       └── Regression_testdata.xlsx
+└── features
+    └── assetlayout.feature
 
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import com.qmetry.qaf.automation.util.PropertyUtil;
+------------------------------------------
+BaseSecureApiClient.java
+------------------------------------------
+package com.mycompany.www.api.core;
 
 import io.restassured.RestAssured;
-import io.restassured.config.HttpClientConfig;
-import io.restassured.config.RestAssuredConfig;
 import io.restassured.config.SSLConfig;
+import io.restassured.specification.RequestSpecification;
+import com.mycompany.www.api.utils.CertificateManager;
+
+public class BaseSecureApiClient {
+
+    protected RequestSpecification getSecureRequest() {
+        CertificateManager certManager = new CertificateManager();
+        RestAssured.config = RestAssured.config()
+                .sslConfig(new SSLConfig()
+                        .keyStore(certManager.getKeyStore(), certManager.getPassphrase())
+                        .trustStore(certManager.getKeyStore(), certManager.getPassphrase())
+                        .relaxedHTTPSValidation());
+        return RestAssured.given();
+    }
+}
+
+------------------------------------------
+CertificateManager.java
+------------------------------------------
+package com.mycompany.www.api.utils;
+
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import java.io.File;
+
+public class CertificateManager {
+    private final String certPath;
+    private final String passphrase;
+
+    public CertificateManager() {
+        certPath = ConfigurationManager.getBundle().getString("certificate.path");
+        passphrase = ConfigurationManager.getBundle().getString("certificate.passphrase");
+    }
+
+    public File getKeyStore() {
+        return new File(certPath);
+    }
+
+    public String getPassphrase() {
+        return passphrase;
+    }
+}
+
+------------------------------------------
+ApiUtil.java
+------------------------------------------
+package com.mycompany.www.api.utils;
+
 import io.restassured.http.ContentType;
 import io.restassured.response.Response;
 import io.restassured.specification.RequestSpecification;
+import java.util.Map;
 
-import com.mycompany.api.utils.CertificateManager;
-import com.mycompany.api.utils.PayloadManager;
+public class ApiUtil {
 
-/**
- * Generic REST client for handling API requests.
- * This class provides common functionality for all API requests using REST Assured.
- */
-public class GenericRestClient {
-    
-    private static final Log logger = LogFactory.getLog(GenericRestClient.class);
-    private static final PropertyUtil props = ConfigurationManager.getBundle();
-    
-    // HTTP Methods
-    public static final String METHOD_GET = "GET";
-    public static final String METHOD_POST = "POST";
-    public static final String METHOD_PUT = "PUT";
-    public static final String METHOD_DELETE = "DELETE";
-    public static final String METHOD_PATCH = "PATCH";
-    
-    // Common Content Types
-    public static final String CONTENT_TYPE_JSON = "application/json";
-    public static final String CONTENT_TYPE_XML = "application/xml";
-    public static final String CONTENT_TYPE_FORM = "application/x-www-form-urlencoded";
-    public static final String CONTENT_TYPE_MULTIPART = "multipart/form-data";
-    
-    /**
-     * Sends a request to the specified endpoint using the specified method.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param method HTTP method (GET, POST, PUT, DELETE, PATCH)
-     * @param headers request headers
-     * @param payload request payload (for POST, PUT, PATCH)
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing the response
-     */
-    public static ApiResponse sendRequest(String endpointKey, String method, 
-                                         Map<String, String> headers, String payload, 
-                                         boolean useSSL) {
-        String endpoint = props.getString(endpointKey);
-        logger.info("Sending " + method + " request to: " + endpoint);
-        
-        RequestSpecification request = createRequestSpec(headers, useSSL);
-        Response response = null;
-        
-        try {
-            switch (method) {
-                case METHOD_GET:
-                    response = request.get(endpoint);
-                    break;
-                case METHOD_POST:
-                    response = request.body(payload).post(endpoint);
-                    break;
-                case METHOD_PUT:
-                    response = request.body(payload).put(endpoint);
-                    break;
-                case METHOD_DELETE:
-                    response = request.delete(endpoint);
-                    break;
-                case METHOD_PATCH:
-                    response = request.body(payload).patch(endpoint);
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unsupported HTTP method: " + method);
-            }
-            
-            logger.info("Received response with status: " + response.getStatusCode());
-            logger.debug("Response body: " + response.getBody().asString());
-            
-            return new ApiResponse(response);
-        } catch (Exception e) {
-            logger.error("Error executing API request: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
-        }
+    public static Response post(RequestSpecification req, String url, String payload) {
+        return req.contentType(ContentType.JSON)
+                .body(payload)
+                .when()
+                .post(url);
     }
-    
-    /**
-     * Sends a GET request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing the response
-     */
-    public static ApiResponse sendGetRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_GET, headers, null, useSSL);
+
+    public static Response get(RequestSpecification req, String url) {
+        return req.when().get(url);
     }
-    
-    /**
-     * Sends a POST request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param payload request payload
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing the response
-     */
-    public static ApiResponse sendPostRequest(String endpointKey, Map<String, String> headers, 
-                                            String payload, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_POST, headers, payload, useSSL);
+
+    public static Response put(RequestSpecification req, String url, String payload) {
+        return req.contentType(ContentType.JSON)
+                .body(payload)
+                .when()
+                .put(url);
     }
-    
-    /**
-     * Sends a PUT request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param payload request payload
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing the response
-     */
-    public static ApiResponse sendPutRequest(String endpointKey, Map<String, String> headers, 
-                                           String payload, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_PUT, headers, payload, useSSL);
-    }
-    
-    /**
-     * Sends a DELETE request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing the response
-     */
-    public static ApiResponse sendDeleteRequest(String endpointKey, Map<String, String> headers, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_DELETE, headers, null, useSSL);
-    }
-    
-    /**
-     * Sends a PATCH request to the specified endpoint.
-     * 
-     * @param endpointKey property key for the endpoint URL
-     * @param headers request headers
-     * @param payload request payload
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return ApiResponse containing the response
-     */
-    public static ApiResponse sendPatchRequest(String endpointKey, Map<String, String> headers, 
-                                             String payload, boolean useSSL) {
-        return sendRequest(endpointKey, METHOD_PATCH, headers, payload, useSSL);
-    }
-    
-    /**
-     * Creates a RequestSpecification with the specified parameters.
-     * 
-     * @param headers request headers
-     * @param useSSL whether to use SSL certificate for authentication
-     * @return configured RequestSpecification
-     */
-    private static RequestSpecification createRequestSpec(Map<String, String> headers, boolean useSSL) {
-        RestAssuredConfig config = RestAssured.config()
-                .httpClient(HttpClientConfig.httpClientConfig()
-                        .setParam("http.connection.timeout", props.getInt("api.connection.timeout", 30000))
-                        .setParam("http.socket.timeout", props.getInt("api.socket.timeout", 30000)));
-        
-        if (useSSL) {
-            CertificateManager certManager = new CertificateManager();
-            config = config.sslConfig(new SSLConfig()
-                    .keyStore(certManager.getKeyStore(), certManager.getPassphrase())
-                    .trustStore(certManager.getTrustStore(), certManager.getTrustStorePassword())
-                    .relaxedHTTPSValidation());
-        }
-        
-        RequestSpecification request = RestAssured.given().config(config);
-        
-        // Apply default headers if none provided
-        if (headers == null || headers.isEmpty()) {
-            headers = getDefaultHeaders();
-        }
-        
-        // Set content type and other headers
-        for (Map.Entry<String, String> header : headers.entrySet()) {
-            request.header(header.getKey(), header.getValue());
-        }
-        
-        if (headers.containsKey("Content-Type") && headers.get("Content-Type").equals(CONTENT_TYPE_JSON)) {
-            request.contentType(ContentType.JSON);
-        }
-        
-        return request;
-    }
-    
-    /**
-     * Gets default headers for API requests.
-     * 
-     * @return map of default headers
-     */
-    public static Map<String, String> getDefaultHeaders() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", CONTENT_TYPE_JSON);
-        headers.put("Accept", CONTENT_TYPE_JSON);
-        return headers;
-    }
-    
-    /**
-     * Builds a query string from parameters.
-     * 
-     * @param params map of query parameters
-     * @return formatted query string (without leading '?')
-     */
-    public static String buildQueryString(Map<String, String> params) {
-        if (params == null || params.isEmpty()) {
-            return "";
-        }
-        
-        StringBuilder sb = new StringBuilder();
-        boolean first = true;
-        
-        for (Map.Entry<String, String> entry : params.entrySet()) {
-            if (first) {
-                first = false;
-            } else {
-                sb.append("&");
-            }
-            
-            sb.append(entry.getKey()).append("=").append(entry.getValue());
-        }
-        
-        return sb.toString();
-    }
-    
-    /**
-     * Adds query parameters to an endpoint URL.
-     * 
-     * @param endpoint base endpoint URL
-     * @param params map of query parameters
-     * @return endpoint URL with query parameters
-     */
-    public static String addQueryParams(String endpoint, Map<String, String> params) {
-        if (params == null || params.isEmpty()) {
-            return endpoint;
-        }
-        
-        String queryString = buildQueryString(params);
-        
-        if (endpoint.contains("?")) {
-            return endpoint + "&" + queryString;
-        } else {
-            return endpoint + "?" + queryString;
-        }
+
+    public static Response delete(RequestSpecification req, String url) {
+        return req.when().delete(url);
     }
 }
 
-ApiResponse.java
-------------------
-package com.mycompany.api.core;
+------------------------------------------
+JsonPayloadUtil.java
+------------------------------------------
+package com.mycompany.www.api.utils;
 
-import io.restassured.response.Response;
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-/**
- * Wrapper class for REST Assured Response to provide additional functionality.
- */
-public class ApiResponse {
-    
-    private final Response response;
-    
-    /**
-     * Constructor for ApiResponse.
-     * 
-     * @param response REST Assured Response
-     */
-    public ApiResponse(Response response) {
-        this.response = response;
-    }
-    
-    /**
-     * Gets the status code of the response.
-     * 
-     * @return HTTP status code
-     */
-    public int getStatusCode() {
-        return response.getStatusCode();
-    }
-    
-    /**
-     * Gets the response body as a string.
-     * 
-     * @return response body as string
-     */
-    public String getResponseBody() {
-        return response.getBody().asString();
-    }
-    
-    /**
-     * Gets the response as a JSONObject.
-     * 
-     * @return response as JSONObject
-     */
-    public JSONObject getJsonResponse() {
-        try {
-            String body = getResponseBody();
-            if (body != null && !body.isEmpty()) {
-                return new JSONObject(body);
-            }
-        } catch (Exception e) {
-            // Not a valid JSON object
-        }
-        return null;
-    }
-    
-    /**
-     * Gets the response as a JSONArray.
-     * 
-     * @return response as JSONArray
-     */
-    public JSONArray getJsonArrayResponse() {
-        try {
-            String body = getResponseBody();
-            if (body != null && !body.isEmpty()) {
-                return new JSONArray(body);
-            }
-        } catch (Exception e) {
-            // Not a valid JSON array
-        }
-        return null;
-    }
-    
-    /**
-     * Gets a value from the JSON response by key.
-     * 
-     * @param key the JSON key
-     * @return the value as a string, or null if not found
-     */
-    public String getValueFromResponse(String key) {
-        JSONObject json = getJsonResponse();
-        if (json != null && json.has(key)) {
-            return json.get(key).toString();
-        }
-        return null;
-    }
-    
-    /**
-     * Checks if a field exists in the JSON response.
-     * 
-     * @param field the field name
-     * @return true if the field exists, false otherwise
-     */
-    public boolean hasField(String field) {
-        JSONObject json = getJsonResponse();
-        return json != null && json.has(field);
-    }
-    
-    /**
-     * Checks if the response was successful (status code 2xx).
-     * 
-     * @return true if successful, false otherwise
-     */
-    public boolean isSuccessful() {
-        int status = getStatusCode();
-        return status >= 200 && status < 300;
-    }
-    
-    /**
-     * Gets a header value from the response.
-     * 
-     * @param headerName the header name
-     * @return the header value, or null if not found
-     */
-    public String getHeader(String headerName) {
-        return response.getHeader(headerName);
-    }
-    
-    /**
-     * Gets the raw REST Assured Response.
-     * 
-     * @return the underlying REST Assured Response
-     */
-    public Response getRawResponse() {
-        return response;
-    }
-    
-    /**
-     * Gets a nested value from the JSON response using a dot-notated path.
-     * 
-     * @param path the dot-notated path (e.g., "data.user.name")
-     * @return the value as a string, or null if not found
-     */
-    public String getNestedValue(String path) {
-        try {
-            JSONObject json = getJsonResponse();
-            if (json == null) {
-                return null;
-            }
-            
-            String[] parts = path.split("\\.");
-            Object current = json;
-            
-            for (String part : parts) {
-                if (current instanceof JSONObject) {
-                    JSONObject currentJson = (JSONObject) current;
-                    if (!currentJson.has(part)) {
-                        return null;
-                    }
-                    current = currentJson.get(part);
-                } else {
-                    return null;
-                }
-            }
-            
-            return current != null ? current.toString() : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-    
-    /**
-     * Gets a value at a specific index from a JSON array in the response.
-     * 
-     * @param arrayField the array field name
-     * @param index the index within the array
-     * @return the value at the specified index, or null if not found
-     */
-    public JSONObject getArrayItem(String arrayField, int index) {
-        try {
-            JSONObject json = getJsonResponse();
-            if (json != null && json.has(arrayField)) {
-                JSONArray array = json.getJSONArray(arrayField);
-                if (array.length() > index) {
-                    return array.getJSONObject(index);
-                }
-            }
-        } catch (Exception e) {
-            // Not a valid JSON object or array
-        }
-        return null;
-    }
-    
-    /**
-     * Gets the size of a JSON array in the response.
-     * 
-     * @param arrayField the array field name
-     * @return the size of the array, or -1 if not found or not an array
-     */
-    public int getArraySize(String arrayField) {
-        try {
-            JSONObject json = getJsonResponse();
-            if (json != null && json.has(arrayField)) {
-                JSONArray array = json.getJSONArray(arrayField);
-                return array.length();
-            }
-        } catch (Exception e) {
-            // Not a valid JSON object or array
-        }
-        return -1;
-    }
-}
-
-CertificateManager.java
---------------------------
-
-package com.mycompany.api.utils;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.security.KeyStore;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import com.qmetry.qaf.automation.util.PropertyUtil;
-
-/**
- * Utility class for managing SSL certificates for API requests.
- */
-public class CertificateManager {
-    
-    private static final Log logger = LogFactory.getLog(CertificateManager.class);
-    private static final PropertyUtil props = ConfigurationManager.getBundle();
-    
-    private final String certificatePath;
-    private final String certificatePassword;
-    private final String trustStorePath;
-    private final String trustStorePassword;
-    
-    /**
-     * Default constructor that initializes certificate paths and passwords from properties.
-     */
-    public CertificateManager() {
-        this.certificatePath = props.getString("certificate.path", "resources/certificates/client.pfx");
-        this.certificatePassword = props.getString("certificate.password", "");
-        this.trustStorePath = props.getString("truststore.path", System.getProperty("java.home") + "/lib/security/cacerts");
-        this.trustStorePassword = props.getString("truststore.password", "changeit");
-    }
-    
-    /**
-     * Gets the certificate key store file.
-     * 
-     * @return File representing the key store
-     */
-    public File getKeyStore() {
-        File keyStoreFile = new File(certificatePath);
-        if (!keyStoreFile.exists()) {
-            logger.warn("KeyStore file not found: " + certificatePath);
-        }
-        return keyStoreFile;
-    }
-    
-    /**
-     * Gets the certificate password.
-     * 
-     * @return the certificate password
-     */
-    public String getPassphrase() {
-        return certificatePassword;
-    }
-    
-    /**
-     * Gets the trust store file.
-     * 
-     * @return File representing the trust store
-     */
-    public File getTrustStore() {
-        File trustStoreFile = new File(trustStorePath);
-        if (!trustStoreFile.exists()) {
-            logger.warn("TrustStore file not found: " + trustStorePath);
-        }
-        return trustStoreFile;
-    }
-    
-    /**
-     * Gets the trust store password.
-     * 
-     * @return the trust store password
-     */
-    public String getTrustStorePassword() {
-        return trustStorePassword;
-    }
-    
-    /**
-     * Loads and validates the key store.
-     * 
-     * @return KeyStore instance if successful, null otherwise
-     */
-    public KeyStore loadKeyStore() {
-        try {
-            KeyStore keyStore = KeyStore.getInstance("PKCS12");
-            try (FileInputStream fis = new FileInputStream(getKeyStore())) {
-                keyStore.load(fis, getPassphrase().toCharArray());
-                logger.info("Successfully loaded keystore from: " + certificatePath);
-                return keyStore;
-            }
-        } catch (Exception e) {
-            logger.error("Failed to load keystore: " + e.getMessage(), e);
-            return null;
-        }
-    }
-    
-    /**
-     * Loads and validates the trust store.
-     * 
-     * @return KeyStore instance if successful, null otherwise
-     */
-    public KeyStore loadTrustStore() {
-        try {
-            KeyStore trustStore = KeyStore.getInstance(KeyStore.getDefaultType());
-            try (FileInputStream fis = new FileInputStream(getTrustStore())) {
-                trustStore.load(fis, getTrustStorePassword().toCharArray());
-                logger.info("Successfully loaded truststore from: " + trustStorePath);
-                return trustStore;
-            }
-        } catch (Exception e) {
-            logger.error("Failed to load truststore: " + e.getMessage(), e);
-            return null;
-        }
-    }
-}
-
-PayloadManager.java
-----------------------
-package com.mycompany.api.utils;
-
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Map;
-import java.util.UUID;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONObject;
-
-/**
- * Utility class for managing API request payloads.
- */
-public class PayloadManager {
-    
-    private static final Log logger = LogFactory.getLog(PayloadManager.class);
-    private static final String PAYLOAD_BASE_PATH = "resources/payloads/";
-    
-    /**
-     * Loads a payload from a file and substitutes placeholders with values.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute
-     * @return processed payload as a string
-     */
-    public static String loadPayload(String payloadFileName, Map<String, Object> dataMap) {
-        String payloadPath = PAYLOAD_BASE_PATH + payloadFileName;
-        
-        try {
-            String content = new String(Files.readAllBytes(Paths.get(payloadPath)));
-            
-            // Replace placeholders with actual values
-            if (dataMap != null) {
-                for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
-                    String placeholder = "${" + entry.getKey() + "}";
-                    String value = entry.getValue() != null ? entry.getValue().toString() : "";
-                    content = content.replace(placeholder, value);
-                }
-            }
-            
-            // Check for any remaining placeholders and log warning
-            if (content.matches(".*\\$\\{[^}]+\\}.*")) {
-                logger.warn("Payload contains unreplaced placeholders: " + content);
-            }
-            
-            logger.info("Prepared payload: " + content);
-            return content;
-        } catch (IOException e) {
-            logger.error("Failed to load payload file: " + e.getMessage(), e);
-            throw new RuntimeException("Failed to load payload file: " + e.getMessage(), e);
+public class JsonPayloadUtil {
+    public static String getUpdatedPayload(String path, Map<String, Object> data) throws Exception {
+        String payload = new String(Files.readAllBytes(Paths.get(path)));
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            payload = payload.replace("${" + entry.getKey() + "}", entry.getValue().toString());
         }
-    }
-    
-    /**
-     * Creates a payload from a JSON object.
-     * 
-     * @param jsonObject JSON object to convert to string
-     * @return JSON string
-     */
-    public static String createPayload(JSONObject jsonObject) {
-        return jsonObject != null ? jsonObject.toString() : null;
-    }
-    
-    /**
-     * Creates a basic payload with a unique message ID.
-     * 
-     * @return JSON object with message ID
-     */
-    public static JSONObject createBasicPayload() {
-        JSONObject payload = new JSONObject();
-        payload.put("messageId", generateMessageId());
         return payload;
     }
-    
-    /**
-     * Generates a unique message ID for requests.
-     * 
-     * @return unique message ID string
-     */
-    public static String generateMessageId() {
-        return UUID.randomUUID().toString();
-    }
-    
-    /**
-     * Merges two JSON objects into one.
-     * 
-     * @param base base JSON object
-     * @param overlay JSON object to merge into base
-     * @return merged JSON object
-     */
-    public static JSONObject mergeJsonObjects(JSONObject base, JSONObject overlay) {
-        JSONObject merged = new JSONObject(base.toString());
-        for (String key : overlay.keySet()) {
-            merged.put(key, overlay.get(key));
-        }
-        return merged;
-    }
-    
-    /**
-     * Creates a JSON object from a map of values.
-     * 
-     * @param dataMap map of values
-     * @return JSON object
-     */
-    public static JSONObject mapToJson(Map<String, Object> dataMap) {
-        JSONObject json = new JSONObject();
-        if (dataMap != null) {
-            for (Map.Entry<String, Object> entry : dataMap.entrySet()) {
-                json.put(entry.getKey(), entry.getValue());
-            }
-        }
-        return json;
+}
+
+------------------------------------------
+AssetLayoutApi.java
+------------------------------------------
+package com.mycompany.www.api.endpoints;
+
+import com.mycompany.www.api.core.BaseSecureApiClient;
+import com.mycompany.www.api.utils.ApiUtil;
+import io.restassured.response.Response;
+
+public class AssetLayoutApi extends BaseSecureApiClient {
+
+    public Response postAssetLayout(String url, String payload) {
+        return ApiUtil.post(getSecureRequest(), url, payload);
     }
 }
 
-BaseAPIEndPoint.java
------------------------
-
-package com.mycompany.api.core;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONObject;
-
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import com.qmetry.qaf.automation.util.PropertyUtil;
-import com.mycompany.api.utils.PayloadManager;
-
-/**
- * Base class for all API endpoint classes.
- * Provides common functionality and access to the GenericRestClient.
- */
-public abstract class BaseApiEndpoint {
-    
-    protected static final Log logger = LogFactory.getLog(BaseApiEndpoint.class);
-    protected static final PropertyUtil props = ConfigurationManager.getBundle();
-    
-    protected ApiResponse response;
-    protected String endpointKey;
-    protected boolean useSSL;
-    protected Map<String, String> headers;
-    
-    /**
-     * Constructor for BaseApiEndpoint.
-     * 
-     * @param endpointKey the property key for the endpoint URL
-     * @param useSSL whether to use SSL certificate for authentication
-     */
-    public BaseApiEndpoint(String endpointKey, boolean useSSL) {
-        this.endpointKey = endpointKey;
-        this.useSSL = useSSL;
-        this.headers = new HashMap<>();
-        initializeHeaders();
-    }
-    
-    /**
-     * Initializes default headers for this endpoint.
-     * Override this method to set endpoint-specific headers.
-     */
-    protected void initializeHeaders() {
-        headers.put("Content-Type", GenericRestClient.CONTENT_TYPE_JSON);
-        headers.put("Accept", GenericRestClient.CONTENT_TYPE_JSON);
-    }
-    
-    /**
-     * Sends a GET request to this endpoint.
-     * 
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint get() {
-        response = GenericRestClient.sendGetRequest(endpointKey, headers, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a GET request with query parameters to this endpoint.
-     * 
-     * @param queryParams map of query parameters
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint get(Map<String, String> queryParams) {
-        String endpoint = props.getString(endpointKey);
-        String endpointWithParams = GenericRestClient.addQueryParams(endpoint, queryParams);
-        
-        // Create a temporary endpoint key
-        String tempKey = endpointKey + ".temp";
-        props.setProperty(tempKey, endpointWithParams);
-        
-        response = GenericRestClient.sendGetRequest(tempKey, headers, useSSL);
-        
-        // Clean up
-        props.remove(tempKey);
-        
-        return this;
-    }
-    
-    /**
-     * Sends a POST request to this endpoint.
-     * 
-     * @param payload request payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint post(String payload) {
-        response = GenericRestClient.sendPostRequest(endpointKey, headers, payload, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a POST request to this endpoint with a JSON object as payload.
-     * 
-     * @param jsonObject JSON object to send as payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint post(JSONObject jsonObject) {
-        String payload = PayloadManager.createPayload(jsonObject);
-        return post(payload);
-    }
-    
-    /**
-     * Sends a POST request to this endpoint with payload from a file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute in the payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint post(String payloadFileName, Map<String, Object> dataMap) {
-        String payload = PayloadManager.loadPayload(payloadFileName, dataMap);
-        return post(payload);
-    }
-    
-    /**
-     * Sends a PUT request to this endpoint.
-     * 
-     * @param payload request payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint put(String payload) {
-        response = GenericRestClient.sendPutRequest(endpointKey, headers, payload, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a PUT request to this endpoint with a JSON object as payload.
-     * 
-     * @param jsonObject JSON object to send as payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint put(JSONObject jsonObject) {
-        String payload = PayloadManager.createPayload(jsonObject);
-        return put(payload);
-    }
-    
-    /**
-     * Sends a PUT request to this endpoint with payload from a file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute in the payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint put(String payloadFileName, Map<String, Object> dataMap) {
-        String payload = PayloadManager.loadPayload(payloadFileName, dataMap);
-        return put(payload);
-    }
-    
-    /**
-     * Sends a DELETE request to this endpoint.
-     * 
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint delete() {
-        response = GenericRestClient.sendDeleteRequest(endpointKey, headers, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a PATCH request to this endpoint.
-     * 
-     * @param payload request payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint patch(String payload) {
-        response = GenericRestClient.sendPatchRequest(endpointKey, headers, payload, useSSL);
-        return this;
-    }
-    
-    /**
-     * Sends a PATCH request to this endpoint with a JSON object as payload.
-     * 
-     * @param jsonObject JSON object to send as payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint patch(JSONObject jsonObject) {
-        String payload = PayloadManager.createPayload(jsonObject);
-        return patch(payload);
-    }
-    
-    /**
-     * Sends a PATCH request to this endpoint with payload from a file.
-     * 
-     * @param payloadFileName name of the payload file
-     * @param dataMap map of values to substitute in the payload
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint patch(String payloadFileName, Map<String, Object> dataMap) {
-        String payload = PayloadManager.loadPayload(payloadFileName, dataMap);
-        return patch(payload);
-    }
-    
-    /**
-     * Adds a custom header to this endpoint.
-     * 
-     * @param name header name
-     * @param value header value
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint addHeader(String name, String value) {
-        headers.put(name, value);
-        return this;
-    }
-    
-    /**
-     * Adds multiple custom headers to this endpoint.
-     * 
-     * @param newHeaders map of headers
-     * @return this endpoint for chaining
-     */
-    public BaseApiEndpoint addHeaders(Map<String, String> newHeaders) {
-        if (newHeaders != null) {
-            headers.putAll(newHeaders);
-        }
-        return this;
-    }
-    
-    /**
-     * Gets the response status code.
-     * 
-     * @return the HTTP status code
-     */
-    public int getStatusCode() {
-        return response != null ? response.getStatusCode() : -1;
-    }
-    
-    /**
-     * Gets the response body as a String.
-     * 
-     * @return the response body
-     */
-    public String getResponseBody() {
-        return response != null ? response.getResponseBody() : null;
-    }
-    
-    /**
-     * Gets the API response.
-     * 
-     * @return the API response
-     */
-    public ApiResponse getResponse() {
-        return response;
-    }
-    
-    /**
-     * Gets a value from the JSON response by key.
-     * 
-     * @param key the JSON key
-     * @return the value as a String, or null if not found
-     */
-    public String getResponseValue(String key) {
-        return response != null ? response.getValueFromResponse(key) : null;
-    }
-    
-    /**
-     * Checks if a field exists in the response JSON.
-     * 
-     * @param field the field name
-     * @return true if the field exists, false otherwise
-     */
-    public boolean hasField(String field) {
-        return response != null && response.hasField(field);
-    }
-    
-    /**
-     * Checks if the response was successful (status code 2xx).
-     * 
-     * @return true if successful, false otherwise
-     */
-    public boolean isSuccessful() {
-        return response != null && response.isSuccessful();
-    }
-    
-    /**
-     * Gets the response as a JSONObject.
-     * 
-     * @return JSONObject representing the response
-     */
-    public JSONObject getResponseJson() {
-        return response != null ? response.getJsonResponse() : null;
-    }
-}
-
-AssetLayoutEndpoint.java
-------------------------
-
-package com.mycompany.api.endpoints;
-
-import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONObject;
-
-import com.mycompany.api.core.ApiResponse;
-import com.mycompany.api.core.BaseApiEndpoint;
-import com.mycompany.api.utils.PayloadManager;
-
-/**
- * Endpoint class for the Asset Layout API.
- * Uses the generic BaseApiEndpoint to handle API requests.
- */
-public class AssetLayoutEndpoint extends BaseApiEndpoint {
-    
-    private static final Log logger = LogFactory.getLog(AssetLayoutEndpoint.class);
-    private static final String PAYLOAD_FILE = "assetlayout_payload.json";
-    
-    /**
-     * Constructor for AssetLayoutEndpoint.
-     * Configures the endpoint for certificate-based authentication.
-     */
-    public AssetLayoutEndpoint() {
-        super("ws.endpoint.assetlayout", true);
-    }
-    
-    /**
-     * Alternative constructor for AssetLayoutEndpoint with custom endpoint URL.
-     * 
-     * @param endpointUrl the direct endpoint URL
-     */
-    public AssetLayoutEndpoint(String endpointUrl) {
-        super("custom.endpoint", true);
-        props.setProperty("custom.endpoint", endpointUrl);
-    }
-    
-    /**
-     * Executes a request to the Asset Layout API using the test data provided.
-     * 
-     * @param testData map containing test data values
-     * @return the response from the API
-     */
-    public ApiResponse executeRequest(Map<String, Object> testData) {
-        logger.info("Executing Asset Layout API request with test data: " + testData);
-        
-        // Generate a unique message ID if not provided
-        if (!testData.containsKey("messageId")) {
-            testData.put("messageId", PayloadManager.generateMessageId());
-        }
-        
-        // Execute POST request with payload from file
-        post(PAYLOAD_FILE, testData);
-        
-        logger.info("Received response with status: " + getStatusCode());
-        logger.debug("Response body: " + getResponseBody());
-        
-        return getResponse();
-    }
-    
-    /**
-     * Creates and sends a custom payload to the Asset Layout API.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date in YYYY-MM-DD format
-     * @return the response from the API
-     */
-    public ApiResponse sendCustomRequest(String dealId, String reportDate) {
-        JSONObject payload = new JSONObject();
-        payload.put("messageId", PayloadManager.generateMessageId());
-        payload.put("dealId", dealId);
-        payload.put("reportDate", reportDate);
-        
-        logger.info("Sending custom request with payload: " + payload.toString());
-        
-        post(payload);
-        
-        logger.info("Received response with status: " + getStatusCode());
-        logger.debug("Response body: " + getResponseBody());
-        
-        return getResponse();
-    }
-}
-
-BaseApi.java
-----------------
-
-package com.mycompany.api.steps;
-
-import static org.hamcrest.CoreMatchers.equalTo;
-import static org.hamcrest.CoreMatchers.is;
-import static org.hamcrest.CoreMatchers.notNullValue;
-import static org.hamcrest.MatcherAssert.assertThat;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONArray;
-import org.json.JSONObject;
+------------------------------------------
+BaseApiSteps.java
+------------------------------------------
+package com.mycompany.www.api.steps;
 
 import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qmetry.qaf.automation.util.Validator;
-import com.mycompany.api.core.BaseApiEndpoint;
+import io.restassured.response.Response;
 
-/**
- * Base class for all API step definition classes.
- * Provides common step definitions that can be used across all API tests.
- */
-public abstract class BaseApiSteps {
-    
-    protected static final Log logger = LogFactory.getLog(BaseApiSteps.class);
-    
-    /**
-     * Gets the endpoint for this steps class.
-     * 
-     * @return the API endpoint
-     */
-    protected abstract BaseApiEndpoint getEndpoint();
-    
-    /**
-     * Verifies that the response status code matches the expected value.
-     * 
-     * @param expectedStatus the expected HTTP status code
-     */
-    @QAFTestStep(description = "the response status code should be {expectedStatus}")
-    public void theResponseStatusCodeShouldBe(int expectedStatus) {
-        int actualStatus = getEndpoint().getStatusCode();
-        
-        Reporter.log("Verifying response status code: expected=" + expectedStatus + ", actual=" + actualStatus);
-        assertThat("Response status code", actualStatus, is(equalTo(expectedStatus)));
-    }
-    
-    /**
-     * Verifies that the response is successful (status code 2xx).
-     */
-    @QAFTestStep(description = "the response should be successful")
-    public void theResponseShouldBeSuccessful() {
-        boolean successful = getEndpoint().isSuccessful();
-        
-        Reporter.log("Verifying response is successful: " + successful);
-        assertThat("Response is successful", successful, is(true));
-    }
-    
-    /**
-     * Verifies that the response contains the specified field.
-     * 
-     * @param field the field to check for
-     */
-    @QAFTestStep(description = "the response should contain the field {field}")
-    public void theResponseShouldContainField(String field) {
-        boolean hasField = getEndpoint().hasField(field);
-        
-        Reporter.log("Verifying response contains field '" + field + "': " + hasField);
-        assertThat("Response contains field '" + field + "'", hasField, is(true));
-    }
-    
-    /**
-     * Verifies that the response field has the expected value.
-     * 
-     * @param field the field to check
-     * @param expectedValue the expected value
-     */
-    @QAFTestStep(description = "the response field {field} should be {expectedValue}")
-    public void theResponseFieldShouldBe(String field, String expectedValue) {
-        String actualValue = getEndpoint().getResponseValue(field);
-        
-        Reporter.log("Verifying response field '" + field + "': expected=" + expectedValue + ", actual=" + actualValue);
-        
-        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
-        assertThat("Response field '" + field + "' value", actualValue, is(equalTo(expectedValue)));
-    }
-    
-    /**
-     * Verifies that the response field contains the expected text.
-     * 
-     * @param field the field to check
-     * @param expectedText the text that should be contained
-     */
-    @QAFTestStep(description = "the response field {field} should contain {expectedText}")
-    public void theResponseFieldShouldContain(String field, String expectedText) {
-        String actualValue = getEndpoint().getResponseValue(field);
-        
-        Reporter.log("Verifying response field '" + field + "' contains: " + expectedText);
-        
-        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
-        Validator.verifyThat("Response field '" + field + "' contains expected text", 
-                actualValue.contains(expectedText), is(true));
-    }
-    
-    /**
-     * Verifies that the response field does not contain the expected text.
-     * 
-     * @param field the field to check
-     * @param unexpectedText the text that should not be contained
-     */
-    @QAFTestStep(description = "the response field {field} should not contain {unexpectedText}")
-    public void theResponseFieldShouldNotContain(String field, String unexpectedText) {
-        String actualValue = getEndpoint().getResponseValue(field);
-        
-        Reporter.log("Verifying response field '" + field + "' does not contain: " + unexpectedText);
-        
-        assertThat("Response field '" + field + "' exists", actualValue, is(notNullValue()));
-        Validator.verifyThat("Response field '" + field + "' does not contain unexpected text", 
-                !actualValue.contains(unexpectedText), is(true));
-    }
-    
-    /**
-     * Verifies that the response contains a non-empty array field.
-     * 
-     * @param arrayField the array field to check
-     */
-    @QAFTestStep(description = "the response should contain a non-empty {arrayField} array")
-    public void theResponseShouldContainNonEmptyArray(String arrayField) {
-        JSONObject json = getEndpoint().getResponseJson();
-        if (json == null || !json.has(arrayField)) {
-            assertThat("Response contains array field '" + arrayField + "'", false, is(true));
-            return;
-        }
-        
-        Object arrayObj = json.get(arrayField);
-        boolean isNonEmptyArray = arrayObj instanceof JSONArray && ((JSONArray) arrayObj).length() > 0;
-        
-        Reporter.log("Verifying response contains non-empty array '" + arrayField + "': " + isNonEmptyArray);
-        assertThat("Response contains non-empty array '" + arrayField + "'", isNonEmptyArray, is(true));
-    }
-    
-    /**
-     * Verifies that the response array has the expected size.
-     * 
-     * @param arrayField the array field name
-     * @param expectedSize the expected size of the array
-     */
-    @QAFTestStep(description = "the response array {arrayField} should have size {expectedSize}")
-    public void theResponseArrayShouldHaveSize(String arrayField, int expectedSize) {
-        JSONObject json = getEndpoint().getResponseJson();
-        if (json == null || !json.has(arrayField)) {
-            assertThat("Response contains array field '" + arrayField + "'", false, is(true));
-            return;
-        }
-        
-        Object arrayObj = json.get(arrayField);
-        if (!(arrayObj instanceof JSONArray)) {
-            assertThat("Field '" + arrayField + "' is an array", false, is(true));
-            return;
-        }
-        
-        JSONArray array = (JSONArray) arrayObj;
-        int actualSize = array.length();
-        
-        Reporter.log("Verifying array '" + arrayField + "' size: expected=" + expectedSize + ", actual=" + actualSize);
-        assertThat("Array '" + arrayField + "' size", actualSize, is(equalTo(expectedSize)));
-    }
-    
-    /**
-     * Verifies that the response time is below the threshold.
-     * 
-     * @param maxMilliseconds the maximum response time in milliseconds
-     */
-    @QAFTestStep(description = "the response time should be less than {maxMilliseconds} milliseconds")
-    public void theResponseTimeShouldBeLessThan(long maxMilliseconds) {
-        long responseTime = getEndpoint().getResponse().getRawResponse().getTime();
-        
-        Reporter.log("Response time: " + responseTime + "ms, max allowed: " + maxMilliseconds + "ms");
-        Validator.verifyThat("Response time is below threshold", 
-                responseTime < maxMilliseconds, is(true));
-    }
-    
-    /**
-     * Verifies that the response header has the expected value.
-     * 
-     * @param headerName the header name
-     * @param expectedValue the expected header value
-     */
-    @QAFTestStep(description = "the response header {headerName} should be {expectedValue}")
-    public void theResponseHeaderShouldBe(String headerName, String expectedValue) {
-        String actualValue = getEndpoint().getResponse().getHeader(headerName);
-        
-        Reporter.log("Verifying response header '" + headerName + "': expected=" + expectedValue + ", actual=" + actualValue);
-        
-        assertThat("Response header '" + headerName + "' exists", actualValue, is(notNullValue()));
-        assertThat("Response header '" + headerName + "' value", actualValue, is(equalTo(expectedValue)));
+public class BaseApiSteps {
+    protected Response response;
+
+    @QAFTestStep(description = "validate response status {statusCode}")
+    public void validateResponseStatus(int statusCode) {
+        assert response.getStatusCode() == statusCode;
     }
 }
 
+------------------------------------------
 AssetLayoutSteps.java
-----------------------------
+------------------------------------------
+package com.mycompany.www.api.steps;
 
-package com.mycompany.api.steps;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-
-import com.qmetry.qaf.automation.core.TestBaseProvider;
+import com.mycompany.www.api.endpoints.AssetLayoutApi;
+import com.mycompany.www.api.utils.JsonPayloadUtil;
 import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.mycompany.api.core.ApiResponse;
-import com.mycompany.api.core.BaseApiEndpoint;
-import com.mycompany.api.endpoints.AssetLayoutEndpoint;
-import com.mycompany.api.utils.ExcelUtil;
-import com.mycompany.api.utils.PayloadManager;
-
-/**
- * BDD step definitions for the Asset Layout API tests.
- * Extends BaseApiSteps to inherit common step definitions.
- */
-public class AssetLayoutSteps extends BaseApiSteps {
-    
-    private static final Log logger = LogFactory.getLog(AssetLayoutSteps.class);
-    private AssetLayoutEndpoint endpoint = new AssetLayoutEndpoint();
-    
-    @Override
-    protected BaseApiEndpoint getEndpoint() {
-        return endpoint;
-    }
-    
-    /**
-     * Executes a request to the Asset Layout API using the provided test data.
-     * 
-     * @param testDataMap Map containing the test data from the Excel file
-     */
-    @QAFTestStep(description = "post asset layout with data {testDataMap}")
-    public void postAssetLayoutWithData(Map<String, Object> testDataMap) {
-        try {
-            logger.info("Sending asset layout API request with data: " + testDataMap);
-            
-            // Ensure messageId is present
-            if (!testDataMap.containsKey("messageId")) {
-                testDataMap.put("messageId", PayloadManager.generateMessageId());
-            }
-            
-            ApiResponse response = endpoint.executeRequest(testDataMap);
-            
-            Reporter.log("Request sent successfully.");
-            Reporter.log("Response status: " + endpoint.getStatusCode());
-            Reporter.log("Response body: " + endpoint.getResponseBody());
-            
-        } catch (Exception e) {
-            Reporter.log("Error sending request: " + e.getMessage());
-            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Executes a request to the Asset Layout API using test case ID to look up data.
-     * 
-     * @param testCaseId the test case ID to look up in the test data Excel file
-     */
-    @QAFTestStep(description = "post asset layout for test case {testCaseId}")
-    public void postAssetLayoutForTestCase(String testCaseId) {
-        String excelPath = "resources/testdata/Regression_testdata.xlsx";
-        String sheetName = "testData";
-        
-        Map<String, Object> testData = ExcelUtil.findTestDataByFilter(excelPath, sheetName, "TestCaseID", testCaseId);
-        
-        if (testData == null || testData.isEmpty()) {
-            Reporter.log("Test data not found for test case ID: " + testCaseId);
-            throw new RuntimeException("Test data not found for test case ID: " + testCaseId);
-        }
-        
-        postAssetLayoutWithData(testData);
-    }
-    
-    /**
-     * Executes a request to the Asset Layout API using deal ID and report date.
-     * 
-     * @param dealId the deal ID
-     * @param reportDate the report date in YYYY-MM-DD format
-     */
-    @QAFTestStep(description = "post asset layout with deal {dealId} and report date {reportDate}")
-    public void postAssetLayoutWithDealAndReportDate(String dealId, String reportDate) {
-        try {
-            logger.info("Sending asset layout API request with deal ID: " + dealId + ", report date: " + reportDate);
-            
-            Map<String, Object> testData = new HashMap<>();
-            testData.put("messageId", PayloadManager.generateMessageId());
-            testData.put("dealId", dealId);
-            testData.put("reportDate", reportDate);
-            
-            ApiResponse response = endpoint.executeRequest(testData);
-            
-            Reporter.log("Request sent successfully.");
-            Reporter.log("Response status: " + endpoint.getStatusCode());
-            Reporter.log("Response body: " + endpoint.getResponseBody());
-            
-        } catch (Exception e) {
-            Reporter.log("Error sending request: " + e.getMessage());
-            throw new RuntimeException("Failed to execute API request: " + e.getMessage(), e);
-        }
-    }
-    
-    /**
-     * Sets a custom URL for the Asset Layout API endpoint.
-     * 
-     * @param url the custom endpoint URL
-     */
-    @QAFTestStep(description = "set asset layout endpoint URL to {url}")
-    public void setAssetLayoutEndpointUrl(String url) {
-        endpoint = new AssetLayoutEndpoint(url);
-        Reporter.log("Asset Layout endpoint URL set to: " + url);
-    }
-    
-    /**
-     * Adds a custom header to the Asset Layout API request.
-     * 
-     * @param headerName the header name
-     * @param headerValue the header value
-     */
-    @QAFTestStep(description = "add header {headerName} with value {headerValue} to asset layout request")
-    public void addHeaderToAssetLayoutRequest(String headerName, String headerValue) {
-        endpoint.addHeader(headerName, headerValue);
-        Reporter.log("Added header to Asset Layout request: " + headerName + "=" + headerValue);
-    }
-    
-    /**
-     * Validates that the specified field in the response matches the expected value.
-     * 
-     * @param field the field to check
-     * @param expectedValue the expected value
-     */
-    @QAFTestStep(description = "validate response field {field} equals {expectedValue}")
-    public void validateResponseStatus(String field, String expectedValue) {
-        String actualValue = endpoint.getResponseValue(field);
-        
-        Reporter.log("Validating response field '" + field + "': expected=" + expectedValue + ", actual=" + actualValue);
-        assertThat("Response field '" + field + "' value", actualValue, is(equalTo(expectedValue)));
-    }
-}
-
-AssetLayout.feature
-----------------------
-
-@Regression
-@AssetLayout
-Feature: Asset Layout API Testing
-  As a user of the Asset Layout API
-  I want to verify different scenarios
-  So that I can ensure the API works correctly
-
-@Smoke
-@TestCaseId:TC_34940
-@Description:Verify Asset Layout API returns success with valid data
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34940
-Scenario: Verify Asset Layout API with valid data returns success
-  When post asset layout with data '${args[0]}'
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain the field "status"
-  And the response field "status" should be "success"
-  And the response time should be less than 5000 milliseconds
-
-@Regression
-@TestCaseId:TC_34941
-@Description:Verify Asset Layout API returns error with invalid deal ID
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34941
-Scenario: Verify Asset Layout API with invalid deal ID returns error
-  When post asset layout with data '${args[0]}'
-  Then the response status code should be 400
-  And the response should contain the field "error"
-  And the response field "error" should contain "Invalid deal ID"
-
-@Regression
-@TestCaseId:TC_34942
-@Description:Verify Asset Layout API returns error with invalid report date
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34942
-Scenario: Verify Asset Layout API with invalid report date returns error
-  When post asset layout with data '${args[0]}'
-  Then the response status code should be 400
-  And the response should contain the field "error"
-  And the response field "error" should contain "Invalid date format"
-
-@Regression
-@TestCaseId:TC_34943
-@Description:Verify Asset Layout API returns error with missing required fields
-Scenario: Verify Asset Layout API with missing required fields returns error
-  When post asset layout with deal '12345' and report date ''
-  Then the response status code should be 400
-  And the response should contain the field "error"
-  And the response field "error" should contain "Missing required field"
-
-@Regression
-@TestCaseId:TC_34944
-@Description:Verify Asset Layout API returns data arrays with valid input
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:TC_34944
-Scenario: Verify Asset Layout API returns proper data arrays
-  When post asset layout with data '${args[0]}'
-  Then the response status code should be 200
-  And the response should contain the field "assets"
-  And the response should contain a non-empty "assets" array
-  And the response should contain the field "layout"
-  And the response should contain a non-empty "layout" array
-
-@Performance
-@TestCaseId:TC_34945
-@Description:Verify Asset Layout API performance
-Scenario: Verify Asset Layout API performance meets expectations
-  When set asset layout endpoint URL to 'https://ktgapi-sit.ksmls.americas.ishare.net/api/v1/spc/assetlayout'
-  And add header 'X-Performance-Test' with value 'true' to asset layout request
-  And post asset layout with deal '12345' and report date '2023-01-01'
-  Then the response status code should be 200
-  And the response time should be less than 2000 milliseconds
-
-ReporterUtil.java
-----------------------
-
-package com.mycompany.api.utils;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.json.JSONArray;
-import org.json.JSONObject;
-
-import com.qmetry.qaf.automation.util.Reporter;
-
-/**
- * Utility class for reporting API test results.
- */
-public class ReporterUtil {
-    
-    private static final Log logger = LogFactory.getLog(ReporterUtil.class);
-    
-    /**
-     * Logs a request and response for reporting.
-     * 
-     * @param endpointName name of the API endpoint
-     * @param requestMethod HTTP method used
-     * @param requestUrl the request URL
-     * @param requestHeaders the request headers
-     * @param requestBody the request body
-     * @param responseCode the response status code
-     * @param responseBody the response body
-     */
-    public static void logApiExchange(String endpointName, String requestMethod, String requestUrl,
-                                   String requestHeaders, String requestBody, int responseCode,
-                                   String responseBody) {
-        Reporter.log("=== API Request: " + endpointName + " ===");
-        Reporter.log("Method: " + requestMethod);
-        Reporter.log("URL: " + requestUrl);
-        Reporter.log("Headers: " + requestHeaders);
-        Reporter.log("Request Body: " + formatJson(requestBody));
-        Reporter.log("=== API Response ===");
-        Reporter.log("Status Code: " + responseCode);
-        Reporter.log("Response Body: " + formatJson(responseBody));
-    }
-    
-    /**
-     * Formats JSON string for better readability in reports.
-     * 
-     * @param jsonString the JSON string to format
-     * @return formatted JSON string
-     */
-    public static String formatJson(String jsonString) {
-        if (jsonString == null || jsonString.isEmpty()) {
-            return "";
-        }
-        
-        try {
-            // Try to parse as JSONObject
-            if (jsonString.trim().startsWith("{")) {
-                JSONObject json = new JSONObject(jsonString);
-                return json.toString(2);
-            } 
-            // Try to parse as JSONArray
-            else if (jsonString.trim().startsWith("[")) {
-                JSONArray json = new JSONArray(jsonString);
-                return json.toString(2);
-            }
-        } catch (Exception e) {
-            // Not valid JSON, return as is
-        }
-        
-        return jsonString;
-    }
-    
-    /**
-     * Adds a step to the test report with pass status.
-     * 
-     * @param stepName name of the step
-     * @param details step details
-     */
-    public static void reportStepPass(String stepName, String details) {
-        Reporter.log(stepName + ": PASS - " + details);
-    }
-    
-    /**
-     * Adds a step to the test report with fail status.
-     * 
-     * @param stepName name of the step
-     * @param details step details
-     */
-    public static void reportStepFail(String stepName, String details) {
-        Reporter.log(stepName + ": FAIL - " + details);
-    }
-    
-    /**
-     * Adds a step to the test report with warning status.
-     * 
-     * @param stepName name of the step
-     * @param details step details
-     */
-    public static void reportStepWarning(String stepName, String details) {
-        Reporter.log(stepName + ": WARNING - " + details);
-    }
-    
-    /**
-     * Adds a table of data to the test report.
-     * 
-     * @param tableName name of the table
-     * @param data array of data rows
-     */
-    public static void reportTable(String tableName, String[][] data) {
-        if (data == null || data.length == 0) {
-            return;
-        }
-        
-        Reporter.log("=== " + tableName + " ===");
-        
-        StringBuilder sb = new StringBuilder();
-        for (String[] row : data) {
-            for (String cell : row) {
-                sb.append(cell).append("\t");
-            }
-            sb.append("\n");
-        }
-        
-        Reporter.log(sb.toString());
-    }
-    
-    /**
-     * Logs JSON response data in a table format.
-     * 
-     * @param response JSON response string
-     * @param keyFields array of key fields to extract
-     */
-    public static void reportJsonResponseTable(String response, String[] keyFields) {
-        try {
-            JSONObject json = new JSONObject(response);
-            
-            String[][] data = new String[keyFields.length + 1][2];
-            data[0][0] = "Field";
-            data[0][1] = "Value";
-            
-            for (int i = 0; i < keyFields.length; i++) {
-                data[i+1][0] = keyFields[i];
-                if (json.has(keyFields[i])) {
-                    data[i+1][1] = json.get(keyFields[i]).toString();
-                } else {
-                    data[i+1][1] = "N/A";
-                }
-            }
-            
-            reportTable("Response Data", data);
-            
-        } catch (Exception e) {
-            logger.error("Error reporting JSON response table: " + e.getMessage(), e);
-        }
-    }
-}
-APiTestBase.java
---------------------------------
-
-package com.mycompany.api.core;
-
 import java.util.Map;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.testng.ITestContext;
-import org.testng.annotations.AfterMethod;
-import org.testng.annotations.BeforeMethod;
-import org.testng.annotations.BeforeSuite;
+public class AssetLayoutSteps extends BaseApiSteps {
 
-import com.qmetry.qaf.automation.core.ConfigurationManager;
-import com.qmetry.qaf.automation.core.TestBaseProvider;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.mycompany.api.utils.ExcelUtil;
-
-/**
- * Base class for all API test classes.
- * Provides common setup and teardown methods.
- */
-public class ApiTestBase {
-    
-    private static final Log logger = LogFactory.getLog(ApiTestBase.class);
-    
-    /**
-     * Setup method to be run before the test suite.
-     * Initializes global configurations.
-     * 
-     * @param context TestNG test context
-     */
-    @BeforeSuite
-    public void setupSuite(ITestContext context) {
-        logger.info("Setting up API test suite");
-        
-        // Initialize global configuration
-        String environment = ConfigurationManager.getBundle().getString("environment.name", "sit");
-        logger.info("Running in environment: " + environment);
-        
-        // Load global test data if needed
-        String excelPath = ConfigurationManager.getBundle().getString("testdata.excel.path");
-        try {
-            Map<String, Object> globalConfig = ExcelUtil.findTestDataByFilter(excelPath, "Config", "Environment", environment);
-            if (globalConfig != null) {
-                logger.info("Loaded global configuration: " + globalConfig);
-                
-                // Set global variables for use in tests
-                for (Map.Entry<String, Object> entry : globalConfig.entrySet()) {
-                    TestBaseProvider.instance().get().getContext().setProperty(entry.getKey(), entry.getValue());
-                }
-            }
-        } catch (Exception e) {
-            logger.warn("Could not load global configuration: " + e.getMessage(), e);
-        }
-        
-        // Set context attributes
-        context.setAttribute("Environment", environment);
-    }
-    
-    /**
-     * Setup method to be run before each test method.
-     * 
-     * @param context TestNG test context
-     * @param method test method name
-     */
-    @BeforeMethod
-    public void setupTest(ITestContext context, java.lang.reflect.Method method) {
-        String testName = method.getName();
-        logger.info("Starting test: " + testName);
-        
-        // Set test name in context
-        TestBaseProvider.instance().get().getContext().setProperty("testName", testName);
-        
-        Reporter.log("=== Starting Test: " + testName + " ===");
-    }
-    
-    /**
-     * Teardown method to be run after each test method.
-     * 
-     * @param context TestNG test context
-     * @param method test method name
-     */
-    @AfterMethod
-    public void teardownTest(ITestContext context, java.lang.reflect.Method method) {
-        String testName = method.getName();
-        logger.info("Completed test: " + testName);
-        
-        Reporter.log("=== Completed Test: " + testName + " ===");
+    @QAFTestStep(description = "post asset layout with data {data}")
+    public void postAssetLayout(Map<String, Object> data) throws Exception {
+        String url = "https://ktgapi-sit.ksmls.americas.ishare.net/api/v1/spc/assetlayout";
+        String payload = JsonPayloadUtil.getUpdatedPayload("resources/payloads/assetlayout_payload.json", data);
+        AssetLayoutApi api = new AssetLayoutApi();
+        response = api.postAssetLayout(url, payload);
     }
 }
 
+------------------------------------------
+application.properties
+------------------------------------------
+certificate.path=resources/certificates/KHANonProd.pfx
+certificate.passphrase=kha#123!
+
+------------------------------------------
+assetlayout_payload.json
+------------------------------------------
+{
+  "messageId": "${messageId}",
+  "dealId": ${dealId},
+  "reportDate": "${reportDate}"
+}
+
+------------------------------------------
+assetlayout.feature
+------------------------------------------
+@Regression
+@enabled:true
+@testCaseId:483438
+@description:Test Asset Layout API
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/Regression_testdata.xlsx
+@dataProviderClass:com.abc.customdataproviderimpl.DataProvider
+@sheet:testData
+@key:TC_34939
+Scenario: Validate asset layout API
+  When post asset layout with data '${args[0]}'
+  Then validate response status 200
