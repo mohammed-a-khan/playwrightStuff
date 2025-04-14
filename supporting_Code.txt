@@ -707,7 +707,8 @@ import org.apache.commons.logging.LogFactory;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
+import java.util.Properties;
+import java.util.Enumeration;
 
 /**
  * Configuration class for API endpoints.
@@ -756,11 +757,14 @@ public class ApiConfig {
     private static void loadEndpointsFromProperties() {
         String prefix = "api.endpoint.";
         
-        // Get all property keys
-        Set<String> allKeys = props.getPropertyKeys();
+        // Get properties as a Java Properties object
+        Properties properties = props.getProperties();
         
-        // Filter keys that start with the prefix
-        for (String key : allKeys) {
+        // Iterate through all properties
+        Enumeration<?> propertyNames = properties.propertyNames();
+        while (propertyNames.hasMoreElements()) {
+            String key = (String) propertyNames.nextElement();
+            
             if (key.startsWith(prefix)) {
                 String name = key.substring(prefix.length());
                 String endpoint = props.getString(key);
