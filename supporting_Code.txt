@@ -1,557 +1,900 @@
-// File: src/framework/browser-manager.ts
+package com.qaf.framework.service;
 
-import { Browser, BrowserContext, chromium } from '@playwright/test';
-import { Logger } from './utils/logger';
-import { ConfigManager } from './utils/config-manager';
+import com.qaf.framework.util.ApiClientUtil;
+import com.qaf.framework.util.ApiResponse;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
 
-/**
- * Singleton Browser Manager to handle browser lifecycle
- */
-export class BrowserManager {
-  private static instance: BrowserManager;
-  private browser: Browser | null = null;
-  private contexts: BrowserContext[] = [];
-  private logger: Logger;
-  private config: ConfigManager;
-  private isInitializing: boolean = false;
-  private initPromise: Promise<void> | null = null;
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    this.logger = new Logger('BrowserManager');
-    this.config = ConfigManager.getInstance();
-  }
-
-  /**
-   * Get singleton instance
-   * @returns BrowserManager instance
-   */
-  public static getInstance(): BrowserManager {
-    if (!BrowserManager.instance) {
-      BrowserManager.instance = new BrowserManager();
-    }
-    return BrowserManager.instance;
-  }
-
-  /**
-   * Initialize browser if not already initialized
-   * Uses a promise to prevent multiple initializations
-   */
-  public async initialize(): Promise<void> {
-    // If browser already exists, return immediately
-    if (this.browser) {
-      return;
-    }
-
-    // If initialization is in progress, wait for it
-    if (this.isInitializing && this.initPromise) {
-      await this.initPromise;
-      return;
-    }
-
-    // Start initialization
-    this.isInitializing = true;
-    try {
-      this.initPromise = this.initializeBrowser();
-      await this.initPromise;
-    } finally {
-      this.isInitializing = false;
-    }
-  }
-
-  /**
-   * Internal method to initialize the browser
-   */
-  private async initializeBrowser(): Promise<void> {
-    this.logger.info('Launching browser');
-    
-    try {
-      const headless = this.config.getBoolean('HEADLESS', true);
-      const slowMo = this.config.getNumber('SLOW_MO', 0);
-      
-      // Parse browser args from env variable
-      const browserArgs = this.config.getString('BROWSER_ARGS', '--disable-gpu,--no-sandbox')
-        .split(',')
-        .map(arg => arg.trim())
-        .filter(arg => arg.length > 0);
-      
-      this.browser = await chromium.launch({
-        headless,
-        slowMo,
-        args: browserArgs
-      });
-      
-      this.logger.info('Browser launched successfully');
-    } catch (error) {
-      this.logger.error(`Failed to launch browser: ${error}`);
-      this.isInitializing = false;
-      throw error;
-    }
-  }
-
-  // Rest of the methods...
-}
-
-// File: src/framework/utils/config-manager.ts
-import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs';
+import java.util.Map;
 
 /**
- * Configuration Manager for handling environment-specific configurations
- * Implements singleton pattern to ensure configuration is loaded only once
+ * Service class for Employee Calendar API operations.
  */
-export class ConfigManager {
-  private static instance: ConfigManager;
-  private config: Record<string, any> = {};
-  private initialized: boolean = false;
-  private initializationPromise: Promise<void> | null = null;
-
-  /**
-   * Private constructor for singleton pattern
-   */
-  private constructor() {
-    // Configuration will be loaded lazily when needed
-  }
-
-  /**
-   * Get singleton instance
-   * @returns ConfigManager instance
-   */
-  public static getInstance(): ConfigManager {
-    if (!ConfigManager.instance) {
-      ConfigManager.instance = new ConfigManager();
-    }
-    return ConfigManager.instance;
-  }
-
-  /**
-   * Load configuration from .env files and process.env
-   * @private
-   */
-  private async loadConfiguration(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-
-    if (this.initializationPromise) {
-      await this.initializationPromise;
-      return;
-    }
-
-    this.initializationPromise = this._loadConfig();
-    await this.initializationPromise;
-  }
-
-  private async _loadConfig(): Promise<void> {
-    try {
-      console.log('Loading configuration...');
-      // Load base .env file first (if exists)
-      const baseEnvPath = path.resolve(process.cwd(), '.env');
-      if (fs.existsSync(baseEnvPath)) {
-        console.log(`Loading base environment from: ${baseEnvPath}`);
-        dotenv.config({ path: baseEnvPath });
-      }
-
-      // Load environment-specific .env file if specified
-      const env = process.env.NODE_ENV || 'development';
-      const envSpecificPath = path.resolve(process.cwd(), `.env.${env}`);
-      
-      if (fs.existsSync(envSpecificPath)) {
-        console.log(`Loading environment-specific config from: ${envSpecificPath}`);
-        // Override with environment-specific values
-        dotenv.config({ path: envSpecificPath, override: true });
-      }
-
-      // Copy all environment variables to our config object
-      this.config = { ...process.env };
-      
-      this.initialized = true;
-      console.log('Configuration loaded successfully');
-    } catch (error) {
-      console.error(`Error loading environment configuration: ${error}`);
-      throw error;
-    }
-  }
-
-  /**
-   * Get configuration value with type conversion
-   * @param key - Configuration key
-   * @param defaultValue - Default value if configuration not found
-   * @returns Configuration value with appropriate type
-   */
-  public async get<T>(key: string, defaultValue?: T): Promise<T> {
-    await this.loadConfiguration();
+public class EmpCalendarService extends ApiService {
     
-    // Check if the key exists in our config
-    const value = this.config[key];
+    private static final Log logger = LogFactory.getLog(EmpCalendarService.class);
+    private static final String ENDPOINT = "/api/v1/emp/empcalendar";
     
-    if (value === undefined) {
-      return defaultValue as T;
+    /**
+     * Default constructor.
+     */
+    public EmpCalendarService() {
+        super();
     }
     
-    // Try to convert the string value to the appropriate type
-    if (defaultValue !== undefined) {
-      const defaultType = typeof defaultValue;
-      
-      if (defaultType === 'number') {
-        const numberValue = Number(value);
-        return (isNaN(numberValue) ? defaultValue : numberValue) as T;
-      } else if (defaultType === 'boolean') {
-        if (value.toLowerCase() === 'true') return true as unknown as T;
-        if (value.toLowerCase() === 'false') return false as unknown as T;
-        return defaultValue;
-      } else if (defaultType === 'object' && Array.isArray(defaultValue)) {
-        try {
-          // Try to parse as JSON if it looks like an array
-          if (value.startsWith('[') && value.endsWith(']')) {
-            return JSON.parse(value) as T;
-          }
-          // Otherwise split by comma (common for env vars)
-          return value.split(',').map(item => item.trim()) as unknown as T;
-        } catch (e) {
-          return defaultValue;
+    /**
+     * Gets employee calendar information for the specified employee ID and cycle code.
+     * 
+     * @param empId the employee ID
+     * @param cycleCode the cycle code in YYYYMM format
+     * @return ApiResponse containing the response
+     */
+    public ApiResponse getEmpCalendar(Integer empId, Integer cycleCode) {
+        JSONObject payload = new JSONObject();
+        payload.put("empId", empId);
+        payload.put("cycleCode", cycleCode);
+        payload.put("messageId", ApiClientUtil.generateMessageId());
+        
+        logger.info("Getting employee calendar for empId: " + empId + ", cycleCode: " + cycleCode);
+        return post(ENDPOINT, payload.toString());
+    }
+    
+    /**
+     * Gets employee calendar information with a custom message ID.
+     * 
+     * @param empId the employee ID
+     * @param cycleCode the cycle code in YYYYMM format
+     * @param messageId the message ID to use
+     * @return ApiResponse containing the response
+     */
+    public ApiResponse getEmpCalendarWithMessageId(Integer empId, Integer cycleCode, String messageId) {
+        JSONObject payload = new JSONObject();
+        payload.put("empId", empId);
+        payload.put("cycleCode", cycleCode);
+        payload.put("messageId", messageId);
+        
+        logger.info("Getting employee calendar for empId: " + empId + ", cycleCode: " + cycleCode + " with messageId: " + messageId);
+        return post(ENDPOINT, payload.toString());
+    }
+    
+    /**
+     * Gets employee calendar information without providing a cycle code (to fetch all cycles).
+     * 
+     * @param empId the employee ID
+     * @return ApiResponse containing the response
+     */
+    public ApiResponse getAllEmpCalendars(Integer empId) {
+        JSONObject payload = new JSONObject();
+        payload.put("empId", empId);
+        payload.put("messageId", ApiClientUtil.generateMessageId());
+        
+        logger.info("Getting all employee calendars for empId: " + empId);
+        return post(ENDPOINT, payload.toString());
+    }
+    
+    /**
+     * Gets employee calendar information with a full data map.
+     * 
+     * @param data map containing request data
+     * @return ApiResponse containing the response
+     */
+    public ApiResponse getEmpCalendar(Map<String, Object> data) {
+        // Ensure messageId is present if not explicitly set to empty
+        if (!data.containsKey("messageId")) {
+            data.put("messageId", ApiClientUtil.generateMessageId());
         }
-      } else if (defaultType === 'object') {
-        try {
-          return JSON.parse(value) as T;
-        } catch (e) {
-          return defaultValue;
+        
+        JSONObject payload = new JSONObject();
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            payload.put(entry.getKey(), entry.getValue());
         }
-      }
+        
+        logger.info("Getting employee calendar with data: " + data);
+        return post(ENDPOINT, payload.toString());
     }
-    
-    // If no defaultValue or no special conversion needed, return as is
-    return value as unknown as T;
-  }
-
-  /**
-   * Get string value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getString(key: string, defaultValue: string = ''): Promise<string> {
-    return this.get<string>(key, defaultValue);
-  }
-
-  /**
-   * Get number value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getNumber(key: string, defaultValue: number = 0): Promise<number> {
-    return this.get<number>(key, defaultValue);
-  }
-
-  /**
-   * Get boolean value (convenience method)
-   * @param key - Configuration key
-   * @param defaultValue - Default value if not found
-   */
-  public async getBoolean(key: string, defaultValue: boolean = false): Promise<boolean> {
-    return this.get<boolean>(key, defaultValue);
-  }
-
-  /**
-   * Get the fully constructed base URL with returnUrl query parameter
-   * @param defaultBaseUrl - Default base URL if not found in config
-   * @param defaultBasePath - Default base path if not found in config
-   * @param defaultRedirectPath - Default redirect URL path if not found in config
-   * @returns Full URL string with returnUrl query parameter
-   */
-  public async getBaseUrl(
-    defaultBaseUrl: string = 'https://example.com',
-    defaultBasePath: string = '/somepath.aspx',
-    defaultRedirectPath: string = ''
-  ): Promise<string> {
-    const baseUrl = await this.getString('BASE_URL', defaultBaseUrl);
-    const basePath = await this.getString('BASE_PATH', defaultBasePath);
-    const redirectUrlPath = await this.getString('REDIRECT_URL_PATH', defaultRedirectPath);
-    
-    // Ensure base path has leading slash if needed
-    const formattedBasePath = basePath && !basePath.startsWith('/') ? `/${basePath}` : basePath;
-    
-    // Ensure redirect path has leading slash if needed for the returnUrl parameter
-    const formattedRedirectPath = redirectUrlPath && !redirectUrlPath.startsWith('/') ? 
-      `/${redirectUrlPath}` : redirectUrlPath;
-    
-    // Create base URL with the base path
-    const urlWithBasePath = new URL(formattedBasePath, baseUrl);
-    
-    // Add the returnUrl query parameter if redirect path exists
-    if (formattedRedirectPath) {
-      urlWithBasePath.searchParams.set('returnUrl', formattedRedirectPath);
-    }
-    
-    return urlWithBasePath.toString();
-  }
-  
-  /**
-   * Get default timeout from configuration
-   * @param defaultValue - Default value to use if not found in config
-   * @returns Timeout in milliseconds
-   */
-  public async getDefaultTimeout(defaultValue: number = 30000): Promise<number> {
-    return this.getNumber('DEFAULT_TIMEOUT', defaultValue);
-  }
 }
 
-//
-API Example with Proxy, Auth Token and Certificate
-// File: src/api/secure-api-client.ts
-import { BaseApiClient, ApiRequestOptions } from '../framework/base-api-client';
-import { AxiosResponse, AxiosRequestConfig } from 'axios';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as https from 'https';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+package com.qaf.framework.stepdefs;
 
-interface Product {
-  id: number;
-  name: string;
-  price: number;
-  category: string;
-  description: string;
-}
+import static org.testng.Assert.*;
 
-interface ProductListResponse {
-  items: Product[];
-  totalCount: number;
-  pageSize: number;
-  pageNumber: number;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qaf.framework.service.EmpCalendarService;
+import com.qaf.framework.util.ApiClientUtil;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/**
+ * Step definitions for Employee Calendar API testing.
+ */
+public class EmpCalendarSteps extends ApiSteps {
+    
+    private static final Log logger = LogFactory.getLog(EmpCalendarSteps.class);
+    private static final String EXPECTED_EMP_CALENDAR_KEY = "expected.emp.calendar";
+    private static final String EMP_CALENDAR_ENDPOINT = "/api/v1/emp/empcalendar";
+    
+    /**
+     * Get or create the EmpCalendarService from context
+     */
+    protected EmpCalendarService getEmpCalendarService() {
+        EmpCalendarService service = TestContextManager.getService(EmpCalendarService.class);
+        if (service == null) {
+            service = new EmpCalendarService();
+            TestContextManager.setService(EmpCalendarService.class, service);
+        }
+        return service;
+    }
+    
+    /**
+     * Sends a request to the Employee Calendar API with the specified employee ID and cycle code.
+     * 
+     * @param empId the employee ID
+     * @param cycleCode the cycle code (YYYYMM format)
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Employee Calendar API for employee {empId} and cycle {cycleCode}")
+    public void sendEmpCalendarRequest(Integer empId, Integer cycleCode) throws Exception {
+        logger.info("Sending Employee Calendar request for empId: " + empId + ", cycleCode: " + cycleCode);
+        
+        try {
+            ApiResponse response = getEmpCalendarService().getEmpCalendar(empId, cycleCode);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Employee Calendar request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
+            Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Employee Calendar API with the specified employee ID to get all cycles.
+     * 
+     * @param empId the employee ID
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Employee Calendar API for all cycles of employee {empId}")
+    public void sendAllCyclesEmpCalendarRequest(Integer empId) throws Exception {
+        logger.info("Sending Employee Calendar request for all cycles of empId: " + empId);
+        
+        try {
+            ApiResponse response = getEmpCalendarService().getAllEmpCalendars(empId);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Employee Calendar request for all cycles sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
+            Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to the Employee Calendar API with the specified data.
+     * 
+     * @param data the request data
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Employee Calendar API with data {data}")
+    public void sendEmpCalendarRequestWithData(Map<String, Object> data) throws Exception {
+        logger.info("Sending Employee Calendar request with data: " + data);
+        
+        try {
+            ApiResponse response = getEmpCalendarService().getEmpCalendar(data);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Employee Calendar request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
+            Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a raw request to Employee Calendar API with the specified payload.
+     * 
+     * @param payload the raw JSON payload as a string
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a raw request to Employee Calendar API with payload: {payload}")
+    public void sendRawEmpCalendarRequest(String payload) throws Exception {
+        logger.info("Sending raw Employee Calendar request with payload: " + payload);
+        
+        try {
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "application/json");
+            ApiResponse response = ApiClientUtil.sendPostRequest(EMP_CALENDAR_ENDPOINT, payload, headers);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Raw Employee Calendar request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending raw Employee Calendar request: " + e.getMessage(), e);
+            Reporter.log("Error sending raw Employee Calendar request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to Employee Calendar API with no body.
+     * 
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a request to Employee Calendar API with no body")
+    public void sendEmptyEmpCalendarRequest() throws Exception {
+        logger.info("Sending Employee Calendar request with no body");
+        
+        try {
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Content-Type", "application/json");
+            ApiResponse response = ApiClientUtil.sendPostRequest(EMP_CALENDAR_ENDPOINT, "", headers);
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Empty Employee Calendar request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending empty Employee Calendar request: " + e.getMessage(), e);
+            Reporter.log("Error sending empty Employee Calendar request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Stores employee calendar information from UI for later validation.
+     * 
+     * @param empCalendarInfo the employee calendar information gathered from UI
+     */
+    @QAFTestStep(description = "I store employee calendar information from UI {empCalendarInfo}")
+    public void storeEmpCalendarInfoFromUI(List<Map<String, String>> empCalendarInfo) {
+        logger.info("Storing employee calendar information from UI: " + empCalendarInfo);
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
+        Reporter.log("Stored employee calendar information from UI with " + empCalendarInfo.size() + " records");
+    }
+    
+    /**
+     * Adds a single employee calendar information record from UI for later validation.
+     * 
+     * @param fieldName the field name
+     * @param fieldValue the field value
+     */
+    @QAFTestStep(description = "I add employee calendar field {fieldName} with value {fieldValue}")
+    public void addEmpCalendarField(String fieldName, String fieldValue) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> empCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
+        
+        if (empCalendarInfo == null) {
+            empCalendarInfo = new ArrayList<>();
+            Map<String, String> firstRecord = new HashMap<>();
+            empCalendarInfo.add(firstRecord);
+        }
+        
+        Map<String, String> firstRecord = empCalendarInfo.get(0);
+        firstRecord.put(fieldName, fieldValue);
+        
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
+        logger.info("Added employee calendar field: " + fieldName + "=" + fieldValue);
+    }
+    
+    /**
+     * Adds a completely new employee calendar record for later validation.
+     */
+    @QAFTestStep(description = "I add a new employee calendar record")
+    public void addNewEmpCalendarRecord() {
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> empCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
+        
+        if (empCalendarInfo == null) {
+            empCalendarInfo = new ArrayList<>();
+        }
+        
+        empCalendarInfo.add(new HashMap<>());
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
+        logger.info("Added new employee calendar record at index " + (empCalendarInfo.size() - 1));
+    }
+    
+    /**
+     * Validates employee calendar information in response against UI data.
+     */
+    @QAFTestStep(description = "I validate employee calendar information against UI data")
+    public void validateEmpCalendarInfo() {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("No response available. Make sure to send a request first.", "fail");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> expectedEmpCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
+        
+        if (expectedEmpCalendarInfo == null || expectedEmpCalendarInfo.isEmpty()) {
+            Reporter.log("No expected employee calendar information available. Make sure to store UI data first.", "fail");
+            fail("No expected employee calendar information available. Make sure to store UI data first.");
+            return;
+        }
+        
+        JSONObject jsonResponse = response.getJsonObject();
+        if (jsonResponse == null) {
+            Reporter.log("Invalid JSON response", "fail");
+            fail("Invalid JSON response");
+            return;
+        }
+        
+        // Check for errors in the response
+        if (jsonResponse.has("errorMessage") && !jsonResponse.isNull("errorMessage")) {
+            String errorMessage = jsonResponse.getString("errorMessage");
+            if (errorMessage != null && !errorMessage.isEmpty()) {
+                Reporter.log("API returned error: " + errorMessage, "fail");
+                fail("API returned error: " + errorMessage);
+                return;
+            }
+        }
+        
+        if (!jsonResponse.has("empCalendarList") || jsonResponse.isNull("empCalendarList")) {
+            Reporter.log("Response does not contain empCalendarList", "fail");
+            fail("Response does not contain empCalendarList");
+            return;
+        }
+        
+        JSONArray empCalendarList = jsonResponse.getJSONArray("empCalendarList");
+        if (empCalendarList.length() == 0) {
+            Reporter.log("empCalendarList array is empty", "fail");
+            fail("empCalendarList array is empty");
+            return;
+        }
+        
+        // Validate each field in expected employee calendar info against the response
+        for (int i = 0; i < expectedEmpCalendarInfo.size(); i++) {
+            Map<String, String> expectedRecord = expectedEmpCalendarInfo.get(i);
+            
+            // Check if we have corresponding record in the response
+            if (i >= empCalendarList.length()) {
+                Reporter.log("Expected employee calendar record at index " + i + " not found in response", "fail");
+                continue;
+            }
+            
+            JSONObject actualRecord = empCalendarList.getJSONObject(i);
+            
+            // Validate each field
+            for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
+                String fieldName = entry.getKey();
+                String expectedValue = entry.getValue();
+                
+                if (!actualRecord.has(fieldName)) {
+                    Reporter.log("Field '" + fieldName + "' missing in response", "fail");
+                    continue;
+                }
+                
+                Object actualObj = actualRecord.get(fieldName);
+                String actualValue = actualObj != null ? actualObj.toString() : "null";
+                
+                if (actualObj == JSONObject.NULL) {
+                    actualValue = "null";
+                }
+                
+                if (expectedValue.equals(actualValue)) {
+                    Reporter.log("Field '" + fieldName + "' matches expected value: " + expectedValue);
+                } else {
+                    Reporter.log("Field '" + fieldName + "' mismatch - Expected: " + expectedValue + ", Actual: " + actualValue, "fail");
+                }
+            }
+        }
+    }
+    
+    /**
+     * Adds all employee calendar fields from a map.
+     * 
+     * @param fieldValues map of field names to values
+     */
+    @QAFTestStep(description = "I add employee calendar fields {fieldValues}")
+    public void addEmpCalendarFields(Map<String, String> fieldValues) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> empCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
+        
+        if (empCalendarInfo == null) {
+            empCalendarInfo = new ArrayList<>();
+            empCalendarInfo.add(new HashMap<>());
+        }
+        
+        Map<String, String> currentRecord = empCalendarInfo.get(empCalendarInfo.size() - 1);
+        currentRecord.putAll(fieldValues);
+        
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
+        logger.info("Added employee calendar fields: " + fieldValues);
+    }
+    
+    /**
+     * Clears all stored employee calendar information.
+     */
+    @QAFTestStep(description = "I clear stored employee calendar information")
+    public void clearEmpCalendarInfo() {
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, null);
+        logger.info("Cleared stored employee calendar information");
+    }
+    
+    /**
+     * Setup calendar data for testing.
+     * 
+     * @param empId the employee ID
+     * @param cycleCode the cycle code
+     */
+    @QAFTestStep(description = "I set up basic employee calendar test data with employee {empId} and cycle {cycleCode}")
+    public void setupBasicEmpCalendarTestData(Integer empId, Integer cycleCode) {
+        // Clear existing test data
+        TestContextManager.clearTestData();
+        
+        // Set new test data values
+        TestContextManager.setTestData("empId", empId);
+        TestContextManager.setTestData("cycleCode", cycleCode);
+        TestContextManager.setTestData("messageId", ApiClientUtil.generateMessageId());
+        
+        logger.info("Set up basic employee calendar test data: empId=" + empId + ", cycleCode=" + cycleCode);
+        Reporter.log("Set up basic employee calendar test data with empId=" + empId + ", cycleCode=" + cycleCode);
+    }
+    
+    /**
+     * Validate that the response contains a specific validation error.
+     * 
+     * @param field the field with validation error
+     * @param expectedMessage the expected validation message
+     */
+    @QAFTestStep(description = "the validation error message for {field} should be {expectedMessage}")
+    public void validateValidationError(String field, String expectedMessage) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("No response available. Make sure to send a request first.", "fail");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String path = "validationErrorMessage." + field;
+        String actualMessage = response.getNestedValue(path);
+        
+        Reporter.log("Validating validation error for field '" + field + "': expected=" + expectedMessage + ", actual=" + actualMessage);
+        assertEquals(actualMessage, expectedMessage, "Validation error message mismatch for field: " + field);
+    }
+    
+    /**
+     * Captures employee calendar data from UI for the specified employee and cycle.
+     * 
+     * @param empId the employee ID
+     * @param cycleCode the cycle code
+     */
+    @QAFTestStep(description = "I capture employee calendar data from UI for employee {empId} and cycle {cycleCode}")
+    public void captureEmpCalendarDataFromUI(Integer empId, Integer cycleCode) {
+        logger.info("Capturing employee calendar data from UI for empId: " + empId + " and cycleCode: " + cycleCode);
+        
+        // Clear any existing calendar info
+        clearEmpCalendarInfo();
+        
+        // In real implementation, this would use Selenium to read data from UI elements
+        // For now, we're simulating the process of gathering data from UI
+        
+        // Create a new record for this employee calendar
+        List<Map<String, String>> empCalendarInfo = new ArrayList<>();
+        Map<String, String> record = new HashMap<>();
+        
+        // These values would come from UI elements in a real implementation
+        record.put("deptId", "434");
+        record.put("cycleCode", cycleCode.toString());
+        record.put("interestDate", "2024-12-31");
+        record.put("monthlyPayDate", "2025-01-23");
+        record.put("notePayDate", "2025-02-13");
+        
+        empCalendarInfo.add(record);
+        
+        // Store the employee calendar info in test context
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
+        
+        Reporter.log("Successfully captured employee calendar data from UI");
+        logger.info("Employee calendar data captured: " + empCalendarInfo);
+    }
+    
+    /**
+     * Captures all employee calendar cycles data from UI for the specified employee.
+     * 
+     * @param empId the employee ID
+     */
+    @QAFTestStep(description = "I capture all employee calendar cycles data from UI for employee {empId}")
+    public void captureAllEmpCalendarCyclesFromUI(Integer empId) {
+        logger.info("Capturing all employee calendar cycles data from UI for empId: " + empId);
+        
+        // Clear any existing calendar info
+        clearEmpCalendarInfo();
+        
+        // In real implementation, this would use Selenium to read data from UI elements
+        // For now, we're simulating the process of gathering data from UI
+        
+        // Create a list to store multiple cycles
+        List<Map<String, String>> empCalendarInfo = new ArrayList<>();
+        
+        // Add first cycle data
+        Map<String, String> record1 = new HashMap<>();
+        record1.put("deptId", "434");
+        record1.put("cycleCode", "202412");
+        record1.put("interestDate", "2024-12-31");
+        record1.put("monthlyPayDate", "2025-01-23");
+        record1.put("notePayDate", "2025-02-13");
+        empCalendarInfo.add(record1);
+        
+        // Add second cycle data
+        Map<String, String> record2 = new HashMap<>();
+        record2.put("deptId", "434");
+        record2.put("cycleCode", "202411");
+        record2.put("interestDate", "2024-11-30");
+        record2.put("monthlyPayDate", "2024-12-23");
+        record2.put("notePayDate", "2025-01-13");
+        empCalendarInfo.add(record2);
+        
+        // Add third cycle data
+        Map<String, String> record3 = new HashMap<>();
+        record3.put("deptId", "434");
+        record3.put("cycleCode", "202410");
+        record3.put("interestDate", "2024-10-31");
+        record3.put("monthlyPayDate", "2024-11-22");
+        record3.put("notePayDate", "2024-12-13");
+        empCalendarInfo.add(record3);
+        
+        // Store the employee calendar info in test context
+        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
+        
+        Reporter.log("Successfully captured all employee calendar cycles data from UI");
+        logger.info("Employee calendar cycles data captured: " + empCalendarInfo);
+    }
+
+    /**
+ * Sends a request to the Employee Calendar API with a payload file.
+ * 
+ * @param payloadFile the payload file name
+ * @throws Exception if an error occurs
+ */
+@QAFTestStep(description = "I send a request to Employee Calendar API with payload file {payloadFile}")
+public void sendEmpCalendarRequestWithPayloadFile(String payloadFile) throws Exception {
+    logger.info("Sending Employee Calendar request with payload file: " + payloadFile);
+    
+    try {
+        ApiResponse response = getEmpCalendarService().postWithPayloadFile(EMP_CALENDAR_ENDPOINT, payloadFile);
+        
+        // Store the response in context
+        setResponse(response);
+        
+        Reporter.log("Employee Calendar request sent successfully");
+        Reporter.log("Response status: " + response.getStatusCode());
+        Reporter.log("Response body: " + response.getResponseBody());
+        
+    } catch (Exception e) {
+        logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
+        Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
+        throw e;
+    }
 }
 
 /**
- * Secure API Client with proxy settings, auth token and client certificate
+ * Sends a request to the Employee Calendar API with a payload file and substitution values.
+ * 
+ * @param payloadFile the payload file name
+ * @param values map of values to substitute in the payload
+ * @throws Exception if an error occurs
  */
-export class SecureApiClient extends BaseApiClient {
-  private authToken: string | null = null;
-  private readonly proxyUrl: string;
-  private readonly certPath: string;
-  private readonly keyPath: string;
-  private readonly caPath: string;
-
-  /**
-   * Constructor for the SecureApiClient
-   * @param apiBaseUrl - Base URL for API requests
-   */
-  constructor(apiBaseUrl?: string) {
-    super(apiBaseUrl);
+@QAFTestStep(description = "I send a request to Employee Calendar API with payload file {payloadFile} and values {values}")
+public void sendEmpCalendarRequestWithPayloadFileAndValues(String payloadFile, Map<String, Object> values) throws Exception {
+    logger.info("Sending Employee Calendar request with payload file: " + payloadFile + " and values: " + values);
     
-    // Load proxy and certificate settings from config
-    this.proxyUrl = this.config.getString('PROXY_URL', '');
-    this.certPath = this.config.getString('CLIENT_CERT_PATH', '');
-    this.keyPath = this.config.getString('CLIENT_KEY_PATH', '');
-    this.caPath = this.config.getString('CA_CERT_PATH', '');
-  }
-
-  /**
-   * Create HTTPS agent with certificate configuration
-   * @returns HTTPS agent with proper certificates
-   */
-  private createHttpsAgent(): https.Agent {
-    // Create HTTPS agent with certificates
-    const httpsOptions: https.AgentOptions = {
-      rejectUnauthorized: true, // Verify server certificate
-    };
-
-    // Add client certificate and key if available
-    if (this.certPath && fs.existsSync(this.certPath) && 
-        this.keyPath && fs.existsSync(this.keyPath)) {
-      httpsOptions.cert = fs.readFileSync(this.certPath);
-      httpsOptions.key = fs.readFileSync(this.keyPath);
-      this.logger.info('Using client certificate for API requests');
+    try {
+        ApiResponse response = getEmpCalendarService().postWithPayloadFile(EMP_CALENDAR_ENDPOINT, payloadFile, values);
+        
+        // Store the response in context
+        setResponse(response);
+        
+        Reporter.log("Employee Calendar request sent successfully");
+        Reporter.log("Response status: " + response.getStatusCode());
+        Reporter.log("Response body: " + response.getResponseBody());
+        
+    } catch (Exception e) {
+        logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
+        Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
+        throw e;
     }
-
-    // Add CA certificate if available
-    if (this.caPath && fs.existsSync(this.caPath)) {
-      httpsOptions.ca = fs.readFileSync(this.caPath);
-      this.logger.info('Using custom CA certificate for API requests');
-    }
-
-    // Add proxy agent if configured
-    if (this.proxyUrl) {
-      this.logger.info(`Using proxy for API requests: ${this.proxyUrl}`);
-      return new HttpsProxyAgent(this.proxyUrl) as unknown as https.Agent;
-    }
-
-    return new https.Agent(httpsOptions);
-  }
-
-  /**
-   * Create common request configuration with auth and certificates
-   * @param options - Additional API request options
-   * @returns Axios request configuration
-   */
-  private async createRequestConfig(options?: ApiRequestOptions): Promise<AxiosRequestConfig> {
-    // Get auth token if not already available
-    if (!this.authToken) {
-      this.authToken = await this.getAuthToken();
-    }
-
-    // Prepare headers with auth token
-    const headers = { 
-      ...this.defaultHeaders,
-      ...options?.headers
-    };
-
-    if (this.authToken) {
-      headers.Authorization = `Bearer ${this.authToken}`;
-    }
-
-    // Create HTTPS agent with certificates
-    const httpsAgent = this.createHttpsAgent();
-
-    // Return request configuration
-    return {
-      headers,
-      params: options?.params || {},
-      timeout: options?.timeout || this.defaultTimeout,
-      httpsAgent
-    };
-  }
-
-  /**
-   * Get products with filtering
-   * @param category - Filter by category
-   * @param pageSize - Number of items per page
-   * @param pageNumber - Page number (0-based)
-   * @returns Promise with product list response
-   */
-  async getProducts(category?: string, pageSize: number = 20, pageNumber: number = 0): Promise<ProductListResponse> {
-    // Prepare request parameters
-    const params: Record<string, any> = {
-      pageSize,
-      pageNumber
-    };
-
-    if (category) {
-      params.category = category;
-    }
-
-    // Get common request config
-    const config = await this.createRequestConfig({ params });
-    
-    // Make the request
-    const response = await this.get<ProductListResponse>('/api/products', { 
-      ...config,
-      params
-    });
-
-    return response.data;
-  }
-
-  /**
-   * Get a single product by ID
-   * @param id - Product ID
-   * @returns Promise with product data
-   */
-  async getProduct(id: number): Promise<Product> {
-    // Get common request config
-    const config = await this.createRequestConfig();
-    
-    // Make the request
-    const response = await this.get<Product>(`/api/products/${id}`, config);
-    
-    return response.data;
-  }
-
-  /**
-   * Update a product
-   * @param id - Product ID
-   * @param data - Product data to update
-   * @returns Promise with updated product
-   */
-  async updateProduct(id: number, data: Partial<Product>): Promise<Product> {
-    // Get common request config
-    const config = await this.createRequestConfig();
-    
-    // Make the request
-    const response = await this.put<Product>(`/api/products/${id}`, data, config);
-    
-    return response.data;
-  }
-
-  /**
-   * Get authentication token
-   * @returns Promise with auth token
-   */
-  async getAuthToken(): Promise<string> {
-    const username = this.config.getString('API_USERNAME', '');
-    const password = this.config.getString('API_PASSWORD', '');
-    
-    if (!username || !password) {
-      throw new Error('API credentials not configured');
-    }
-    
-    this.logger.info('Getting auth token from API');
-    
-    // Create HTTPS agent with certificates
-    const httpsAgent = this.createHttpsAgent();
-    
-    // Make auth request
-    const response = await this.post<{token: string}>('/api/auth/token', {
-      username,
-      password
-    }, {
-      headers: this.defaultHeaders,
-      httpsAgent
-    });
-    
-    if (response.data && response.data.token) {
-      this.logger.info('Successfully retrieved auth token');
-      return response.data.token;
-    }
-    
-    throw new Error('Failed to get authentication token');
-  }
 }
 
-//Usage example
-// File: src/example-usage.ts
-import { SecureApiClient } from './api/secure-api-client';
+@Regression
+@EmpCalendar
+Feature: Employee Calendar API Testing
+  As a user of the Employee Calendar API
+  I want to verify that the API returns correct calendar information
+  So that I can ensure the data integrity between UI and API
 
-async function exampleApiUsage() {
-  const apiClient = new SecureApiClient('https://api.example.com');
-  
-  try {
-    // Get all products in "electronics" category
-    const productList = await apiClient.getProducts('electronics');
-    console.log(`Found ${productList.totalCount} products in electronics category`);
-    
-    // Get a single product
-    const product = await apiClient.getProduct(123);
-    console.log(`Retrieved product: ${product.name}`);
-    
-    // Update product price
-    const updatedProduct = await apiClient.updateProduct(123, {
-      price: 199.99,
-      description: 'Updated product description'
-    });
-    
-    console.log(`Updated product: ${updatedProduct.name} - New price: ${updatedProduct.price}`);
-    
-  } catch (error) {
-    console.error('Error in API operations:', error);
-  }
+@Positive
+@TestCaseId:EC-001
+@Description:Verify Employee Calendar API returns correct data matching UI information
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-001
+Scenario: Verify Employee Calendar API returns correct data for a valid employee ID and cycle code
+  # UI steps to capture expected data
+  Given I login to the application with username "testuser" and password "password123"
+  And I navigate to the employee calendar screen
+  And I search for employee "${validEmpId}"
+  And I select cycle "${validCycleCode}"
+  And I capture employee calendar data from UI for employee "${validEmpId}" and cycle "${validCycleCode}"
+  # API call and validation
+  When I send a request to Employee Calendar API with payload file "empcalendar-basic.json" and values
+    | empId      | ${validEmpId}          |
+    | cycleCode  | ${validCycleCode}      |
+    | messageId  | ${validMessageId}      |
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "empCalendarList"
+  And I validate employee calendar information against UI data
+  # Cleanup
+  And I logout from the application
+
+@Negative
+@TestCaseId:EC-002
+@Description:Verify Employee Calendar API returns appropriate error for non-existent cycle code
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-002
+Scenario: Verify Employee Calendar API with non-existent cycle code
+  When I send a request to Employee Calendar API with payload file "empcalendar-basic.json" and values
+    | empId      | ${validEmpId}            |
+    | cycleCode  | ${nonExistentCycleCode}  |
+    | messageId  | ${validMessageId}        |
+  Then the response status code should be 200
+  And the response should contain field "responseMessageId"
+  And the response field "responseMessageId" should be "${validMessageId}"
+  And the response should contain field "errorMessage"
+  And the response field "errorMessage" should be "No EmpCalendar Data found"
+
+@Negative
+@TestCaseId:EC-003
+@Description:Verify Employee Calendar API returns appropriate error for non-existent employee ID
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-003
+Scenario: Verify Employee Calendar API with non-existent employee ID
+  When I send a request to Employee Calendar API with payload file "empcalendar-basic.json" and values
+    | empId      | ${nonExistentEmpId}     |
+    | cycleCode  | ${validCycleCode}       |
+    | messageId  | ${validMessageId}       |
+  Then the response status code should be 200
+  And the response should contain field "responseMessageId"
+  And the response field "responseMessageId" should be "${validMessageId}"
+  And the response should contain field "errorMessage"
+  And the response field "errorMessage" should be "No EmpCalendar Data found"
+
+@Negative
+@TestCaseId:EC-004
+@Description:Verify Employee Calendar API returns validation error when empId is missing
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-004
+Scenario: Verify Employee Calendar API with missing empId
+  When I send a request to Employee Calendar API with payload file "empcalendar-missing-empid.json" and values
+    | cycleCode  | ${validCycleCode}       |
+    | messageId  | ${validMessageId}       |
+  Then the response status code should be 400
+  And the response should contain field "responseMessageId"
+  And the response field "responseMessageId" should be "${validMessageId}"
+  And the response should contain field "validationErrorMessage"
+  And the validation error message for "empId" should be "must not be null"
+
+@Positive
+@TestCaseId:EC-005
+@Description:Verify Employee Calendar API returns all cycles when cycleCode is not provided
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-005
+Scenario: Verify Employee Calendar API returns all cycles when cycleCode is not provided
+  # UI steps to capture expected data
+  Given I login to the application with username "testuser" and password "password123"
+  And I navigate to the employee calendar screen
+  And I search for employee "${validEmpId}"
+  And I capture all employee calendar cycles data from UI for employee "${validEmpId}"
+  # API call and validation
+  When I send a request to Employee Calendar API with payload file "empcalendar-all-cycles.json" and values
+    | empId      | ${validEmpId}           |
+    | messageId  | ${validMessageId}       |
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "empCalendarList"
+  And I validate employee calendar information against UI data
+  # Cleanup
+  And I logout from the application
+
+@Negative
+@TestCaseId:EC-006
+@Description:Verify Employee Calendar API returns validation error when messageId is missing
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-006
+Scenario: Verify Employee Calendar API with missing messageId
+  When I send a request to Employee Calendar API with payload file "empcalendar-missing-messageid.json" and values
+    | empId      | ${validEmpId}           |
+    | cycleCode  | ${validCycleCode}       |
+  Then the response status code should be 400
+  And the response should contain field "responseMessageId"
+  And the response field "responseMessageId" should be ""
+  And the response should contain field "validationErrorMessage"
+  And the validation error message for "messageId" should be "must not be null"
+
+@Negative
+@TestCaseId:EC-007
+@Description:Verify Employee Calendar API returns validation errors when both messageId and empId are missing
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-007
+Scenario: Verify Employee Calendar API with missing messageId and empId
+  When I send a request to Employee Calendar API with payload file "empcalendar-cycleonly.json" and values
+    | cycleCode  | ${validCycleCode}       |
+  Then the response status code should be 400
+  And the response should contain field "responseMessageId"
+  And the response field "responseMessageId" should be ""
+  And the response should contain field "validationErrorMessage"
+  And the validation error message for "messageId" should be "must not be null"
+  And the validation error message for "empId" should be "must not be null"
+
+@Negative
+@TestCaseId:EC-008
+@Description:Verify Employee Calendar API returns validation errors for empty request
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-008
+Scenario: Verify Employee Calendar API with empty request
+  When I send a request to Employee Calendar API with payload file "empcalendar-empty.json"
+  Then the response status code should be 400
+  And the response should contain field "responseMessageId"
+  And the response field "responseMessageId" should be ""
+  And the response should contain field "validationErrorMessage"
+  And the validation error message for "messageId" should be "must not be null"
+  And the validation error message for "empId" should be "must not be null"
+
+@Positive
+@TestCaseId:EC-009
+@Description:Verify Employee Calendar API handles empId with and without quotes
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-009
+Scenario: Verify Employee Calendar API handles empId with and without quotes
+  # UI steps to capture expected data
+  Given I login to the application with username "testuser" and password "password123"
+  And I navigate to the employee calendar screen
+  And I search for employee "${validEmpId}"
+  And I select cycle "${validCycleCode}"
+  And I capture employee calendar data from UI for employee "${validEmpId}" and cycle "${validCycleCode}"
+  # API call with empId without quotes
+  When I send a raw request to Employee Calendar API with payload:
+    """
+    {
+      "empId": ${validEmpId},
+      "cycleCode": ${validCycleCode},
+      "messageId": "${validMessageId}"
+    }
+    """
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "empCalendarList"
+  And I validate employee calendar information against UI data
+  # API call with empId with quotes
+  When I send a raw request to Employee Calendar API with payload:
+    """
+    {
+      "empId":"${validEmpId}",
+      "cycleCode":${validCycleCode},
+      "messageId":"${validMessageId}"
+    }
+    """
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "empCalendarList"
+  And I validate employee calendar information against UI data
+  # Cleanup
+  And I logout from the application
+
+@Positive
+@TestCaseId:EC-010
+@Description:Verify Employee Calendar API returns all cycles when cycleCode is empty
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-010
+Scenario: Verify Employee Calendar API returns all cycles when cycleCode is empty
+  # UI steps to capture expected data
+  Given I login to the application with username "testuser" and password "password123"
+  And I navigate to the employee calendar screen
+  And I search for employee "${validEmpId}"
+  And I capture all employee calendar cycles data from UI for employee "${validEmpId}"
+  # API call and validation
+  When I send a raw request to Employee Calendar API with payload:
+    """
+    {
+      "empId": ${validEmpId},
+      "cycleCode": "",
+      "messageId": "${validMessageId}"
+    }
+    """
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "empCalendarList"
+  And I validate employee calendar information against UI data
+  # Cleanup
+  And I logout from the application
+
+@Negative
+@TestCaseId:EC-011
+@Description:Verify Employee Calendar API returns error for invalid cycleCode format
+@dataProvider:dp-for-excel
+@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
+@dataProviderClass:com.mycompany.utils.DataProviderUtil
+@sheet:testData
+@key:EC-011
+Scenario: Verify Employee Calendar API with invalid cycleCode format
+  When I send a raw request to Employee Calendar API with payload:
+    """
+    {
+      "empId": ${validEmpId},
+      "cycleCode": "dfidfi",
+      "messageId": "${validMessageId}"
+    }
+    """
+  Then the response status code should be 500
+  And the response should contain field "errorMessage"
+  And the response field "errorMessage" should contain "Cannot deserialize value of type `java.lang.Integer` from String"
 }
 
-exampleApiUsage();
-
-The key improvements made are:
-
-Fixed the BrowserManager singleton pattern to properly avoid launching multiple browsers
-Made ConfigManager async with proper promise handling
-Added the requested getBaseUrl method with returnUrl parameter
-Created a complete API example with:
-
-Proxy support
-Client certificate authentication
-Auth token management
-GET and PUT operations
-
-
-
-These changes should resolve the issue with multiple browsers launching and provide the API example you requested.
