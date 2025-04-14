@@ -632,3 +632,317 @@ package com.qaf.framework.stepdefs;
 
 import static org.testng.Assert.*;
 
+import java.util.HashMap;
+import java.util.Map;
+
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qaf.framework.util.ApiClientUtil;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+/**
+ * Base step definitions for API testing.
+ * Provides common functionality for all API tests.
+ */
+public class ApiSteps {
+    
+    private static final Log logger = LogFactory.getLog(ApiSteps.class);
+    
+    /**
+     * Get the current API response from context
+     */
+    protected ApiResponse getResponse() {
+        return TestContextManager.getApiResponse();
+    }
+    
+    /**
+     * Set the current API response in context
+     */
+    protected void setResponse(ApiResponse response) {
+        TestContextManager.setApiResponse(response);
+    }
+    
+    /**
+     * Sends a request to an endpoint with a payload file.
+     * 
+     * @param method HTTP method (GET, POST, PUT, DELETE)
+     * @param endpoint API endpoint
+     * @param payloadFile payload file name
+     * @throws Exception if an error occurs
+     */
+    @QAFTestStep(description = "I send a {string} request to {string} with payload {string}")
+    public void sendRequestWithPayload(String method, String endpoint, String payloadFile) throws Exception {
+        logger.info("Sending " + method + " request to " + endpoint + " with payload " + payloadFile);
+        
+        try {
+            String payload = ApiClientUtil.readPayload(payloadFile);
+            ApiResponse response = null;
+            
+            switch (method.toUpperCase()) {
+                case "GET":
+                    response = ApiClientUtil.sendGetRequest(endpoint, new HashMap<>());
+                    break;
+                case "POST":
+                    response = ApiClientUtil.sendPostRequest(endpoint, payload, new HashMap<>());
+                    break;
+                case "PUT":
+                    response = ApiClientUtil.sendPutRequest(endpoint, payload, new HashMap<>());
+                    break;
+                case "DELETE":
+                    response = ApiClientUtil.sendDeleteRequest(endpoint, new HashMap<>());
+                    break;
+                default:
+                    Reporter.log("Error: Unsupported HTTP method: " + method);
+                    throw new IllegalArgumentException("Unsupported HTTP method: " + method);
+            }
+            
+            // Store the response in context
+            setResponse(response);
+            
+            Reporter.log("Request sent successfully");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending request: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response status code matches the expected value.
+     * 
+     * @param expectedStatus the expected HTTP status code
+     */
+    @QAFTestStep(description = "the response status code should be {expectedStatus}")
+    public void verifyStatusCode(int expectedStatus) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying status code: expected=" + expectedStatus + ", actual=" + response.getStatusCode());
+        try {
+            assertEquals(response.getStatusCode(), expectedStatus, "Response status code mismatch");
+            Reporter.log("Status code verification passed");
+        } catch (AssertionError e) {
+            Reporter.log("Status code verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response contains the specified text.
+     * 
+     * @param text the text to check for
+     */
+    @QAFTestStep(description = "the response should contain {string}")
+    public void responseShouldContain(String text) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains: " + text);
+        try {
+            assertTrue(response.responseContains(text), "Response does not contain: " + text);
+            Reporter.log("Response contains the specified text");
+        } catch (AssertionError e) {
+            Reporter.log("Response text verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response contains the specified field.
+     * 
+     * @param field the field to check for
+     */
+    @QAFTestStep(description = "the response should contain field {string}")
+    public void responseShouldContainField(String field) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response contains field: " + field);
+        try {
+            assertTrue(response.hasJsonField(field), "Response does not contain field: " + field);
+            Reporter.log("Response contains the specified field");
+        } catch (AssertionError e) {
+            Reporter.log("Field verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response field has the expected value.
+     * 
+     * @param field the field to check
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the response field {string} should be {string}")
+    public void fieldShouldHaveValue(String field, String expectedValue) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field " + field + ": expected=" + expectedValue + ", actual=" + actualValue);
+        try {
+            assertEquals(actualValue, expectedValue, "Field value mismatch for: " + field);
+            Reporter.log("Field value verification passed");
+        } catch (AssertionError e) {
+            Reporter.log("Field value verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response field contains the expected text.
+     * 
+     * @param field the field to check
+     * @param expectedText the text that should be contained
+     */
+    @QAFTestStep(description = "the response field {string} should contain {string}")
+    public void fieldShouldContain(String field, String expectedText) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field " + field + " contains: " + expectedText);
+        try {
+            assertTrue(actualValue != null && actualValue.contains(expectedText), 
+                      "Field " + field + " does not contain: " + expectedText);
+            Reporter.log("Field content verification passed");
+        } catch (AssertionError e) {
+            Reporter.log("Field content verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Adds a key-value pair to the test data map.
+     * 
+     * @param key the key
+     * @param value the value
+     */
+    @QAFTestStep(description = "I set {string} to {string} in test data")
+    public void setTestData(String key, String value) {
+        TestContextManager.setTestData(key, value);
+        Reporter.log("Set test data: " + key + "=" + value);
+    }
+    
+    /**
+     * Clears all test data.
+     */
+    @QAFTestStep(description = "I clear all test data")
+    public void clearTestData() {
+        TestContextManager.clearTestData();
+        Reporter.log("Cleared all test data");
+    }
+    
+    /**
+     * Verifies that the response is successful (status code 2xx).
+     */
+    @QAFTestStep(description = "the response should be successful")
+    public void responseShouldBeSuccessful() {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        Reporter.log("Verifying response is successful");
+        try {
+            assertTrue(response.isSuccessful(), "Response is not successful. Status code: " + response.getStatusCode());
+            Reporter.log("Response successful verification passed");
+        } catch (AssertionError e) {
+            Reporter.log("Response successful verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the response contains a non-empty array field.
+     * 
+     * @param arrayField the array field to check
+     */
+    @QAFTestStep(description = "the response should contain a non-empty {string} array")
+    public void responseShouldContainNonEmptyArray(String arrayField) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        int arraySize = response.getArraySize(arrayField);
+        Reporter.log("Verifying array " + arrayField + " is non-empty. Size: " + arraySize);
+        try {
+            assertTrue(arraySize > 0, "Array " + arrayField + " is empty or not found");
+            Reporter.log("Non-empty array verification passed");
+        } catch (AssertionError e) {
+            Reporter.log("Non-empty array verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies that the array field has the expected size.
+     * 
+     * @param arrayField the array field to check
+     * @param expectedSize the expected size
+     */
+    @QAFTestStep(description = "the {string} array should have size {int}")
+    public void arrayShouldHaveSize(String arrayField, int expectedSize) {
+        ApiResponse response = getResponse();
+        if (response == null) {
+            Reporter.log("Assertion Error: No response available. Make sure to send a request first.");
+            fail("No response available. Make sure to send a request first.");
+            return;
+        }
+        
+        int actualSize = response.getArraySize(arrayField);
+        Reporter.log("Verifying array " + arrayField + " size: expected=" + expectedSize + ", actual=" + actualSize);
+        try {
+            assertEquals(actualSize, expectedSize, "Array size mismatch for: " + arrayField);
+            Reporter.log("Array size verification passed");
+        } catch (AssertionError e) {
+            Reporter.log("Array size verification failed: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Shows the current test data (for debugging).
+     */
+    @QAFTestStep(description = "I print all test data for debugging")
+    public void printAllTestData() {
+        Map<String, Object> data = TestContextManager.getTestData();
+        Reporter.log("=== Current Test Data ===");
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            Reporter.log(entry.getKey() + " = " + entry.getValue());
+        }
+    }
+}
+
