@@ -707,26 +707,47 @@ import org.apache.commons.logging.LogFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Configuration class for API endpoints.
+ * Centralizes all API endpoint configurations.
  */
 public class ApiConfig {
     
     private static final Log logger = LogFactory.getLog(ApiConfig.class);
     private static final PropertyUtil props = ConfigurationManager.getBundle();
-    
-    // API endpoint constants
     private static final Map<String, String> ENDPOINTS = new HashMap<>();
     
+    // Initialize endpoints when the class is loaded
     static {
-        // Initialize default endpoints
-        ENDPOINTS.put("Employee Calendar", "/api/v1/emp/empcalendar");
-        ENDPOINTS.put("Deal Static Info", "/api/v1/abo/dealstaticinfo");
-        ENDPOINTS.put("Asset Layout", "/api/v1/spc/assetlayout");
-        
-        // Load additional endpoints from properties
+        loadAllEndpoints();
+    }
+    
+    /**
+     * Loads all endpoints - both default endpoints and those from properties.
+     */
+    private static void loadAllEndpoints() {
+        // Load default endpoints from properties first (if defined)
         loadEndpointsFromProperties();
+        
+        // Define fallback endpoints only if they aren't already defined in properties
+        setDefaultEndpointIfNotExists("Employee Calendar", "/api/v1/emp/empcalendar");
+        setDefaultEndpointIfNotExists("Deal Static Info", "/api/v1/abo/dealstaticinfo");
+        setDefaultEndpointIfNotExists("Asset Layout", "/api/v1/spc/assetlayout");
+    }
+    
+    /**
+     * Sets a default endpoint only if it doesn't already exist.
+     * 
+     * @param apiName the API name
+     * @param endpoint the default endpoint
+     */
+    private static void setDefaultEndpointIfNotExists(String apiName, String endpoint) {
+        if (!ENDPOINTS.containsKey(apiName)) {
+            ENDPOINTS.put(apiName, endpoint);
+            logger.info("Set default endpoint: " + apiName + " = " + endpoint);
+        }
     }
     
     /**
@@ -734,7 +755,12 @@ public class ApiConfig {
      */
     private static void loadEndpointsFromProperties() {
         String prefix = "api.endpoint.";
-        for (String key : props.getKeys(prefix)) {
+        
+        // Get all property keys
+        Set<String> allKeys = props.getPropertyKeys();
+        
+        // Filter keys that start with the prefix
+        for (String key : allKeys) {
             if (key.startsWith(prefix)) {
                 String name = key.substring(prefix.length());
                 String endpoint = props.getString(key);
