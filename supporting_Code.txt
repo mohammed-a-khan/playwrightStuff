@@ -1531,4 +1531,117 @@ public class GenericApiService {
         return headers;
     }
 }
-
+/**
+ * Enhanced method to compare expected data with API response.
+ * Uses key fields to match records rather than relying on order.
+ * 
+ * @param dataType the type of data to validate
+ * @param responseArrayPath the path to the array in the response
+ * @param keyFields array of field names to use for matching records
+ * @return validation result with details
+ */
+public static ValidationResult validateApiResponseAgainstUiData(String dataType, String responseArrayPath, String... keyFields) {
+    ApiResponse response = getLastApiResponse();
+    if (response == null) {
+        return new ValidationResult(false, "No API response available");
+    }
+    
+    List<Map<String, String>> expectedData = getUiCapturedData(dataType);
+    if (expectedData == null || expectedData.isEmpty()) {
+        return new ValidationResult(false, "No expected data available for type: " + dataType);
+    }
+    
+    JSONObject jsonResponse = response.getJsonObject();
+    if (jsonResponse == null) {
+        return new ValidationResult(false, "Invalid JSON response");
+    }
+    
+    if (!jsonResponse.has(responseArrayPath) || jsonResponse.isNull(responseArrayPath)) {
+        return new ValidationResult(false, "Response does not contain path: " + responseArrayPath);
+    }
+    
+    JSONArray responseArray = jsonResponse.getJSONArray(responseArrayPath);
+    if (responseArray.length() == 0) {
+        return new ValidationResult(false, responseArrayPath + " array is empty");
+    }
+    
+    // Track validation issues
+    ValidationResult result = new ValidationResult(true, "Validation successful");
+    
+    // Convert response array to a list of maps for easier processing
+    List<Map<String, Object>> actualRecords = new ArrayList<>();
+    for (int i = 0; i < responseArray.length(); i++) {
+        JSONObject obj = responseArray.getJSONObject(i);
+        Map<String, Object> map = new HashMap<>();
+        for (String key : obj.keySet()) {
+            map.put(key, obj.get(key));
+        }
+        actualRecords.add(map);
+    }
+    
+    // Default to using all fields as key fields if none specified
+    if (keyFields == null || keyFields.length == 0) {
+        // Use first record to determine fields
+        if (!expectedData.isEmpty() && !expectedData.get(0).isEmpty()) {
+            keyFields = expectedData.get(0).keySet().toArray(new String[0]);
+        }
+    }
+    
+    // For each expected record, find a matching actual record
+    for (Map<String, String> expectedRecord : expectedData) {
+        boolean foundMatch = false;
+        
+        // Create a key for this record
+        StringBuilder recordKey = new StringBuilder();
+        for (String keyField : keyFields) {
+            if (expectedRecord.containsKey(keyField)) {
+                recordKey.append(keyField).append("=").append(expectedRecord.get(keyField)).append(";");
+            }
+        }
+        String recordKeyStr = recordKey.toString();
+        
+        // Find matching record in actual data
+        for (Map<String, Object> actualRecord : actualRecords) {
+            // Create key for actual record
+            StringBuilder actualKey = new StringBuilder();
+            for (String keyField : keyFields) {
+                if (actualRecord.containsKey(keyField)) {
+                    actualKey.append(keyField).append("=").append(actualRecord.get(keyField)).append(";");
+                }
+            }
+            String actualKeyStr = actualKey.toString();
+            
+            // If keys match, compare all fields
+            if (recordKeyStr.equals(actualKeyStr)) {
+                foundMatch = true;
+                
+                // Compare all fields
+                for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
+                    String fieldName = entry.getKey();
+                    String expectedValue = entry.getValue();
+                    
+                    if (!actualRecord.containsKey(fieldName)) {
+                        result.addIssue("Field '" + fieldName + "' missing in matching response record " + recordKeyStr);
+                        continue;
+                    }
+                    
+                    Object actualObj = actualRecord.get(fieldName);
+                    String actualValue = actualObj != null ? actualObj.toString() : "null";
+                    
+                    if (!expectedValue.equals(actualValue)) {
+                        result.addIssue("Field '" + fieldName + "' mismatch in matching record " + recordKeyStr + 
+                                       " - Expected: " + expectedValue + ", Actual: " + actualValue);
+                    }
+                }
+                
+                break; // Found matching record, no need to check others
+            }
+        }
+        
+        if (!foundMatch) {
+            result.addIssue("No matching record found for expected record with key: " + recordKeyStr);
+        }
+    }
+    
+    return result;
+}
