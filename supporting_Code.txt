@@ -1,396 +1,1341 @@
-package com.qaf.framework.service;
+ApiResponse.java
+--------------------------------
+package com.qaf.framework.util;
 
-import com.qaf.framework.util.ApiClientUtil;
-import com.qaf.framework.util.ApiResponse;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
-
-import java.util.Map;
-
-/**
- * Service class for Employee Calendar API operations.
- */
-public class EmpCalendarService extends ApiService {
-    
-    private static final Log logger = LogFactory.getLog(EmpCalendarService.class);
-    private static final String ENDPOINT = "/api/v1/emp/empcalendar";
-    
-    /**
-     * Default constructor.
-     */
-    public EmpCalendarService() {
-        super();
-    }
-    
-    /**
-     * Gets employee calendar information for the specified employee ID and cycle code.
-     * 
-     * @param empId the employee ID
-     * @param cycleCode the cycle code in YYYYMM format
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse getEmpCalendar(Integer empId, Integer cycleCode) {
-        JSONObject payload = new JSONObject();
-        payload.put("empId", empId);
-        payload.put("cycleCode", cycleCode);
-        payload.put("messageId", ApiClientUtil.generateMessageId());
-        
-        logger.info("Getting employee calendar for empId: " + empId + ", cycleCode: " + cycleCode);
-        return post(ENDPOINT, payload.toString());
-    }
-    
-    /**
-     * Gets employee calendar information with a custom message ID.
-     * 
-     * @param empId the employee ID
-     * @param cycleCode the cycle code in YYYYMM format
-     * @param messageId the message ID to use
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse getEmpCalendarWithMessageId(Integer empId, Integer cycleCode, String messageId) {
-        JSONObject payload = new JSONObject();
-        payload.put("empId", empId);
-        payload.put("cycleCode", cycleCode);
-        payload.put("messageId", messageId);
-        
-        logger.info("Getting employee calendar for empId: " + empId + ", cycleCode: " + cycleCode + " with messageId: " + messageId);
-        return post(ENDPOINT, payload.toString());
-    }
-    
-    /**
-     * Gets employee calendar information without providing a cycle code (to fetch all cycles).
-     * 
-     * @param empId the employee ID
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse getAllEmpCalendars(Integer empId) {
-        JSONObject payload = new JSONObject();
-        payload.put("empId", empId);
-        payload.put("messageId", ApiClientUtil.generateMessageId());
-        
-        logger.info("Getting all employee calendars for empId: " + empId);
-        return post(ENDPOINT, payload.toString());
-    }
-    
-    /**
-     * Gets employee calendar information with a full data map.
-     * 
-     * @param data map containing request data
-     * @return ApiResponse containing the response
-     */
-    public ApiResponse getEmpCalendar(Map<String, Object> data) {
-        // Ensure messageId is present if not explicitly set to empty
-        if (!data.containsKey("messageId")) {
-            data.put("messageId", ApiClientUtil.generateMessageId());
-        }
-        
-        JSONObject payload = new JSONObject();
-        for (Map.Entry<String, Object> entry : data.entrySet()) {
-            payload.put(entry.getKey(), entry.getValue());
-        }
-        
-        logger.info("Getting employee calendar with data: " + data);
-        return post(ENDPOINT, payload.toString());
-    }
-}
-
-package com.qaf.framework.stepdefs;
-
-import static org.testng.Assert.*;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
-import com.qaf.framework.util.ApiResponse;
-import com.qaf.framework.util.TestContextManager;
-import com.qmetry.qaf.automation.step.QAFTestStep;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qaf.framework.service.EmpCalendarService;
-import com.qaf.framework.util.ApiClientUtil;
+/**
+ * Enhanced class representing an API response with improved JSON handling.
+ */
+public class ApiResponse {
+    private final int statusCode;
+    private final String responseBody;
+    private final Map<String, List<String>> headers;
+    private JSONObject jsonObject;
+    private JSONArray jsonArray;
 
+    /**
+     * Constructor for ApiResponse.
+     * 
+     * @param statusCode the HTTP status code
+     * @param responseBody the response body as a string
+     * @param headers response headers
+     */
+    public ApiResponse(int statusCode, String responseBody, Map<String, List<String>> headers) {
+        this.statusCode = statusCode;
+        this.responseBody = responseBody;
+        this.headers = headers;
+        
+        // Parse JSON if possible
+        if (responseBody != null && !responseBody.isEmpty()) {
+            try {
+                if (responseBody.trim().startsWith("{")) {
+                    this.jsonObject = new JSONObject(responseBody);
+                } else if (responseBody.trim().startsWith("[")) {
+                    this.jsonArray = new JSONArray(responseBody);
+                }
+            } catch (JSONException e) {
+                // Not valid JSON, keep as null
+            }
+        }
+    }
+
+    /**
+     * Gets the HTTP status code.
+     * 
+     * @return the HTTP status code
+     */
+    public int getStatusCode() {
+        return statusCode;
+    }
+
+    /**
+     * Gets the response body as a string.
+     * 
+     * @return the response body
+     */
+    public String getResponseBody() {
+        return responseBody;
+    }
+
+    /**
+     * Gets the response headers.
+     * 
+     * @return map of header names to values
+     */
+    public Map<String, List<String>> getHeaders() {
+        return headers;
+    }
+
+    /**
+     * Checks if the response was successful (status code 2xx).
+     * 
+     * @return true if the status code is between 200 and 299
+     */
+    public boolean isSuccessful() {
+        return statusCode >= 200 && statusCode < 300;
+    }
+
+    /**
+     * Gets a header value.
+     * 
+     * @param headerName the header name
+     * @return the first value of the header, or null if not found
+     */
+    public String getHeader(String headerName) {
+        List<String> values = headers.get(headerName);
+        return (values != null && !values.isEmpty()) ? values.get(0) : null;
+    }
+
+    /**
+     * Gets all header values.
+     * 
+     * @param headerName the header name
+     * @return list of values for the header, or empty list if not found
+     */
+    public List<String> getHeaders(String headerName) {
+        List<String> values = headers.get(headerName);
+        return values != null ? values : new ArrayList<>();
+    }
+
+    /**
+     * Gets the response as a JSONObject.
+     * 
+     * @return JSONObject representing the response, or null if not valid JSON object
+     */
+    public JSONObject getJsonObject() {
+        return jsonObject;
+    }
+
+    /**
+     * Gets the response as a JSONArray.
+     * 
+     * @return JSONArray representing the response, or null if not valid JSON array
+     */
+    public JSONArray getJsonArray() {
+        return jsonArray;
+    }
+
+    /**
+     * Gets a value from the JSON response by key.
+     * 
+     * @param key the JSON key
+     * @return the value as a string, or null if not found
+     */
+    public String getValueFromJson(String key) {
+        if (jsonObject != null && jsonObject.has(key)) {
+            Object value = jsonObject.get(key);
+            return value == JSONObject.NULL ? null : value.toString();
+        }
+        return null;
+    }
+
+    /**
+     * Checks if a field exists in the JSON response.
+     * 
+     * @param field the field name
+     * @return true if the field exists, false otherwise
+     */
+    public boolean hasJsonField(String field) {
+        return jsonObject != null && jsonObject.has(field);
+    }
+
+    /**
+     * Gets a nested value from the JSON response using dot notation.
+     * 
+     * @param path the dot-notated path (e.g., "data.user.name")
+     * @return the value as a string, or null if not found
+     */
+    public String getNestedValue(String path) {
+        if (jsonObject == null || path == null || path.isEmpty()) {
+            return null;
+        }
+        
+        try {
+            String[] parts = path.split("\\.");
+            Object current = jsonObject;
+            
+            for (String part : parts) {
+                if (current instanceof JSONObject) {
+                    JSONObject currentJson = (JSONObject) current;
+                    if (!currentJson.has(part)) {
+                        return null;
+                    }
+                    current = currentJson.get(part);
+                } else {
+                    return null;
+                }
+            }
+            
+            return current == JSONObject.NULL ? null : current.toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Checks if the response body contains a specific text.
+     * 
+     * @param text the text to check for
+     * @return true if the response body contains the text
+     */
+    public boolean responseContains(String text) {
+        return responseBody != null && responseBody.contains(text);
+    }
+    
+    /**
+     * Gets an item from a JSON array in the response.
+     * 
+     * @param arrayField the field name of the array
+     * @param index the index of the item in the array
+     * @return the JSON object at the specified index, or null if not found
+     */
+    public JSONObject getArrayItem(String arrayField, int index) {
+        try {
+            if (jsonObject != null && jsonObject.has(arrayField)) {
+                JSONArray array = jsonObject.getJSONArray(arrayField);
+                if (index >= 0 && index < array.length()) {
+                    return array.getJSONObject(index);
+                }
+            }
+        } catch (Exception e) {
+            // Not a valid JSON structure or not an object at that index
+        }
+        return null;
+    }
+    
+    /**
+     * Gets all items from a JSON array in the response as a list of maps.
+     * 
+     * @param arrayField the field name of the array
+     * @return list of maps representing the array items, or empty list if not found
+     */
+    public List<Map<String, Object>> getArrayItems(String arrayField) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        
+        try {
+            if (jsonObject != null && jsonObject.has(arrayField)) {
+                JSONArray array = jsonObject.getJSONArray(arrayField);
+                for (int i = 0; i < array.length(); i++) {
+                    if (array.get(i) instanceof JSONObject) {
+                        JSONObject item = array.getJSONObject(i);
+                        Map<String, Object> itemMap = new HashMap<>();
+                        for (String key : item.keySet()) {
+                            itemMap.put(key, item.get(key));
+                        }
+                        result.add(itemMap);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Not a valid JSON structure
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Gets the size of an array in the JSON response.
+     * 
+     * @param arrayField the field name of the array
+     * @return the size of the array, or -1 if not found
+     */
+    public int getArraySize(String arrayField) {
+        try {
+            if (jsonObject != null && jsonObject.has(arrayField)) {
+                JSONArray array = jsonObject.getJSONArray(arrayField);
+                return array.length();
+            }
+        } catch (Exception e) {
+            // Not a valid JSON structure
+        }
+        return -1;
+    }
+    
+    /**
+     * Checks if JSON response matches the expected schema.
+     * 
+     * @param expectedSchema map of field names to expected data types
+     * @return true if the schema matches, false otherwise
+     */
+    public boolean matchesSchema(Map<String, Class<?>> expectedSchema) {
+        if (jsonObject == null || expectedSchema == null || expectedSchema.isEmpty()) {
+            return false;
+        }
+        
+        for (Map.Entry<String, Class<?>> entry : expectedSchema.entrySet()) {
+            String field = entry.getKey();
+            Class<?> expectedType = entry.getValue();
+            
+            if (!jsonObject.has(field)) {
+                return false;
+            }
+            
+            Object value = jsonObject.get(field);
+            
+            if (value == JSONObject.NULL) {
+                continue; // Null values are allowed
+            }
+            
+            // Check if the value is of the expected type
+            if (expectedType == String.class && !(value instanceof String)) {
+                return false;
+            } else if (expectedType == Integer.class && !(value instanceof Integer)) {
+                return false;
+            } else if (expectedType == Long.class && !(value instanceof Long)) {
+                return false;
+            } else if (expectedType == Double.class && !(value instanceof Double)) {
+                return false;
+            } else if (expectedType == Boolean.class && !(value instanceof Boolean)) {
+                return false;
+            } else if (expectedType == JSONObject.class && !(value instanceof JSONObject)) {
+                return false;
+            } else if (expectedType == JSONArray.class && !(value instanceof JSONArray)) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Extracts data from the response based on a pattern.
+     * 
+     * @param pattern the regex pattern
+     * @param groupIndex the group index to extract
+     * @return the extracted data, or null if not found
+     */
+    public String extractDataWithPattern(String pattern, int groupIndex) {
+        if (responseBody == null || responseBody.isEmpty()) {
+            return null;
+        }
+        
+        java.util.regex.Matcher matcher = Pattern.compile(pattern).matcher(responseBody);
+        if (matcher.find() && groupIndex <= matcher.groupCount()) {
+            return matcher.group(groupIndex);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Converts the response to a map.
+     * 
+     * @return map representation of the response, or empty map if not valid JSON
+     */
+    public Map<String, Object> toMap() {
+        Map<String, Object> result = new HashMap<>();
+        
+        if (jsonObject != null) {
+            for (String key : jsonObject.keySet()) {
+                result.put(key, jsonObject.get(key));
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Returns a string representation of the response.
+     * 
+     * @return string representation of the response
+     */
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Status Code: ").append(statusCode).append("\n");
+        
+        if (headers != null && !headers.isEmpty()) {
+            sb.append("Headers:\n");
+            for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+                if (entry.getKey() != null) { // Skip null key which contains status line
+                    sb.append("  ").append(entry.getKey()).append(": ").append(entry.getValue()).append("\n");
+                }
+            }
+        }
+        
+        sb.append("Body: ").append(responseBody);
+        return sb.toString();
+    }
+}
+
+ApiClientUtil.java
+---------------------
+
+package com.qaf.framework.util;
+
+import com.qaf.framework.config.ApiConfig;
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import org.apache.commons.io.IOUtils;
+import org.json.JSONObject;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+
+import javax.net.ssl.*;
+import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Enhanced utility class for making API requests with improved template processing.
+ */
+public class ApiClientUtil {
+    private static final Log logger = LogFactory.getLog(ApiClientUtil.class);
+    private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\$\\{([^}]+)\\}");
+
+    /**
+     * Sends an HTTP request to the specified endpoint.
+     * 
+     * @param endpoint the API endpoint (path)
+     * @param method HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param payload request payload (for POST, PUT, PATCH)
+     * @param headers request headers
+     * @return ApiResponse containing the response
+     * @throws Exception if there's an error making the request
+     */
+    public static ApiResponse sendRequest(String endpoint, String method, String payload, Map<String, String> headers) throws Exception {
+        // Determine if endpoint is a full URL or just a path
+        String fullUrl;
+        if (endpoint.startsWith("http")) {
+            fullUrl = endpoint;
+        } else {
+            // If it's just a path, prefix with the base URL
+            String baseUrl = ApiConfig.getBaseUrl();
+            
+            // Ensure endpoint starts with / if base URL doesn't end with /
+            if (!baseUrl.endsWith("/") && !endpoint.startsWith("/")) {
+                endpoint = "/" + endpoint;
+            }
+            
+            fullUrl = baseUrl + endpoint;
+        }
+        
+        logger.info("Sending " + method + " request to: " + fullUrl);
+        if (payload != null && !payload.isEmpty()) {
+            logger.debug("Request payload: " + payload);
+        }
+        
+        // Create connection
+        URL url = new URL(fullUrl);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+
+        // Configure SSL for HTTPS connections
+        if (conn instanceof HttpsURLConnection httpsConn) {
+            logger.info("Configuring HTTPS connection");
+            
+            // Check if certificates are required
+            boolean useCustomCert = ConfigurationManager.getBundle().getBoolean("ssl.custom.cert", false);
+            if (useCustomCert) {
+                httpsConn.setSSLSocketFactory(getSSLSocketFactory());
+            } else {
+                // Trust all certificates for testing environments
+                TrustManager[] trustAllCerts = new TrustManager[] { 
+                    new X509TrustManager() {
+                        public X509Certificate[] getAcceptedIssuers() { return null; }
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                    }
+                };
+                
+                SSLContext sc = SSLContext.getInstance("TLS");
+                sc.init(null, trustAllCerts, new SecureRandom());
+                httpsConn.setSSLSocketFactory(sc.getSocketFactory());
+                httpsConn.setHostnameVerifier((hostname, session) -> true);
+            }
+        }
+
+        // Configure proxy if enabled
+        boolean useProxy = ConfigurationManager.getBundle().getBoolean("proxy.enabled", false);
+        if (useProxy) {
+            String proxyHost = ConfigurationManager.getBundle().getString("proxy.host");
+            String proxyPort = ConfigurationManager.getBundle().getString("proxy.port");
+            logger.info("Using proxy: " + proxyHost + ":" + proxyPort);
+            System.setProperty("https.proxyHost", proxyHost);
+            System.setProperty("https.proxyPort", proxyPort);
+        }
+
+        // Configure request
+        conn.setRequestMethod(method.toUpperCase());
+        conn.setDoInput(true);
+        
+        // Set default headers if none provided
+        if (headers == null) {
+            headers = new HashMap<>();
+        }
+        
+        // Add default content type if not specified
+        if (!headers.containsKey("Content-Type")) {
+            headers.put("Content-Type", "application/json");
+        }
+        
+        // Add default accept if not specified  
+        if (!headers.containsKey("Accept")) {
+            headers.put("Accept", "application/json");
+        }
+        
+        // Set headers
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            conn.setRequestProperty(header.getKey(), header.getValue());
+        }
+
+        // Set timeout properties
+        int timeout = ConfigurationManager.getBundle().getInt("connection.timeout", 30000);
+        conn.setConnectTimeout(timeout);
+        conn.setReadTimeout(timeout);
+
+        // Send payload for POST, PUT, PATCH requests
+        if (payload != null && !payload.isEmpty() && 
+            (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT") || method.equalsIgnoreCase("PATCH"))) {
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(payload.getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            }
+        }
+
+        // Get response
+        int statusCode = conn.getResponseCode();
+        logger.info("Response status code: " + statusCode);
+
+        // Read response body
+        String responseBody;
+        try (InputStream is = (statusCode >= 200 && statusCode < 300) ? 
+             conn.getInputStream() : conn.getErrorStream()) {
+            if (is != null) {
+                responseBody = IOUtils.toString(is, StandardCharsets.UTF_8);
+            } else {
+                responseBody = "";
+            }
+        }
+        
+        if (!responseBody.isEmpty()) {
+            logger.debug("Response body: " + responseBody);
+        }
+        
+        // Create and return the API response
+        return new ApiResponse(statusCode, responseBody, conn.getHeaderFields());
+    }
+
+    /**
+     * Creates an SSLSocketFactory with the certificate from properties.
+     * 
+     * @return SSLSocketFactory configured with the certificate
+     * @throws Exception if there's an error setting up the SSL context
+     */
+    private static SSLSocketFactory getSSLSocketFactory() throws Exception {
+        String certPath = ConfigurationManager.getBundle().getString("certificate.path");
+        String certPassword = ConfigurationManager.getBundle().getString("certificate.password");
+
+        logger.info("Setting up SSL with certificate: " + certPath);
+        
+        // Check if certificate file exists
+        File certFile = new File(certPath);
+        if (!certFile.exists()) {
+            logger.error("Certificate file not found: " + certPath);
+            throw new FileNotFoundException("Certificate file not found: " + certPath);
+        }
+
+        // Load the keystore
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        try (InputStream keyInput = new FileInputStream(certPath)) {
+            keyStore.load(keyInput, certPassword.toCharArray());
+        }
+
+        // Set up key manager
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
+        kmf.init(keyStore, certPassword.toCharArray());
+
+        // Set up SSL context
+        SSLContext sslContext = SSLContext.getInstance("TLSv1.2");
+        sslContext.init(kmf.getKeyManagers(), null, new SecureRandom());
+        return sslContext.getSocketFactory();
+    }
+
+    /**
+     * Loads a payload file from the configured payload directory.
+     * 
+     * @param fileName name of the payload file
+     * @return the content of the payload file as a string
+     * @throws IOException if there's an error reading the file
+     */
+    public static String readPayload(String fileName) throws IOException {
+        // If no extension is provided, assume .json
+        if (!fileName.contains(".")) {
+            fileName = fileName + ".json";
+        }
+        
+        // Determine payload directory
+        String payloadDir = ConfigurationManager.getBundle().getString("payload.dir", "resources/payloads");
+        String path = payloadDir + "/" + fileName;
+        
+        File payloadFile = new File(path);
+        if (!payloadFile.exists()) {
+            logger.error("Payload file not found: " + path);
+            throw new FileNotFoundException("Payload file not found: " + path);
+        }
+        
+        logger.info("Reading payload from: " + path);
+        try (InputStream is = new FileInputStream(path)) {
+            return IOUtils.toString(is, StandardCharsets.UTF_8);
+        }
+    }
+    
+    /**
+     * Processes a template by substituting variables with values from a data map.
+     * This enhanced version handles different data types appropriately.
+     * 
+     * @param template the template string with placeholders like ${variable}
+     * @param data the map containing values to substitute
+     * @return the processed template with all placeholders replaced
+     */
+    public static String processTemplate(String template, Map<String, Object> data) {
+        if (template == null || data == null || data.isEmpty()) {
+            return template;
+        }
+        
+        StringBuilder result = new StringBuilder(template);
+        Matcher matcher = VARIABLE_PATTERN.matcher(template);
+        
+        // Track offsets as we modify the string
+        int offset = 0;
+        
+        while (matcher.find()) {
+            String placeholder = matcher.group(0);
+            String key = matcher.group(1);
+            
+            if (data.containsKey(key)) {
+                Object value = data.get(key);
+                String replacement;
+                
+                // Handle different types appropriately
+                if (value == null) {
+                    replacement = "null";  // JSON null
+                } else if (value instanceof Number || value instanceof Boolean) {
+                    replacement = value.toString();  // Unquoted for numbers and booleans
+                } else {
+                    // For strings and other types, preserve as string
+                    replacement = value.toString();
+                    
+                    // Check if we need to add quotes based on context
+                    int placeholderStart = matcher.start() + offset;
+                    int placeholderEnd = matcher.end() + offset;
+                    
+                    // If not already in quotes, add them for string values
+                    boolean needsQuotes = true;
+                    
+                    // Check if already in quotes
+                    if (placeholderStart > 0 && placeholderEnd < result.length()) {
+                        char before = result.charAt(placeholderStart - 1);
+                        char after = result.charAt(placeholderEnd);
+                        if (before == '"' && after == '"') {
+                            needsQuotes = false;
+                        }
+                    }
+                    
+                    if (needsQuotes) {
+                        replacement = "\"" + replacement + "\"";
+                    }
+                }
+                
+                // Replace the placeholder
+                int start = matcher.start() + offset;
+                int end = matcher.end() + offset;
+                result.replace(start, end, replacement);
+                
+                // Update offset for next replacement
+                offset += replacement.length() - placeholder.length();
+            }
+        }
+        
+        return result.toString();
+    }
+    
+    /**
+     * Generates a unique message ID for API requests.
+     * 
+     * @return a unique message ID string
+     */
+    public static String generateMessageId() {
+        return "Test-" + UUID.randomUUID().toString();
+    }
+    
+    /**
+     * Creates a basic API payload with common fields.
+     * 
+     * @param additionalFields additional fields to include in the payload
+     * @return JSON string payload
+     */
+    public static String createBasicPayload(Map<String, Object> additionalFields) {
+        JSONObject payload = new JSONObject();
+        payload.put("messageId", generateMessageId());
+        
+        if (additionalFields != null) {
+            for (Map.Entry<String, Object> entry : additionalFields.entrySet()) {
+                payload.put(entry.getKey(), entry.getValue());
+            }
+        }
+        
+        return payload.toString();
+    }
+}
+
+ApiConfig.java
+-----------------
+package com.qaf.framework.config;
+
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import com.qmetry.qaf.automation.util.PropertyUtil;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Configuration class for API endpoints.
+ */
+public class ApiConfig {
+    
+    private static final Log logger = LogFactory.getLog(ApiConfig.class);
+    private static final PropertyUtil props = ConfigurationManager.getBundle();
+    
+    // API endpoint constants
+    private static final Map<String, String> ENDPOINTS = new HashMap<>();
+    
+    static {
+        // Initialize default endpoints
+        ENDPOINTS.put("Employee Calendar", "/api/v1/emp/empcalendar");
+        ENDPOINTS.put("Deal Static Info", "/api/v1/abo/dealstaticinfo");
+        ENDPOINTS.put("Asset Layout", "/api/v1/spc/assetlayout");
+        
+        // Load additional endpoints from properties
+        loadEndpointsFromProperties();
+    }
+    
+    /**
+     * Loads API endpoints from properties file.
+     */
+    private static void loadEndpointsFromProperties() {
+        String prefix = "api.endpoint.";
+        for (String key : props.getKeys(prefix)) {
+            if (key.startsWith(prefix)) {
+                String name = key.substring(prefix.length());
+                String endpoint = props.getString(key);
+                ENDPOINTS.put(name, endpoint);
+                logger.info("Loaded API endpoint from properties: " + name + " = " + endpoint);
+            }
+        }
+    }
+    
+    /**
+     * Gets the endpoint URL for the specified API name.
+     * 
+     * @param apiName the API name
+     * @return the endpoint URL, or null if not found
+     */
+    public static String getEndpoint(String apiName) {
+        return ENDPOINTS.get(apiName);
+    }
+    
+    /**
+     * Adds or updates an endpoint.
+     * 
+     * @param apiName the API name
+     * @param endpoint the endpoint URL
+     */
+    public static void setEndpoint(String apiName, String endpoint) {
+        ENDPOINTS.put(apiName, endpoint);
+        logger.info("Added/updated API endpoint: " + apiName + " = " + endpoint);
+    }
+    
+    /**
+     * Gets the base URL for API requests.
+     * 
+     * @return the base URL
+     */
+    public static String getBaseUrl() {
+        return props.getString("base.url", "https://api.example.com");
+    }
+    
+    /**
+     * Gets all configured endpoints.
+     * 
+     * @return map of API names to endpoints
+     */
+    public static Map<String, String> getAllEndpoints() {
+        return new HashMap<>(ENDPOINTS);
+    }
+}
+
+GenericApiSteps:
+-----------------
+package com.qaf.framework.stepdefs;
+
+import com.qaf.framework.config.ApiConfig;
+import com.qaf.framework.service.GenericApiService;
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qaf.framework.util.ApiClientUtil;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.testng.Assert;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Generic step definitions for API testing.
+ */
+public class GenericApiSteps {
+    
+    private static final Log logger = LogFactory.getLog(GenericApiSteps.class);
+    
+    /**
+     * Sets up testing for a specific API.
+     * 
+     * @param apiName the API name as defined in ApiConfig
+     */
+    @QAFTestStep(description = "I am testing the {apiName} API")
+    public void setupApiTest(String apiName) {
+        String endpoint = ApiConfig.getEndpoint(apiName);
+        if (endpoint == null) {
+            throw new IllegalArgumentException("Unknown API name: " + apiName);
+        }
+        
+        TestContextManager.setCurrentApi(apiName, endpoint);
+        Reporter.log("Set up for testing the " + apiName + " API at endpoint: " + endpoint);
+    }
+    
+    /**
+     * Sets a value in the test data map.
+     * 
+     * @param key the key
+     * @param value the value
+     */
+    @QAFTestStep(description = "I set test data {key} to {value}")
+    public void setTestDataValue(String key, String value) {
+        Object processedValue = value;
+        
+        // Try to convert to number if possible
+        try {
+            if (value.contains(".")) {
+                processedValue = Double.parseDouble(value);
+            } else {
+                processedValue = Integer.parseInt(value);
+            }
+        } catch (NumberFormatException e) {
+            // Keep as string if not a valid number
+        }
+        
+        TestContextManager.setTestData(key, processedValue);
+        Reporter.log("Set test data: " + key + " = " + processedValue);
+    }
+    
+    /**
+     * Sets multiple values in the test data map.
+     * 
+     * @param data map of key-value pairs
+     */
+    @QAFTestStep(description = "I set test data {data}")
+    public void setTestDataValues(Map<String, String> data) {
+        for (Map.Entry<String, String> entry : data.entrySet()) {
+            setTestDataValue(entry.getKey(), entry.getValue());
+        }
+    }
+    
+    /**
+     * Clears all test data.
+     */
+    @QAFTestStep(description = "I clear all test data")
+    public void clearAllTestData() {
+        TestContextManager.clearTestData();
+        Reporter.log("Cleared all test data");
+    }
+    
+    /**
+     * Sends a request to the current API with a payload file.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param payloadFile the payload file name
+     */
+    @QAFTestStep(description = "I send a {method} request with payload file {payloadFile}")
+    public void sendRequestWithPayloadFile(String method, String payloadFile) {
+        String endpoint = TestContextManager.getCurrentApiEndpoint();
+        if (endpoint == null) {
+            throw new IllegalStateException("No API has been set up. Use 'I am testing the {apiName} API' first.");
+        }
+        
+        try {
+            ApiResponse response = GenericApiService.sendRequestWithPayloadFile(
+                endpoint, method, payloadFile, null);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully to " + endpoint);
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending request: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to a named API with a payload file.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param apiName the API name as defined in ApiConfig
+     * @param payloadFile the payload file name
+     */
+    @QAFTestStep(description = "I send a {method} request to {apiName} API with payload file {payloadFile}")
+    public void sendRequestToNamedApiWithPayloadFile(String method, String apiName, String payloadFile) {
+        String endpoint = ApiConfig.getEndpoint(apiName);
+        if (endpoint == null) {
+            throw new IllegalArgumentException("Unknown API name: " + apiName);
+        }
+        
+        TestContextManager.setCurrentApi(apiName, endpoint);
+        
+        try {
+            ApiResponse response = GenericApiService.sendRequestWithPayloadFile(
+                endpoint, method, payloadFile, null);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully to " + apiName + " API");
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending request: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request with raw payload.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param payload the raw payload
+     */
+    @QAFTestStep(description = "I send a {method} request with payload: {payload}")
+    public void sendRequestWithRawPayload(String method, String payload) {
+        String endpoint = TestContextManager.getCurrentApiEndpoint();
+        if (endpoint == null) {
+            throw new IllegalStateException("No API has been set up. Use 'I am testing the {apiName} API' first.");
+        }
+        
+        try {
+            ApiResponse response = GenericApiService.sendRequest(endpoint, method, payload, null);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully to " + endpoint);
+            Reporter.log("Response status: " + response.getStatusCode());
+            Reporter.log("Response body: " + response.getResponseBody());
+            
+        } catch (Exception e) {
+            logger.error("Error sending request: " + e.getMessage(), e);
+            Reporter.log("Error sending request: " + e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Verifies the response status code.
+     * 
+     * @param expectedStatus the expected status code
+     */
+    @QAFTestStep(description = "the response status code should be {expectedStatus}")
+    public void verifyStatusCode(int expectedStatus) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Assert.fail("No API response available. Make sure to send a request first.");
+            return;
+        }
+        
+        int actualStatus = response.getStatusCode();
+        Reporter.log("Verifying status code: expected=" + expectedStatus + ", actual=" + actualStatus);
+        Assert.assertEquals(actualStatus, expectedStatus, "Response status code mismatch");
+    }
+    
+    /**
+     * Verifies the response is successful (2xx status code).
+     */
+    @QAFTestStep(description = "the response should be successful")
+    public void verifyResponseSuccessful() {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Assert.fail("No API response available. Make sure to send a request first.");
+            return;
+        }
+        
+        boolean successful = response.isSuccessful();
+        Reporter.log("Verifying response is successful: " + successful);
+        Assert.assertTrue(successful, "Response is not successful. Status code: " + response.getStatusCode());
+    }
+    
+    /**
+     * Verifies the response contains a field.
+     * 
+     * @param field the field name to check
+     */
+    @QAFTestStep(description = "the response should contain field {field}")
+    public void verifyResponseContainsField(String field) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Assert.fail("No API response available. Make sure to send a request first.");
+            return;
+        }
+        
+        boolean hasField = response.hasJsonField(field);
+        Reporter.log("Verifying response contains field '" + field + "': " + hasField);
+        Assert.assertTrue(hasField, "Response does not contain field: " + field);
+    }
+    
+    /**
+     * Verifies a response field has a specific value.
+     * 
+     * @param field the field name
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the response field {field} should be {expectedValue}")
+    public void verifyResponseFieldValue(String field, String expectedValue) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Assert.fail("No API response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field '" + field + "': expected=" + expectedValue + ", actual=" + actualValue);
+        Assert.assertEquals(actualValue, expectedValue, "Field value mismatch for: " + field);
+    }
+    
+    /**
+     * Verifies a response field contains a substring.
+     * 
+     * @param field the field name
+     * @param expectedText the expected substring
+     */
+    @QAFTestStep(description = "the response field {field} should contain {expectedText}")
+    public void verifyResponseFieldContains(String field, String expectedText) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Assert.fail("No API response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field '" + field + "' contains: " + expectedText);
+        Assert.assertTrue(actualValue != null && actualValue.contains(expectedText), 
+                          "Field '" + field + "' does not contain: " + expectedText);
+    }
+    
+    /**
+     * Verifies a validation error message.
+     * 
+     * @param field the field with validation error
+     * @param expectedMessage the expected validation message
+     */
+    @QAFTestStep(description = "the validation error message for {field} should be {expectedMessage}")
+    public void verifyValidationErrorMessage(String field, String expectedMessage) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Assert.fail("No API response available. Make sure to send a request first.");
+            return;
+        }
+        
+        String path = "validationErrorMessage." + field;
+        String actualMessage = response.getNestedValue(path);
+        
+        Reporter.log("Verifying validation error for field '" + field + "': expected=" + expectedMessage + ", actual=" + actualMessage);
+        Assert.assertEquals(actualMessage, expectedMessage, "Validation error message mismatch for field: " + field);
+    }
+    
+    /**
+     * Validates API response against UI captured data.
+     * 
+     * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
+     * @param responsePath the path to the array in the response (e.g., "empCalendarList", "dealStaticInfo")
+     */
+    @QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath}")
+    public void validateApiResponseAgainstUiData(String dataType, String responsePath) {
+        TestContextManager.ValidationResult result = TestContextManager.validateApiResponseAgainstUiData(dataType, responsePath);
+        
+        if (result.isSuccess()) {
+            Reporter.log("API response validation successful for " + dataType);
+        } else {
+            Reporter.log("API response validation failed: " + result.getMessage());
+            Reporter.log(result.getFormattedIssues());
+            Assert.fail("API response validation failed: " + result.getMessage() + "\n" + result.getFormattedIssues());
+        }
+    }
+}
+
+TestContextManager:
+------------------
+
+package com.qaf.framework.util;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.qmetry.qaf.automation.core.TestBaseProvider;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Step definitions for Employee Calendar API testing.
+ * Enhanced test context manager that supports any API response structure.
  */
-public class EmpCalendarSteps extends ApiSteps {
+public class TestContextManager {
     
-    private static final Log logger = LogFactory.getLog(EmpCalendarSteps.class);
-    private static final String EXPECTED_EMP_CALENDAR_KEY = "expected.emp.calendar";
-    private static final String EMP_CALENDAR_ENDPOINT = "/api/v1/emp/empcalendar";
-    
-    /**
-     * Get or create the EmpCalendarService from context
-     */
-    protected EmpCalendarService getEmpCalendarService() {
-        EmpCalendarService service = TestContextManager.getService(EmpCalendarService.class);
-        if (service == null) {
-            service = new EmpCalendarService();
-            TestContextManager.setService(EmpCalendarService.class, service);
-        }
-        return service;
-    }
+    private static final String TEST_DATA_KEY = "api.test.data";
+    private static final String EXPECTED_DATA_KEY = "api.expected.data";
+    private static final String LAST_API_RESPONSE_KEY = "api.last.response";
+    private static final String CURRENT_API_KEY = "api.current";
+    private static final String UI_CAPTURED_DATA_KEY = "ui.captured.data";
     
     /**
-     * Sends a request to the Employee Calendar API with the specified employee ID and cycle code.
+     * Gets the shared test data map.
      * 
-     * @param empId the employee ID
-     * @param cycleCode the cycle code (YYYYMM format)
-     * @throws Exception if an error occurs
+     * @return map of test data
      */
-    @QAFTestStep(description = "I send a request to Employee Calendar API for employee {empId} and cycle {cycleCode}")
-    public void sendEmpCalendarRequest(Integer empId, Integer cycleCode) throws Exception {
-        logger.info("Sending Employee Calendar request for empId: " + empId + ", cycleCode: " + cycleCode);
+    public static Map<String, Object> getTestData() {
+        Map<String, Object> testData = (Map<String, Object>) TestBaseProvider.instance().get()
+                .getContext().getProperty(TEST_DATA_KEY);
         
-        try {
-            ApiResponse response = getEmpCalendarService().getEmpCalendar(empId, cycleCode);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Employee Calendar request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
-            Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
-            throw e;
+        if (testData == null) {
+            testData = new HashMap<>();
+            TestBaseProvider.instance().get().getContext().setProperty(TEST_DATA_KEY, testData);
         }
+        
+        return testData;
     }
     
     /**
-     * Sends a request to the Employee Calendar API with the specified employee ID to get all cycles.
+     * Sets a test data value.
      * 
-     * @param empId the employee ID
-     * @throws Exception if an error occurs
+     * @param key the key
+     * @param value the value
      */
-    @QAFTestStep(description = "I send a request to Employee Calendar API for all cycles of employee {empId}")
-    public void sendAllCyclesEmpCalendarRequest(Integer empId) throws Exception {
-        logger.info("Sending Employee Calendar request for all cycles of empId: " + empId);
-        
-        try {
-            ApiResponse response = getEmpCalendarService().getAllEmpCalendars(empId);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Employee Calendar request for all cycles sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
-            Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
-            throw e;
-        }
+    public static void setTestData(String key, Object value) {
+        getTestData().put(key, value);
     }
     
     /**
-     * Sends a request to the Employee Calendar API with the specified data.
+     * Gets a test data value.
      * 
-     * @param data the request data
-     * @throws Exception if an error occurs
+     * @param key the key
+     * @return the value, or null if not found
      */
-    @QAFTestStep(description = "I send a request to Employee Calendar API with data {data}")
-    public void sendEmpCalendarRequestWithData(Map<String, Object> data) throws Exception {
-        logger.info("Sending Employee Calendar request with data: " + data);
-        
-        try {
-            ApiResponse response = getEmpCalendarService().getEmpCalendar(data);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Employee Calendar request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
-            Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
-            throw e;
-        }
+    public static Object getTestDataValue(String key) {
+        return getTestData().get(key);
     }
     
     /**
-     * Sends a raw request to Employee Calendar API with the specified payload.
+     * Clears all test data.
+     */
+    public static void clearTestData() {
+        getTestData().clear();
+    }
+    
+    /**
+     * Sets the current API being tested.
      * 
-     * @param payload the raw JSON payload as a string
-     * @throws Exception if an error occurs
+     * @param apiName the API name
+     * @param endpoint the API endpoint
      */
-    @QAFTestStep(description = "I send a raw request to Employee Calendar API with payload: {payload}")
-    public void sendRawEmpCalendarRequest(String payload) throws Exception {
-        logger.info("Sending raw Employee Calendar request with payload: " + payload);
-        
-        try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-            ApiResponse response = ApiClientUtil.sendPostRequest(EMP_CALENDAR_ENDPOINT, payload, headers);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Raw Employee Calendar request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending raw Employee Calendar request: " + e.getMessage(), e);
-            Reporter.log("Error sending raw Employee Calendar request: " + e.getMessage());
-            throw e;
-        }
+    public static void setCurrentApi(String apiName, String endpoint) {
+        Map<String, String> apiInfo = new HashMap<>();
+        apiInfo.put("name", apiName);
+        apiInfo.put("endpoint", endpoint);
+        TestBaseProvider.instance().get().getContext().setProperty(CURRENT_API_KEY, apiInfo);
     }
     
     /**
-     * Sends a request to Employee Calendar API with no body.
+     * Gets the current API endpoint.
      * 
-     * @throws Exception if an error occurs
+     * @return the current API endpoint, or null if not set
      */
-    @QAFTestStep(description = "I send a request to Employee Calendar API with no body")
-    public void sendEmptyEmpCalendarRequest() throws Exception {
-        logger.info("Sending Employee Calendar request with no body");
-        
-        try {
-            Map<String, String> headers = new HashMap<>();
-            headers.put("Content-Type", "application/json");
-            ApiResponse response = ApiClientUtil.sendPostRequest(EMP_CALENDAR_ENDPOINT, "", headers);
-            
-            // Store the response in context
-            setResponse(response);
-            
-            Reporter.log("Empty Employee Calendar request sent successfully");
-            Reporter.log("Response status: " + response.getStatusCode());
-            Reporter.log("Response body: " + response.getResponseBody());
-            
-        } catch (Exception e) {
-            logger.error("Error sending empty Employee Calendar request: " + e.getMessage(), e);
-            Reporter.log("Error sending empty Employee Calendar request: " + e.getMessage());
-            throw e;
-        }
+    public static String getCurrentApiEndpoint() {
+        Map<String, String> apiInfo = (Map<String, String>) TestBaseProvider.instance().get()
+                .getContext().getProperty(CURRENT_API_KEY);
+        return apiInfo != null ? apiInfo.get("endpoint") : null;
     }
     
     /**
-     * Stores employee calendar information from UI for later validation.
+     * Gets the current API name.
      * 
-     * @param empCalendarInfo the employee calendar information gathered from UI
+     * @return the current API name, or null if not set
      */
-    @QAFTestStep(description = "I store employee calendar information from UI {empCalendarInfo}")
-    public void storeEmpCalendarInfoFromUI(List<Map<String, String>> empCalendarInfo) {
-        logger.info("Storing employee calendar information from UI: " + empCalendarInfo);
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
-        Reporter.log("Stored employee calendar information from UI with " + empCalendarInfo.size() + " records");
+    public static String getCurrentApiName() {
+        Map<String, String> apiInfo = (Map<String, String>) TestBaseProvider.instance().get()
+                .getContext().getProperty(CURRENT_API_KEY);
+        return apiInfo != null ? apiInfo.get("name") : null;
     }
     
     /**
-     * Adds a single employee calendar information record from UI for later validation.
+     * Sets the last API response.
      * 
-     * @param fieldName the field name
-     * @param fieldValue the field value
+     * @param response the API response
      */
-    @QAFTestStep(description = "I add employee calendar field {fieldName} with value {fieldValue}")
-    public void addEmpCalendarField(String fieldName, String fieldValue) {
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> empCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
-        
-        if (empCalendarInfo == null) {
-            empCalendarInfo = new ArrayList<>();
-            Map<String, String> firstRecord = new HashMap<>();
-            empCalendarInfo.add(firstRecord);
-        }
-        
-        Map<String, String> firstRecord = empCalendarInfo.get(0);
-        firstRecord.put(fieldName, fieldValue);
-        
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
-        logger.info("Added employee calendar field: " + fieldName + "=" + fieldValue);
+    public static void setLastApiResponse(ApiResponse response) {
+        TestBaseProvider.instance().get().getContext().setProperty(LAST_API_RESPONSE_KEY, response);
     }
     
     /**
-     * Adds a completely new employee calendar record for later validation.
+     * Gets the last API response.
+     * 
+     * @return the last API response, or null if not set
      */
-    @QAFTestStep(description = "I add a new employee calendar record")
-    public void addNewEmpCalendarRecord() {
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> empCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
-        
-        if (empCalendarInfo == null) {
-            empCalendarInfo = new ArrayList<>();
-        }
-        
-        empCalendarInfo.add(new HashMap<>());
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
-        logger.info("Added new employee calendar record at index " + (empCalendarInfo.size() - 1));
+    public static ApiResponse getLastApiResponse() {
+        return (ApiResponse) TestBaseProvider.instance().get().getContext().getProperty(LAST_API_RESPONSE_KEY);
     }
     
     /**
-     * Validates employee calendar information in response against UI data.
+     * Stores UI captured data for validation.
+     * 
+     * @param dataType the type of data (e.g., "empCalendar", "dealStaticInfo")
+     * @param data list of data records (each record is a map)
      */
-    @QAFTestStep(description = "I validate employee calendar information against UI data")
-    public void validateEmpCalendarInfo() {
-        ApiResponse response = getResponse();
+    public static void storeUiCapturedData(String dataType, List<Map<String, String>> data) {
+        Map<String, List<Map<String, String>>> uiData = getUiCapturedDataMap();
+        uiData.put(dataType, data);
+    }
+    
+    /**
+     * Gets UI captured data by type.
+     * 
+     * @param dataType the type of data
+     * @return list of data records, or null if not found
+     */
+    public static List<Map<String, String>> getUiCapturedData(String dataType) {
+        Map<String, List<Map<String, String>>> uiData = getUiCapturedDataMap();
+        return uiData.get(dataType);
+    }
+    
+    /**
+     * Gets the UI captured data map.
+     * 
+     * @return map of UI captured data
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, List<Map<String, String>>> getUiCapturedDataMap() {
+        Map<String, List<Map<String, String>>> uiData = 
+            (Map<String, List<Map<String, String>>>) TestBaseProvider.instance().get()
+                .getContext().getProperty(UI_CAPTURED_DATA_KEY);
+        
+        if (uiData == null) {
+            uiData = new HashMap<>();
+            TestBaseProvider.instance().get().getContext().setProperty(UI_CAPTURED_DATA_KEY, uiData);
+        }
+        
+        return uiData;
+    }
+    
+    /**
+     * Adds a UI captured data record.
+     * 
+     * @param dataType the type of data
+     * @param record the data record
+     */
+    public static void addUiCapturedDataRecord(String dataType, Map<String, String> record) {
+        List<Map<String, String>> data = getUiCapturedData(dataType);
+        
+        if (data == null) {
+            data = new ArrayList<>();
+            storeUiCapturedData(dataType, data);
+        }
+        
+        data.add(record);
+    }
+    
+    /**
+     * Creates a new UI captured data record and returns it.
+     * 
+     * @param dataType the type of data
+     * @return the new record
+     */
+    public static Map<String, String> createUiCapturedDataRecord(String dataType) {
+        Map<String, String> record = new HashMap<>();
+        addUiCapturedDataRecord(dataType, record);
+        return record;
+    }
+    
+    /**
+     * Generic method to compare expected data with API response.
+     * 
+     * @param dataType the type of data to validate
+     * @param responseArrayPath the path to the array in the response (e.g., "empCalendarList")
+     * @return validation result with details
+     */
+    public static ValidationResult validateApiResponseAgainstUiData(String dataType, String responseArrayPath) {
+        ApiResponse response = getLastApiResponse();
         if (response == null) {
-            Reporter.log("No response available. Make sure to send a request first.", "fail");
-            fail("No response available. Make sure to send a request first.");
-            return;
+            return new ValidationResult(false, "No API response available");
         }
         
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> expectedEmpCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
-        
-        if (expectedEmpCalendarInfo == null || expectedEmpCalendarInfo.isEmpty()) {
-            Reporter.log("No expected employee calendar information available. Make sure to store UI data first.", "fail");
-            fail("No expected employee calendar information available. Make sure to store UI data first.");
-            return;
+        List<Map<String, String>> expectedData = getUiCapturedData(dataType);
+        if (expectedData == null || expectedData.isEmpty()) {
+            return new ValidationResult(false, "No expected data available for type: " + dataType);
         }
         
         JSONObject jsonResponse = response.getJsonObject();
         if (jsonResponse == null) {
-            Reporter.log("Invalid JSON response", "fail");
-            fail("Invalid JSON response");
-            return;
+            return new ValidationResult(false, "Invalid JSON response");
         }
         
         // Check for errors in the response
         if (jsonResponse.has("errorMessage") && !jsonResponse.isNull("errorMessage")) {
             String errorMessage = jsonResponse.getString("errorMessage");
             if (errorMessage != null && !errorMessage.isEmpty()) {
-                Reporter.log("API returned error: " + errorMessage, "fail");
-                fail("API returned error: " + errorMessage);
-                return;
+                return new ValidationResult(false, "API returned error: " + errorMessage);
             }
         }
         
-        if (!jsonResponse.has("empCalendarList") || jsonResponse.isNull("empCalendarList")) {
-            Reporter.log("Response does not contain empCalendarList", "fail");
-            fail("Response does not contain empCalendarList");
-            return;
+        if (!jsonResponse.has(responseArrayPath) || jsonResponse.isNull(responseArrayPath)) {
+            return new ValidationResult(false, "Response does not contain path: " + responseArrayPath);
         }
         
-        JSONArray empCalendarList = jsonResponse.getJSONArray("empCalendarList");
-        if (empCalendarList.length() == 0) {
-            Reporter.log("empCalendarList array is empty", "fail");
-            fail("empCalendarList array is empty");
-            return;
+        JSONArray responseArray = jsonResponse.getJSONArray(responseArrayPath);
+        if (responseArray.length() == 0) {
+            return new ValidationResult(false, responseArrayPath + " array is empty");
         }
         
-        // Validate each field in expected employee calendar info against the response
-        for (int i = 0; i < expectedEmpCalendarInfo.size(); i++) {
-            Map<String, String> expectedRecord = expectedEmpCalendarInfo.get(i);
+        // Track validation issues
+        ValidationResult result = new ValidationResult(true, "Validation successful");
+        
+        // Validate each field in expected data against the response
+        for (int i = 0; i < expectedData.size(); i++) {
+            Map<String, String> expectedRecord = expectedData.get(i);
             
             // Check if we have corresponding record in the response
-            if (i >= empCalendarList.length()) {
-                Reporter.log("Expected employee calendar record at index " + i + " not found in response", "fail");
+            if (i >= responseArray.length()) {
+                result.addIssue("Expected record at index " + i + " not found in response");
                 continue;
             }
             
-            JSONObject actualRecord = empCalendarList.getJSONObject(i);
+            JSONObject actualRecord = responseArray.getJSONObject(i);
             
             // Validate each field
             for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
@@ -398,7 +1343,7 @@ public class EmpCalendarSteps extends ApiSteps {
                 String expectedValue = entry.getValue();
                 
                 if (!actualRecord.has(fieldName)) {
-                    Reporter.log("Field '" + fieldName + "' missing in response", "fail");
+                    result.addIssue("Field '" + fieldName + "' missing in response record " + i);
                     continue;
                 }
                 
@@ -409,492 +1354,151 @@ public class EmpCalendarSteps extends ApiSteps {
                     actualValue = "null";
                 }
                 
-                if (expectedValue.equals(actualValue)) {
-                    Reporter.log("Field '" + fieldName + "' matches expected value: " + expectedValue);
-                } else {
-                    Reporter.log("Field '" + fieldName + "' mismatch - Expected: " + expectedValue + ", Actual: " + actualValue, "fail");
+                if (!expectedValue.equals(actualValue)) {
+                    result.addIssue("Field '" + fieldName + "' mismatch in record " + i + 
+                                   " - Expected: " + expectedValue + ", Actual: " + actualValue);
                 }
             }
         }
+        
+        return result;
     }
     
     /**
-     * Adds all employee calendar fields from a map.
-     * 
-     * @param fieldValues map of field names to values
+     * Class to track validation results and issues.
      */
-    @QAFTestStep(description = "I add employee calendar fields {fieldValues}")
-    public void addEmpCalendarFields(Map<String, String> fieldValues) {
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> empCalendarInfo = (List<Map<String, String>>) TestContextManager.getContext(EXPECTED_EMP_CALENDAR_KEY);
+    public static class ValidationResult {
+        private boolean success;
+        private String message;
+        private List<String> issues;
         
-        if (empCalendarInfo == null) {
-            empCalendarInfo = new ArrayList<>();
-            empCalendarInfo.add(new HashMap<>());
+        public ValidationResult(boolean success, String message) {
+            this.success = success;
+            this.message = message;
+            this.issues = new ArrayList<>();
         }
         
-        Map<String, String> currentRecord = empCalendarInfo.get(empCalendarInfo.size() - 1);
-        currentRecord.putAll(fieldValues);
-        
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
-        logger.info("Added employee calendar fields: " + fieldValues);
-    }
-    
-    /**
-     * Clears all stored employee calendar information.
-     */
-    @QAFTestStep(description = "I clear stored employee calendar information")
-    public void clearEmpCalendarInfo() {
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, null);
-        logger.info("Cleared stored employee calendar information");
-    }
-    
-    /**
-     * Setup calendar data for testing.
-     * 
-     * @param empId the employee ID
-     * @param cycleCode the cycle code
-     */
-    @QAFTestStep(description = "I set up basic employee calendar test data with employee {empId} and cycle {cycleCode}")
-    public void setupBasicEmpCalendarTestData(Integer empId, Integer cycleCode) {
-        // Clear existing test data
-        TestContextManager.clearTestData();
-        
-        // Set new test data values
-        TestContextManager.setTestData("empId", empId);
-        TestContextManager.setTestData("cycleCode", cycleCode);
-        TestContextManager.setTestData("messageId", ApiClientUtil.generateMessageId());
-        
-        logger.info("Set up basic employee calendar test data: empId=" + empId + ", cycleCode=" + cycleCode);
-        Reporter.log("Set up basic employee calendar test data with empId=" + empId + ", cycleCode=" + cycleCode);
-    }
-    
-    /**
-     * Validate that the response contains a specific validation error.
-     * 
-     * @param field the field with validation error
-     * @param expectedMessage the expected validation message
-     */
-    @QAFTestStep(description = "the validation error message for {field} should be {expectedMessage}")
-    public void validateValidationError(String field, String expectedMessage) {
-        ApiResponse response = getResponse();
-        if (response == null) {
-            Reporter.log("No response available. Make sure to send a request first.", "fail");
-            fail("No response available. Make sure to send a request first.");
-            return;
+        public void addIssue(String issue) {
+            this.issues.add(issue);
+            this.success = false;
         }
         
-        String path = "validationErrorMessage." + field;
-        String actualMessage = response.getNestedValue(path);
+        public boolean isSuccess() {
+            return success;
+        }
         
-        Reporter.log("Validating validation error for field '" + field + "': expected=" + expectedMessage + ", actual=" + actualMessage);
-        assertEquals(actualMessage, expectedMessage, "Validation error message mismatch for field: " + field);
-    }
-    
-    /**
-     * Captures employee calendar data from UI for the specified employee and cycle.
-     * 
-     * @param empId the employee ID
-     * @param cycleCode the cycle code
-     */
-    @QAFTestStep(description = "I capture employee calendar data from UI for employee {empId} and cycle {cycleCode}")
-    public void captureEmpCalendarDataFromUI(Integer empId, Integer cycleCode) {
-        logger.info("Capturing employee calendar data from UI for empId: " + empId + " and cycleCode: " + cycleCode);
+        public String getMessage() {
+            return message;
+        }
         
-        // Clear any existing calendar info
-        clearEmpCalendarInfo();
+        public List<String> getIssues() {
+            return issues;
+        }
         
-        // In real implementation, this would use Selenium to read data from UI elements
-        // For now, we're simulating the process of gathering data from UI
-        
-        // Create a new record for this employee calendar
-        List<Map<String, String>> empCalendarInfo = new ArrayList<>();
-        Map<String, String> record = new HashMap<>();
-        
-        // These values would come from UI elements in a real implementation
-        record.put("deptId", "434");
-        record.put("cycleCode", cycleCode.toString());
-        record.put("interestDate", "2024-12-31");
-        record.put("monthlyPayDate", "2025-01-23");
-        record.put("notePayDate", "2025-02-13");
-        
-        empCalendarInfo.add(record);
-        
-        // Store the employee calendar info in test context
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
-        
-        Reporter.log("Successfully captured employee calendar data from UI");
-        logger.info("Employee calendar data captured: " + empCalendarInfo);
-    }
-    
-    /**
-     * Captures all employee calendar cycles data from UI for the specified employee.
-     * 
-     * @param empId the employee ID
-     */
-    @QAFTestStep(description = "I capture all employee calendar cycles data from UI for employee {empId}")
-    public void captureAllEmpCalendarCyclesFromUI(Integer empId) {
-        logger.info("Capturing all employee calendar cycles data from UI for empId: " + empId);
-        
-        // Clear any existing calendar info
-        clearEmpCalendarInfo();
-        
-        // In real implementation, this would use Selenium to read data from UI elements
-        // For now, we're simulating the process of gathering data from UI
-        
-        // Create a list to store multiple cycles
-        List<Map<String, String>> empCalendarInfo = new ArrayList<>();
-        
-        // Add first cycle data
-        Map<String, String> record1 = new HashMap<>();
-        record1.put("deptId", "434");
-        record1.put("cycleCode", "202412");
-        record1.put("interestDate", "2024-12-31");
-        record1.put("monthlyPayDate", "2025-01-23");
-        record1.put("notePayDate", "2025-02-13");
-        empCalendarInfo.add(record1);
-        
-        // Add second cycle data
-        Map<String, String> record2 = new HashMap<>();
-        record2.put("deptId", "434");
-        record2.put("cycleCode", "202411");
-        record2.put("interestDate", "2024-11-30");
-        record2.put("monthlyPayDate", "2024-12-23");
-        record2.put("notePayDate", "2025-01-13");
-        empCalendarInfo.add(record2);
-        
-        // Add third cycle data
-        Map<String, String> record3 = new HashMap<>();
-        record3.put("deptId", "434");
-        record3.put("cycleCode", "202410");
-        record3.put("interestDate", "2024-10-31");
-        record3.put("monthlyPayDate", "2024-11-22");
-        record3.put("notePayDate", "2024-12-13");
-        empCalendarInfo.add(record3);
-        
-        // Store the employee calendar info in test context
-        TestContextManager.setContext(EXPECTED_EMP_CALENDAR_KEY, empCalendarInfo);
-        
-        Reporter.log("Successfully captured all employee calendar cycles data from UI");
-        logger.info("Employee calendar cycles data captured: " + empCalendarInfo);
-    }
-
-    /**
- * Sends a request to the Employee Calendar API with a payload file.
- * 
- * @param payloadFile the payload file name
- * @throws Exception if an error occurs
- */
-@QAFTestStep(description = "I send a request to Employee Calendar API with payload file {payloadFile}")
-public void sendEmpCalendarRequestWithPayloadFile(String payloadFile) throws Exception {
-    logger.info("Sending Employee Calendar request with payload file: " + payloadFile);
-    
-    try {
-        ApiResponse response = getEmpCalendarService().postWithPayloadFile(EMP_CALENDAR_ENDPOINT, payloadFile);
-        
-        // Store the response in context
-        setResponse(response);
-        
-        Reporter.log("Employee Calendar request sent successfully");
-        Reporter.log("Response status: " + response.getStatusCode());
-        Reporter.log("Response body: " + response.getResponseBody());
-        
-    } catch (Exception e) {
-        logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
-        Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
-        throw e;
+        public String getFormattedIssues() {
+            if (issues.isEmpty()) {
+                return "";
+            }
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("Validation issues:");
+            for (String issue : issues) {
+                sb.append("\n- ").append(issue);
+            }
+            return sb.toString();
+        }
     }
 }
+
+ApiService:
+----------------
+
+package com.qaf.framework.service;
+
+import com.qaf.framework.util.ApiClientUtil;
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.json.JSONObject;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * Sends a request to the Employee Calendar API with a payload file and substitution values.
- * 
- * @param payloadFile the payload file name
- * @param values map of values to substitute in the payload
- * @throws Exception if an error occurs
+ * Enhanced generic service implementation for all API operations.
  */
-@QAFTestStep(description = "I send a request to Employee Calendar API with payload file {payloadFile} and values {values}")
-public void sendEmpCalendarRequestWithPayloadFileAndValues(String payloadFile, Map<String, Object> values) throws Exception {
-    logger.info("Sending Employee Calendar request with payload file: " + payloadFile + " and values: " + values);
+public class GenericApiService {
     
-    try {
-        ApiResponse response = getEmpCalendarService().postWithPayloadFile(EMP_CALENDAR_ENDPOINT, payloadFile, values);
-        
-        // Store the response in context
-        setResponse(response);
-        
-        Reporter.log("Employee Calendar request sent successfully");
-        Reporter.log("Response status: " + response.getStatusCode());
-        Reporter.log("Response body: " + response.getResponseBody());
-        
-    } catch (Exception e) {
-        logger.error("Error sending Employee Calendar request: " + e.getMessage(), e);
-        Reporter.log("Error sending Employee Calendar request: " + e.getMessage());
-        throw e;
+    private static final Log logger = LogFactory.getLog(GenericApiService.class);
+    
+    /**
+     * Sends a request to an API endpoint.
+     * 
+     * @param endpoint the API endpoint
+     * @param method the HTTP method (GET, POST, PUT, DELETE)
+     * @param payload the request payload
+     * @param headers the request headers (optional)
+     * @return ApiResponse containing the response
+     */
+    public static ApiResponse sendRequest(String endpoint, String method, String payload, Map<String, String> headers) {
+        try {
+            logger.info("Sending " + method + " request to " + endpoint);
+            logger.debug("Payload: " + payload);
+            
+            if (headers == null) {
+                headers = getDefaultHeaders();
+            }
+            
+            ApiResponse response = ApiClientUtil.sendRequest(endpoint, method, payload, headers);
+            TestContextManager.setLastApiResponse(response);
+            
+            logger.info("Received response with status code: " + response.getStatusCode());
+            logger.debug("Response body: " + response.getResponseBody());
+            
+            return response;
+        } catch (Exception e) {
+            logger.error("Error sending request: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to send API request: " + e.getMessage(), e);
+        }
     }
-}
-
-@Regression
-@EmpCalendar
-Feature: Employee Calendar API Testing
-  As a user of the Employee Calendar API
-  I want to verify that the API returns correct calendar information
-  So that I can ensure the data integrity between UI and API
-
-@Positive
-@TestCaseId:EC-001
-@Description:Verify Employee Calendar API returns correct data matching UI information
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-001
-Scenario: Verify Employee Calendar API returns correct data for a valid employee ID and cycle code
-  # UI steps to capture expected data
-  Given I login to the application with username "testuser" and password "password123"
-  And I navigate to the employee calendar screen
-  And I search for employee "${validEmpId}"
-  And I select cycle "${validCycleCode}"
-  And I capture employee calendar data from UI for employee "${validEmpId}" and cycle "${validCycleCode}"
-  # API call and validation
-  When I send a request to Employee Calendar API with payload file "empcalendar-basic.json" and values
-    | empId      | ${validEmpId}          |
-    | cycleCode  | ${validCycleCode}      |
-    | messageId  | ${validMessageId}      |
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "empCalendarList"
-  And I validate employee calendar information against UI data
-  # Cleanup
-  And I logout from the application
-
-@Negative
-@TestCaseId:EC-002
-@Description:Verify Employee Calendar API returns appropriate error for non-existent cycle code
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-002
-Scenario: Verify Employee Calendar API with non-existent cycle code
-  When I send a request to Employee Calendar API with payload file "empcalendar-basic.json" and values
-    | empId      | ${validEmpId}            |
-    | cycleCode  | ${nonExistentCycleCode}  |
-    | messageId  | ${validMessageId}        |
-  Then the response status code should be 200
-  And the response should contain field "responseMessageId"
-  And the response field "responseMessageId" should be "${validMessageId}"
-  And the response should contain field "errorMessage"
-  And the response field "errorMessage" should be "No EmpCalendar Data found"
-
-@Negative
-@TestCaseId:EC-003
-@Description:Verify Employee Calendar API returns appropriate error for non-existent employee ID
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-003
-Scenario: Verify Employee Calendar API with non-existent employee ID
-  When I send a request to Employee Calendar API with payload file "empcalendar-basic.json" and values
-    | empId      | ${nonExistentEmpId}     |
-    | cycleCode  | ${validCycleCode}       |
-    | messageId  | ${validMessageId}       |
-  Then the response status code should be 200
-  And the response should contain field "responseMessageId"
-  And the response field "responseMessageId" should be "${validMessageId}"
-  And the response should contain field "errorMessage"
-  And the response field "errorMessage" should be "No EmpCalendar Data found"
-
-@Negative
-@TestCaseId:EC-004
-@Description:Verify Employee Calendar API returns validation error when empId is missing
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-004
-Scenario: Verify Employee Calendar API with missing empId
-  When I send a request to Employee Calendar API with payload file "empcalendar-missing-empid.json" and values
-    | cycleCode  | ${validCycleCode}       |
-    | messageId  | ${validMessageId}       |
-  Then the response status code should be 400
-  And the response should contain field "responseMessageId"
-  And the response field "responseMessageId" should be "${validMessageId}"
-  And the response should contain field "validationErrorMessage"
-  And the validation error message for "empId" should be "must not be null"
-
-@Positive
-@TestCaseId:EC-005
-@Description:Verify Employee Calendar API returns all cycles when cycleCode is not provided
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-005
-Scenario: Verify Employee Calendar API returns all cycles when cycleCode is not provided
-  # UI steps to capture expected data
-  Given I login to the application with username "testuser" and password "password123"
-  And I navigate to the employee calendar screen
-  And I search for employee "${validEmpId}"
-  And I capture all employee calendar cycles data from UI for employee "${validEmpId}"
-  # API call and validation
-  When I send a request to Employee Calendar API with payload file "empcalendar-all-cycles.json" and values
-    | empId      | ${validEmpId}           |
-    | messageId  | ${validMessageId}       |
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "empCalendarList"
-  And I validate employee calendar information against UI data
-  # Cleanup
-  And I logout from the application
-
-@Negative
-@TestCaseId:EC-006
-@Description:Verify Employee Calendar API returns validation error when messageId is missing
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-006
-Scenario: Verify Employee Calendar API with missing messageId
-  When I send a request to Employee Calendar API with payload file "empcalendar-missing-messageid.json" and values
-    | empId      | ${validEmpId}           |
-    | cycleCode  | ${validCycleCode}       |
-  Then the response status code should be 400
-  And the response should contain field "responseMessageId"
-  And the response field "responseMessageId" should be ""
-  And the response should contain field "validationErrorMessage"
-  And the validation error message for "messageId" should be "must not be null"
-
-@Negative
-@TestCaseId:EC-007
-@Description:Verify Employee Calendar API returns validation errors when both messageId and empId are missing
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-007
-Scenario: Verify Employee Calendar API with missing messageId and empId
-  When I send a request to Employee Calendar API with payload file "empcalendar-cycleonly.json" and values
-    | cycleCode  | ${validCycleCode}       |
-  Then the response status code should be 400
-  And the response should contain field "responseMessageId"
-  And the response field "responseMessageId" should be ""
-  And the response should contain field "validationErrorMessage"
-  And the validation error message for "messageId" should be "must not be null"
-  And the validation error message for "empId" should be "must not be null"
-
-@Negative
-@TestCaseId:EC-008
-@Description:Verify Employee Calendar API returns validation errors for empty request
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-008
-Scenario: Verify Employee Calendar API with empty request
-  When I send a request to Employee Calendar API with payload file "empcalendar-empty.json"
-  Then the response status code should be 400
-  And the response should contain field "responseMessageId"
-  And the response field "responseMessageId" should be ""
-  And the response should contain field "validationErrorMessage"
-  And the validation error message for "messageId" should be "must not be null"
-  And the validation error message for "empId" should be "must not be null"
-
-@Positive
-@TestCaseId:EC-009
-@Description:Verify Employee Calendar API handles empId with and without quotes
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-009
-Scenario: Verify Employee Calendar API handles empId with and without quotes
-  # UI steps to capture expected data
-  Given I login to the application with username "testuser" and password "password123"
-  And I navigate to the employee calendar screen
-  And I search for employee "${validEmpId}"
-  And I select cycle "${validCycleCode}"
-  And I capture employee calendar data from UI for employee "${validEmpId}" and cycle "${validCycleCode}"
-  # API call with empId without quotes
-  When I send a raw request to Employee Calendar API with payload:
-    """
-    {
-      "empId": ${validEmpId},
-      "cycleCode": ${validCycleCode},
-      "messageId": "${validMessageId}"
+    
+    /**
+     * Sends a request to an API endpoint with a payload file.
+     * 
+     * @param endpoint the API endpoint
+     * @param method the HTTP method (GET, POST, PUT, DELETE)
+     * @param payloadFile the payload file name
+     * @param headers the request headers (optional)
+     * @return ApiResponse containing the response
+     */
+    public static ApiResponse sendRequestWithPayloadFile(String endpoint, String method, String payloadFile, Map<String, String> headers) {
+        try {
+            String payload = ApiClientUtil.readPayload(payloadFile);
+            
+            // Apply test data to payload
+            Map<String, Object> testData = TestContextManager.getTestData();
+            if (testData != null && !testData.isEmpty()) {
+                payload = ApiClientUtil.processTemplate(payload, testData);
+            }
+            
+            return sendRequest(endpoint, method, payload, headers);
+        } catch (Exception e) {
+            logger.error("Error sending request with payload file: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to send API request: " + e.getMessage(), e);
+        }
     }
-    """
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "empCalendarList"
-  And I validate employee calendar information against UI data
-  # API call with empId with quotes
-  When I send a raw request to Employee Calendar API with payload:
-    """
-    {
-      "empId":"${validEmpId}",
-      "cycleCode":${validCycleCode},
-      "messageId":"${validMessageId}"
+    
+    /**
+     * Gets default headers for API requests.
+     * 
+     * @return map of default headers
+     */
+    public static Map<String, String> getDefaultHeaders() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json");
+        headers.put("Accept", "application/json");
+        return headers;
     }
-    """
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "empCalendarList"
-  And I validate employee calendar information against UI data
-  # Cleanup
-  And I logout from the application
-
-@Positive
-@TestCaseId:EC-010
-@Description:Verify Employee Calendar API returns all cycles when cycleCode is empty
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-010
-Scenario: Verify Employee Calendar API returns all cycles when cycleCode is empty
-  # UI steps to capture expected data
-  Given I login to the application with username "testuser" and password "password123"
-  And I navigate to the employee calendar screen
-  And I search for employee "${validEmpId}"
-  And I capture all employee calendar cycles data from UI for employee "${validEmpId}"
-  # API call and validation
-  When I send a raw request to Employee Calendar API with payload:
-    """
-    {
-      "empId": ${validEmpId},
-      "cycleCode": "",
-      "messageId": "${validMessageId}"
-    }
-    """
-  Then the response status code should be 200
-  And the response should be successful
-  And the response should contain field "empCalendarList"
-  And I validate employee calendar information against UI data
-  # Cleanup
-  And I logout from the application
-
-@Negative
-@TestCaseId:EC-011
-@Description:Verify Employee Calendar API returns error for invalid cycleCode format
-@dataProvider:dp-for-excel
-@dataFile:resources/${environment.name}/testdata/EmpCalendar_testdata.xlsx
-@dataProviderClass:com.mycompany.utils.DataProviderUtil
-@sheet:testData
-@key:EC-011
-Scenario: Verify Employee Calendar API with invalid cycleCode format
-  When I send a raw request to Employee Calendar API with payload:
-    """
-    {
-      "empId": ${validEmpId},
-      "cycleCode": "dfidfi",
-      "messageId": "${validMessageId}"
-    }
-    """
-  Then the response status code should be 500
-  And the response should contain field "errorMessage"
-  And the response field "errorMessage" should contain "Cannot deserialize value of type `java.lang.Integer` from String"
 }
 
