@@ -1532,7 +1532,6 @@ public class GenericApiService {
     }
 }
 
-
 /**
  * Validates API response against UI captured data using specified key fields for matching.
  * 
@@ -1596,32 +1595,32 @@ public void validateApiResponseAgainstUiDataWithKeys(String dataType, String res
         actualRecords.add(map);
     }
     
-    // Count matches and mismatches
+    // Track matches and issues
     int matchedRecords = 0;
+    int totalExpectedRecords = expectedData.size();
+    int unprocessedActualRecords = actualRecords.size();
+    int totalFieldsCompared = 0;
     int mismatchedFields = 0;
     List<String> issues = new ArrayList<>();
     
-    // For each expected record, find a matching actual record
-    for (Map<String, String> expectedRecord : expectedData) {
-        boolean foundMatch = false;
+    // For key-based comparison
+    if (keyFieldArray != null && keyFieldArray.length > 0) {
+        // Create a map to track which actual records were matched
+        Map<Integer, Boolean> actualRecordMatched = new HashMap<>();
+        for (int i = 0; i < actualRecords.size(); i++) {
+            actualRecordMatched.put(i, false);
+        }
         
-        if (keyFieldArray != null && keyFieldArray.length > 0) {
-            // Use key fields for matching
+        // For each expected record, try to find exactly one matching actual record
+        expectedLoop: for (Map<String, String> expectedRecord : expectedData) {
+            // Check if expected record has all required key fields
             StringBuilder keyBuilder = new StringBuilder();
-            boolean hasAllKeys = true;
-            
-            // Build a composite key from all key fields
             for (String keyField : keyFieldArray) {
                 if (!expectedRecord.containsKey(keyField)) {
-                    hasAllKeys = false;
                     issues.add("Expected record is missing key field: " + keyField);
-                    break;
+                    continue expectedLoop;
                 }
                 keyBuilder.append(keyField).append("=").append(expectedRecord.get(keyField)).append(", ");
-            }
-            
-            if (!hasAllKeys) {
-                continue; // Skip this record if it doesn't have all required key fields
             }
             
             String compositeKey = keyBuilder.toString();
@@ -1629,55 +1628,85 @@ public void validateApiResponseAgainstUiDataWithKeys(String dataType, String res
                 compositeKey = compositeKey.substring(0, compositeKey.length() - 2);
             }
             
-            // Search for a matching record in actual data
-            for (Map<String, Object> actualRecord : actualRecords) {
+            // Look for exactly one matching record
+            int matchingRecordIndex = -1;
+            for (int i = 0; i < actualRecords.size(); i++) {
+                // Skip records that have already been matched
+                if (actualRecordMatched.get(i)) {
+                    continue;
+                }
+                
+                Map<String, Object> actualRecord = actualRecords.get(i);
                 boolean keyMatch = true;
                 
                 // Check if all key fields match
                 for (String keyField : keyFieldArray) {
                     if (!actualRecord.containsKey(keyField) || 
-                        !expectedRecord.get(keyField).equals(actualRecord.get(keyField).toString())) {
+                        !expectedRecord.get(keyField).equals(String.valueOf(actualRecord.get(keyField)))) {
                         keyMatch = false;
                         break;
                     }
                 }
                 
                 if (keyMatch) {
-                    foundMatch = true;
-                    matchedRecords++;
-                    
-                    // Compare all fields
-                    compareFields(expectedRecord, actualRecord, compositeKey, issues);
-                    mismatchedFields += issues.size() - mismatchedFields;
-                    
-                    break; // Found matching record, no need to check others
+                    if (matchingRecordIndex == -1) {
+                        // First match
+                        matchingRecordIndex = i;
+                    } else {
+                        // Multiple matches - report as an issue
+                        issues.add("Multiple actual records found matching key: " + compositeKey);
+                        continue expectedLoop;
+                    }
                 }
             }
             
-            if (!foundMatch) {
+            if (matchingRecordIndex == -1) {
+                // No match found
                 issues.add("No matching record found for keys: " + compositeKey);
-            }
-        } else {
-            // If no key fields, compare by index
-            int index = expectedData.indexOf(expectedRecord);
-            
-            if (index < actualRecords.size()) {
-                Map<String, Object> actualRecord = actualRecords.get(index);
-                matchedRecords++;
-                
-                // Compare all fields
-                compareFields(expectedRecord, actualRecord, "index " + index, issues);
-                mismatchedFields += issues.size() - mismatchedFields;
             } else {
-                issues.add("Expected record at index " + index + " not found in response");
+                // Exactly one match found - compare all fields
+                Map<String, Object> matchingRecord = actualRecords.get(matchingRecordIndex);
+                actualRecordMatched.put(matchingRecordIndex, true);
+                matchedRecords++;
+                unprocessedActualRecords--;
+                
+                // Compare fields
+                List<String> fieldIssues = new ArrayList<>();
+                int fieldsCompared = compareFields(expectedRecord, matchingRecord, compositeKey, fieldIssues);
+                totalFieldsCompared += fieldsCompared;
+                mismatchedFields += fieldIssues.size();
+                issues.addAll(fieldIssues);
+            }
+        }
+    } else {
+        // For index-based comparison (when no key fields are specified)
+        for (int i = 0; i < expectedData.size(); i++) {
+            Map<String, String> expectedRecord = expectedData.get(i);
+            
+            if (i < actualRecords.size()) {
+                Map<String, Object> actualRecord = actualRecords.get(i);
+                matchedRecords++;
+                unprocessedActualRecords--;
+                
+                // Compare fields
+                List<String> fieldIssues = new ArrayList<>();
+                int fieldsCompared = compareFields(expectedRecord, actualRecord, "index " + i, fieldIssues);
+                totalFieldsCompared += fieldsCompared;
+                mismatchedFields += fieldIssues.size();
+                issues.addAll(fieldIssues);
+            } else {
+                issues.add("Expected record at index " + i + " not found in response");
             }
         }
     }
     
     // Report results
     Reporter.log("API response validation results for " + dataType + ":", MessageTypes.Info);
-    Reporter.log("- Total expected records: " + expectedData.size(), MessageTypes.Info);
+    Reporter.log("- Total expected records: " + totalExpectedRecords, MessageTypes.Info);
+    Reporter.log("- Total actual records: " + actualRecords.size(), MessageTypes.Info);
     Reporter.log("- Records matched: " + matchedRecords, MessageTypes.Info);
+    Reporter.log("- Unprocessed actual records: " + unprocessedActualRecords, MessageTypes.Info);
+    Reporter.log("- Total fields compared: " + totalFieldsCompared, MessageTypes.Info);
     
     if (mismatchedFields > 0) {
         Reporter.log("- Fields mismatched: " + mismatchedFields, MessageTypes.Fail);
@@ -1686,9 +1715,14 @@ public void validateApiResponseAgainstUiDataWithKeys(String dataType, String res
     }
     
     if (!issues.isEmpty()) {
-        Reporter.log("Validation issues:", MessageTypes.Fail);
-        for (String issue : issues) {
-            Reporter.log("  - " + issue, MessageTypes.Fail);
+        Reporter.log("Validation issues (" + issues.size() + "):", MessageTypes.Fail);
+        // Show at most 20 issues to avoid flooding the log
+        int issuesToShow = Math.min(issues.size(), 20);
+        for (int i = 0; i < issuesToShow; i++) {
+            Reporter.log("  - " + issues.get(i), MessageTypes.Fail);
+        }
+        if (issues.size() > issuesToShow) {
+            Reporter.log("  ... and " + (issues.size() - issuesToShow) + " more issues", MessageTypes.Fail);
         }
         Assert.fail("API response validation failed with " + issues.size() + " issues");
     } else {
@@ -1703,12 +1737,16 @@ public void validateApiResponseAgainstUiDataWithKeys(String dataType, String res
  * @param actualRecord the actual record
  * @param recordIdentifier identifier for this record (composite key or index)
  * @param issues list to add any issues found
+ * @return number of fields compared
  */
-private void compareFields(Map<String, String> expectedRecord, Map<String, Object> actualRecord, 
-                          String recordIdentifier, List<String> issues) {
+private int compareFields(Map<String, String> expectedRecord, Map<String, Object> actualRecord, 
+                         String recordIdentifier, List<String> issues) {
+    int fieldsCompared = 0;
+    
     for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
         String fieldName = entry.getKey();
         String expectedValue = entry.getValue();
+        fieldsCompared++;
         
         if (!actualRecord.containsKey(fieldName)) {
             issues.add("Field '" + fieldName + "' missing in record with " + recordIdentifier);
@@ -1716,13 +1754,15 @@ private void compareFields(Map<String, String> expectedRecord, Map<String, Objec
         }
         
         Object actualObj = actualRecord.get(fieldName);
-        String actualValue = actualObj != null ? actualObj.toString() : "null";
+        String actualValue = actualObj != null ? String.valueOf(actualObj) : "null";
         
         if (!expectedValue.equals(actualValue)) {
             issues.add("Field '" + fieldName + "' mismatch in record with " + recordIdentifier + 
                        " - Expected: '" + expectedValue + "', Actual: '" + actualValue + "'");
         }
     }
+    
+    return fieldsCompared;
 }
 
 /**
