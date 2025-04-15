@@ -1533,40 +1533,59 @@ public class GenericApiService {
 }
 
 
-import static org.testng.Assert.fail;
-import com.qmetry.qaf.automation.util.Reporter;
-import com.qmetry.qaf.automation.util.MessageTypes;
-
-public static void validateApiResponseAgainstUiData(String dataType, String responseArrayPath) {
-    ApiResponse response = getLastApiResponse();
+/**
+ * Validates API response against UI captured data using specified key fields for matching.
+ * 
+ * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
+ * @param responsePath the path to the array in the response (e.g., "empCalendarList")
+ * @param keyFields comma-separated list of fields to use as keys for matching records (optional)
+ */
+@QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath} with keys {keyFields}")
+public void validateApiResponseAgainstUiDataWithKeys(String dataType, String responsePath, String keyFields) {
+    ApiResponse response = TestContextManager.getLastApiResponse();
     if (response == null) {
-        Reporter.log("No API response available", MessageTypes.Fail);
-        fail("No API response available");
+        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+        Assert.fail("No API response available. Make sure to send a request first.");
         return;
     }
-
-    List<Map<String, String>> expectedData = getUiCapturedData(dataType);
+    
+    List<Map<String, String>> expectedData = TestContextManager.getUiCapturedData(dataType);
     if (expectedData == null || expectedData.isEmpty()) {
-        Reporter.log("No expected UI data available for type: " + dataType, MessageTypes.Fail);
-        fail("No expected UI data available for type: " + dataType);
+        Reporter.log("No expected data available for type: " + dataType, MessageTypes.Fail);
+        Assert.fail("No expected data available for type: " + dataType);
         return;
     }
-
+    
     JSONObject jsonResponse = response.getJsonObject();
-    if (jsonResponse == null || !jsonResponse.has(responseArrayPath) || jsonResponse.isNull(responseArrayPath)) {
-        Reporter.log("Missing or invalid path in response: " + responseArrayPath, MessageTypes.Fail);
-        fail("Missing or invalid path in response: " + responseArrayPath);
+    if (jsonResponse == null) {
+        Reporter.log("Invalid JSON response", MessageTypes.Fail);
+        Assert.fail("Invalid JSON response");
         return;
     }
-
-    JSONArray responseArray = jsonResponse.getJSONArray(responseArrayPath);
+    
+    if (!jsonResponse.has(responsePath) || jsonResponse.isNull(responsePath)) {
+        Reporter.log("Response does not contain path: " + responsePath, MessageTypes.Fail);
+        Assert.fail("Response does not contain path: " + responsePath);
+        return;
+    }
+    
+    JSONArray responseArray = jsonResponse.getJSONArray(responsePath);
     if (responseArray.length() == 0) {
-        Reporter.log("Response array '" + responseArrayPath + "' is empty", MessageTypes.Fail);
-        fail("Response array '" + responseArrayPath + "' is empty");
+        Reporter.log(responsePath + " array is empty", MessageTypes.Fail);
+        Assert.fail(responsePath + " array is empty");
         return;
     }
-
-    // Convert response to List<Map<String, Object>>
+    
+    // Parse key fields if provided
+    String[] keyFieldArray = null;
+    if (keyFields != null && !keyFields.trim().isEmpty()) {
+        keyFieldArray = keyFields.split(",");
+        for (int i = 0; i < keyFieldArray.length; i++) {
+            keyFieldArray[i] = keyFieldArray[i].trim();
+        }
+    }
+    
+    // Convert response array to a list of maps for easier processing
     List<Map<String, Object>> actualRecords = new ArrayList<>();
     for (int i = 0; i < responseArray.length(); i++) {
         JSONObject obj = responseArray.getJSONObject(i);
@@ -1576,50 +1595,144 @@ public static void validateApiResponseAgainstUiData(String dataType, String resp
         }
         actualRecords.add(map);
     }
-
-    Set<Integer> matchedIndexes = new HashSet<>();
-    for (int i = 0; i < expectedData.size(); i++) {
-        Map<String, String> expectedMap = expectedData.get(i);
-        boolean matched = false;
-
-        Reporter.log("Comparing expected record " + (i + 1) + ": " + expectedMap, MessageTypes.Info);
-
-        for (int j = 0; j < actualRecords.size(); j++) {
-            if (matchedIndexes.contains(j)) continue;
-
-            Map<String, Object> actualMap = actualRecords.get(j);
-            if (mapsAreEqual(expectedMap, actualMap)) {
-                Reporter.log("✅ Match found with actual record " + (j + 1) + ": " + actualMap, MessageTypes.Pass);
-                matchedIndexes.add(j);
-                matched = true;
-                break;
+    
+    // Count matches and mismatches
+    int matchedRecords = 0;
+    int mismatchedFields = 0;
+    List<String> issues = new ArrayList<>();
+    
+    // For each expected record, find a matching actual record
+    for (Map<String, String> expectedRecord : expectedData) {
+        boolean foundMatch = false;
+        
+        if (keyFieldArray != null && keyFieldArray.length > 0) {
+            // Use key fields for matching
+            StringBuilder keyBuilder = new StringBuilder();
+            boolean hasAllKeys = true;
+            
+            // Build a composite key from all key fields
+            for (String keyField : keyFieldArray) {
+                if (!expectedRecord.containsKey(keyField)) {
+                    hasAllKeys = false;
+                    issues.add("Expected record is missing key field: " + keyField);
+                    break;
+                }
+                keyBuilder.append(keyField).append("=").append(expectedRecord.get(keyField)).append(", ");
+            }
+            
+            if (!hasAllKeys) {
+                continue; // Skip this record if it doesn't have all required key fields
+            }
+            
+            String compositeKey = keyBuilder.toString();
+            if (compositeKey.endsWith(", ")) {
+                compositeKey = compositeKey.substring(0, compositeKey.length() - 2);
+            }
+            
+            // Search for a matching record in actual data
+            for (Map<String, Object> actualRecord : actualRecords) {
+                boolean keyMatch = true;
+                
+                // Check if all key fields match
+                for (String keyField : keyFieldArray) {
+                    if (!actualRecord.containsKey(keyField) || 
+                        !expectedRecord.get(keyField).equals(actualRecord.get(keyField).toString())) {
+                        keyMatch = false;
+                        break;
+                    }
+                }
+                
+                if (keyMatch) {
+                    foundMatch = true;
+                    matchedRecords++;
+                    
+                    // Compare all fields
+                    compareFields(expectedRecord, actualRecord, compositeKey, issues);
+                    mismatchedFields += issues.size() - mismatchedFields;
+                    
+                    break; // Found matching record, no need to check others
+                }
+            }
+            
+            if (!foundMatch) {
+                issues.add("No matching record found for keys: " + compositeKey);
+            }
+        } else {
+            // If no key fields, compare by index
+            int index = expectedData.indexOf(expectedRecord);
+            
+            if (index < actualRecords.size()) {
+                Map<String, Object> actualRecord = actualRecords.get(index);
+                matchedRecords++;
+                
+                // Compare all fields
+                compareFields(expectedRecord, actualRecord, "index " + index, issues);
+                mismatchedFields += issues.size() - mismatchedFields;
             } else {
-                Reporter.log("❌ Not matching with actual record " + (j + 1) + ": " + actualMap, MessageTypes.Info);
+                issues.add("Expected record at index " + index + " not found in response");
             }
         }
-
-        if (!matched) {
-            Reporter.log("❌ No match found for expected record " + (i + 1) + ": " + expectedMap, MessageTypes.Fail);
-            fail("Validation failed: no matching record found for expected data at index " + (i + 1));
-            return;
-        }
     }
-
-    Reporter.log("✅ All expected records matched successfully with API response.", MessageTypes.Pass);
+    
+    // Report results
+    Reporter.log("API response validation results for " + dataType + ":", MessageTypes.Info);
+    Reporter.log("- Total expected records: " + expectedData.size(), MessageTypes.Info);
+    Reporter.log("- Records matched: " + matchedRecords, MessageTypes.Info);
+    
+    if (mismatchedFields > 0) {
+        Reporter.log("- Fields mismatched: " + mismatchedFields, MessageTypes.Fail);
+    } else {
+        Reporter.log("- Fields mismatched: " + mismatchedFields, MessageTypes.Pass);
+    }
+    
+    if (!issues.isEmpty()) {
+        Reporter.log("Validation issues:", MessageTypes.Fail);
+        for (String issue : issues) {
+            Reporter.log("  - " + issue, MessageTypes.Fail);
+        }
+        Assert.fail("API response validation failed with " + issues.size() + " issues");
+    } else {
+        Reporter.log("Validation successful - all data matches!", MessageTypes.Pass);
+    }
 }
 
-
-private static boolean mapsAreEqual(Map<String, String> expected, Map<String, Object> actual) {
-    for (Map.Entry<String, String> entry : expected.entrySet()) {
-        String key = entry.getKey();
-        String expectedVal = entry.getValue();
-        Object actualValObj = actual.get(key);
-        String actualVal = (actualValObj != null) ? actualValObj.toString() : "null";
-
-        if (!expectedVal.equals(actualVal)) {
-            Reporter.log("Mismatch in field '" + key + "' - Expected: '" + expectedVal + "', Actual: '" + actualVal + "'", MessageTypes.Info);
-            return false;
+/**
+ * Helper method to compare fields between expected and actual records.
+ * 
+ * @param expectedRecord the expected record
+ * @param actualRecord the actual record
+ * @param recordIdentifier identifier for this record (composite key or index)
+ * @param issues list to add any issues found
+ */
+private void compareFields(Map<String, String> expectedRecord, Map<String, Object> actualRecord, 
+                          String recordIdentifier, List<String> issues) {
+    for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
+        String fieldName = entry.getKey();
+        String expectedValue = entry.getValue();
+        
+        if (!actualRecord.containsKey(fieldName)) {
+            issues.add("Field '" + fieldName + "' missing in record with " + recordIdentifier);
+            continue;
+        }
+        
+        Object actualObj = actualRecord.get(fieldName);
+        String actualValue = actualObj != null ? actualObj.toString() : "null";
+        
+        if (!expectedValue.equals(actualValue)) {
+            issues.add("Field '" + fieldName + "' mismatch in record with " + recordIdentifier + 
+                       " - Expected: '" + expectedValue + "', Actual: '" + actualValue + "'");
         }
     }
-    return true;
+}
+
+/**
+ * Validates API response against UI captured data without specifying key fields.
+ * Uses index-based comparison.
+ * 
+ * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
+ * @param responsePath the path to the array in the response (e.g., "empCalendarList")
+ */
+@QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath}")
+public void validateApiResponseAgainstUiData(String dataType, String responsePath) {
+    validateApiResponseAgainstUiDataWithKeys(dataType, responsePath, null);
 }
