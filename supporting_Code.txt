@@ -2329,612 +2329,1574 @@ Scenario: Search products with filters
 ```
 Additional GenericApiSteps
 --------------------------
-//--------------------------------------------------------------------------------
-// Database Integration Steps
-//--------------------------------------------------------------------------------
+package com.qaf.framework.stepdefs;
+
+import static org.testng.Assert.*;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.sql.CallableStatement;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
+
+import org.apache.commons.io.IOUtils;
+import org.everit.json.schema.Schema;
+import org.everit.json.schema.loader.SchemaLoader;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONTokener;
+
+import com.qaf.framework.config.ApiConfig;
+import com.qaf.framework.service.GenericApiService;
+import com.qaf.framework.util.ApiResponse;
+import com.qaf.framework.util.TestContextManager;
+import com.qaf.framework.util.ApiClientUtil;
+import com.qmetry.qaf.automation.core.ConfigurationManager;
+import com.qmetry.qaf.automation.step.QAFTestStep;
+import com.qmetry.qaf.automation.util.Reporter;
+import com.qmetry.qaf.automation.util.MessageTypes;
 
 /**
- * Executes a SQL query and stores the result for later validation.
- * 
- * @param query the SQL query to execute
- * @param resultName name to store the result under
+ * Generic step definitions for API testing.
+ * Provides a comprehensive set of steps for testing any API.
  */
-@QAFTestStep(description = "I execute SQL query {query} and store result as {resultName}")
-public void executeSqlQuery(String query, String resultName) {
-    try {
-        // Apply test data variables to query
-        query = processTemplateText(query);
+public class GenericApiSteps {
+    
+    private static final org.apache.commons.logging.Log logger = org.apache.commons.logging.LogFactory.getLog(GenericApiSteps.class);
+    private static final String CURRENT_API_SERVICE_KEY = "current.api.service";
+    private static final String STORED_RESPONSES_KEY = "stored.responses";
+    
+    //--------------------------------------------------------------------------------
+    // Setup Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Sets up testing for a specific API.
+     * 
+     * @param apiName the API name as defined in ApiConfig
+     */
+    @QAFTestStep(description = "I am testing the {apiName} API")
+    public void setupApiTest(String apiName) {
+        String endpoint = ApiConfig.getEndpoint(apiName);
+        if (endpoint == null) {
+            throw new IllegalArgumentException("Unknown API name: " + apiName);
+        }
         
-        Reporter.log("Executing SQL query: " + query, MessageTypes.Info);
-        List<Map<String, Object>> results = executeQuery(query);
-        Reporter.log("Query returned " + results.size() + " rows", MessageTypes.Info);
-        
-        // Store result in test context
-        TestContextManager.setContext("db.query." + resultName, results);
-    } catch (Exception e) {
-        Reporter.log("Error executing SQL query: " + e.getMessage(), MessageTypes.Fail);
-        throw new RuntimeException("Failed to execute SQL query", e);
+        TestContextManager.setCurrentApi(apiName, endpoint);
+        Reporter.log("Set up for testing the " + apiName + " API at endpoint: " + endpoint, MessageTypes.Info);
     }
-}
-
-/**
- * Executes a stored procedure and stores the result.
- * 
- * @param procedure the stored procedure name
- * @param parameters map of parameter names to values
- * @param resultName name to store the result under
- */
-@QAFTestStep(description = "I execute stored procedure {procedure} with parameters {parameters} and store result as {resultName}")
-public void executeStoredProcedure(String procedure, Map<String, Object> parameters, String resultName) {
-    try {
-        Reporter.log("Executing stored procedure: " + procedure, MessageTypes.Info);
+    
+    /**
+     * Sets the API endpoint directly.
+     * 
+     * @param endpoint the API endpoint to test
+     */
+    @QAFTestStep(description = "I set the API endpoint to {endpoint}")
+    public void setApiEndpoint(String endpoint) {
+        logger.info("Setting API endpoint to: " + endpoint);
+        TestContextManager.setCurrentApi("Custom", endpoint);
+        Reporter.log("API endpoint set to: " + endpoint, MessageTypes.Info);
+    }
+    
+    /**
+     * Sets a value in the test data map.
+     * 
+     * @param key the key
+     * @param value the value
+     */
+    @QAFTestStep(description = "I set test data {key} to {value}")
+    public void setTestDataValue(String key, String value) {
+        Object processedValue = value;
         
-        // Process parameters with test data
-        Map<String, Object> processedParams = new HashMap<>();
-        for (Map.Entry<String, Object> entry : parameters.entrySet()) {
-            if (entry.getValue() instanceof String) {
-                processedParams.put(entry.getKey(), processTemplateText((String) entry.getValue()));
+        // Try to convert to number if possible
+        try {
+            if (value.contains(".")) {
+                processedValue = Double.parseDouble(value);
             } else {
-                processedParams.put(entry.getKey(), entry.getValue());
+                processedValue = Integer.parseInt(value);
+            }
+        } catch (NumberFormatException e) {
+            // Keep as string if not a valid number
+            // For booleans
+            if (value.equalsIgnoreCase("true")) {
+                processedValue = Boolean.TRUE;
+            } else if (value.equalsIgnoreCase("false")) {
+                processedValue = Boolean.FALSE;
             }
         }
         
-        List<Map<String, Object>> results = executeStoredProc(procedure, processedParams);
-        Reporter.log("Stored procedure returned " + results.size() + " rows", MessageTypes.Info);
-        
-        // Store result in test context
-        TestContextManager.setContext("db.proc." + resultName, results);
-    } catch (Exception e) {
-        Reporter.log("Error executing stored procedure: " + e.getMessage(), MessageTypes.Fail);
-        throw new RuntimeException("Failed to execute stored procedure", e);
+        TestContextManager.setTestData(key, processedValue);
+        Reporter.log("Set test data: " + key + " = " + processedValue, MessageTypes.Info);
     }
-}
-
-/**
- * Executes a SQL query and uses the results as test data.
- * 
- * @param query the SQL query to execute
- */
-@QAFTestStep(description = "I execute SQL query {query} and use results as test data")
-public void executeSqlQueryAsTestData(String query) {
-    try {
-        // Apply test data variables to query
-        query = processTemplateText(query);
+    
+    /**
+     * Sets multiple values in the test data map.
+     * 
+     * @param data map of key-value pairs
+     */
+    @QAFTestStep(description = "I set test data {data}")
+    public void setTestDataValues(Map<String, String> data) {
+        for (Map.Entry<String, String> entry : data.entrySet()) {
+            setTestDataValue(entry.getKey(), entry.getValue());
+        }
+        Reporter.log("Set multiple test data values: " + data, MessageTypes.Info);
+    }
+    
+    /**
+     * Clears all test data.
+     */
+    @QAFTestStep(description = "I clear all test data")
+    public void clearAllTestData() {
+        TestContextManager.clearTestData();
+        Reporter.log("Cleared all test data", MessageTypes.Info);
+    }
+    
+    //--------------------------------------------------------------------------------
+    // Request Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Sends a request to the current API endpoint with a payload file.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param payloadFile the payload file name
+     */
+    @QAFTestStep(description = "I send a {method} request with payload file {payloadFile}")
+    public void sendRequestWithPayloadFile(String method, String payloadFile) {
+        String endpoint = TestContextManager.getCurrentApiEndpoint();
+        if (endpoint == null) {
+            throw new IllegalStateException("No API has been set up. Use 'I am testing the {apiName} API' first.");
+        }
         
-        Reporter.log("Executing SQL query for test data: " + query, MessageTypes.Info);
-        List<Map<String, Object>> results = executeQuery(query);
-        Reporter.log("Query returned " + results.size() + " rows", MessageTypes.Info);
+        try {
+            // Get the test data for variable substitution
+            Map<String, Object> testData = TestContextManager.getTestData();
+            
+            // Ensure messageId is present if not specified for POST/PUT requests
+            if (!testData.containsKey("messageId") && 
+                (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT"))) {
+                String messageId = ApiClientUtil.generateMessageId();
+                testData.put("messageId", messageId);
+                logger.info("Generated messageId: " + messageId);
+            }
+            
+            ApiResponse response = GenericApiService.sendRequestWithPayloadFile(endpoint, method, payloadFile, null);
+            
+            // Store the response
+            TestContextManager.setLastApiResponse(response);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully", MessageTypes.Info);
+            Reporter.log("Response status: " + response.getStatusCode(), MessageTypes.Info);
+            Reporter.log("Response body: " + response.getResponseBody(), MessageTypes.Info);
+            
+        } catch (Exception e) {
+            logger.error("Error sending API request: " + e.getMessage(), e);
+            Reporter.log("Error sending API request: " + e.getMessage(), MessageTypes.Fail);
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to a named API with a payload file.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param apiName the API name as defined in ApiConfig
+     * @param payloadFile the payload file name
+     */
+    @QAFTestStep(description = "I send a {method} request to {apiName} API with payload file {payloadFile}")
+    public void sendRequestToNamedApiWithPayloadFile(String method, String apiName, String payloadFile) {
+        String endpoint = ApiConfig.getEndpoint(apiName);
+        if (endpoint == null) {
+            throw new IllegalArgumentException("Unknown API name: " + apiName);
+        }
         
-        // If no results, nothing to do
-        if (results.isEmpty()) {
-            Reporter.log("Query returned no results, no test data to set", MessageTypes.Warn);
+        try {
+            // Get the test data for variable substitution
+            Map<String, Object> testData = TestContextManager.getTestData();
+            
+            // Ensure messageId is present if not specified for POST/PUT requests
+            if (!testData.containsKey("messageId") && 
+                (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT"))) {
+                String messageId = ApiClientUtil.generateMessageId();
+                testData.put("messageId", messageId);
+                logger.info("Generated messageId: " + messageId);
+            }
+            
+            ApiResponse response = GenericApiService.sendRequestWithPayloadFile(endpoint, method, payloadFile, null);
+            
+            // Store the response
+            TestContextManager.setLastApiResponse(response);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully to " + apiName + " API", MessageTypes.Info);
+            Reporter.log("Response status: " + response.getStatusCode(), MessageTypes.Info);
+            Reporter.log("Response body: " + response.getResponseBody(), MessageTypes.Info);
+            
+        } catch (Exception e) {
+            logger.error("Error sending API request: " + e.getMessage(), e);
+            Reporter.log("Error sending API request: " + e.getMessage(), MessageTypes.Fail);
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request to a specific endpoint with a payload file.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param endpoint the API endpoint
+     * @param payloadFile the payload file name
+     */
+    @QAFTestStep(description = "I send a {method} request to {endpoint} with payload file {payloadFile}")
+    public void sendRequestToEndpointWithPayloadFile(String method, String endpoint, String payloadFile) {
+        try {
+            // Get the test data for variable substitution
+            Map<String, Object> testData = TestContextManager.getTestData();
+            
+            // Ensure messageId is present if not specified for POST/PUT requests
+            if (!testData.containsKey("messageId") && 
+                (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT"))) {
+                String messageId = ApiClientUtil.generateMessageId();
+                testData.put("messageId", messageId);
+                logger.info("Generated messageId: " + messageId);
+            }
+            
+            ApiResponse response = GenericApiService.sendRequestWithPayloadFile(endpoint, method, payloadFile, null);
+            
+            // Store the response
+            TestContextManager.setLastApiResponse(response);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully to " + endpoint, MessageTypes.Info);
+            Reporter.log("Response status: " + response.getStatusCode(), MessageTypes.Info);
+            Reporter.log("Response body: " + response.getResponseBody(), MessageTypes.Info);
+            
+        } catch (Exception e) {
+            logger.error("Error sending API request: " + e.getMessage(), e);
+            Reporter.log("Error sending API request: " + e.getMessage(), MessageTypes.Fail);
+            throw e;
+        }
+    }
+    
+    /**
+     * Sends a request with raw payload.
+     * 
+     * @param method the HTTP method (GET, POST, PUT, DELETE, PATCH)
+     * @param payload the raw payload
+     */
+    @QAFTestStep(description = "I send a {method} request with payload: {payload}")
+    public void sendRequestWithRawPayload(String method, String payload) {
+        String endpoint = TestContextManager.getCurrentApiEndpoint();
+        if (endpoint == null) {
+            throw new IllegalStateException("No API has been set up. Use 'I am testing the {apiName} API' first.");
+        }
+        
+        try {
+            // Process template variables in the payload
+            payload = processTemplateText(payload);
+            
+            ApiResponse response = GenericApiService.sendRequest(endpoint, method, payload, null);
+            
+            // Store the response
+            TestContextManager.setLastApiResponse(response);
+            
+            Reporter.log(method.toUpperCase() + " request sent successfully", MessageTypes.Info);
+            Reporter.log("Response status: " + response.getStatusCode(), MessageTypes.Info);
+            Reporter.log("Response body: " + response.getResponseBody(), MessageTypes.Info);
+            
+        } catch (Exception e) {
+            logger.error("Error sending API request: " + e.getMessage(), e);
+            Reporter.log("Error sending API request: " + e.getMessage(), MessageTypes.Fail);
+            throw e;
+        }
+    }
+    
+    //--------------------------------------------------------------------------------
+    // Basic Validation Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Verifies the response status code.
+     * 
+     * @param expectedStatus the expected status code
+     */
+    @QAFTestStep(description = "the response status code should be {expectedStatus}")
+    public void verifyStatusCode(int expectedStatus) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
             return;
         }
         
-        // Take the first row and use its columns as test data
-        Map<String, Object> firstRow = results.get(0);
-        for (Map.Entry<String, Object> entry : firstRow.entrySet()) {
-            if (entry.getValue() != null) {
-                TestContextManager.setTestData(entry.getKey(), entry.getValue());
-                Reporter.log("Set test data from query: " + entry.getKey() + " = " + entry.getValue(), MessageTypes.Info);
+        int actualStatus = response.getStatusCode();
+        Reporter.log("Verifying status code: expected=" + expectedStatus + ", actual=" + actualStatus, MessageTypes.Info);
+        assertEquals(actualStatus, expectedStatus, "Response status code mismatch");
+    }
+    
+    /**
+     * Verifies the response is successful (2xx status code).
+     */
+    @QAFTestStep(description = "the response should be successful")
+    public void verifyResponseSuccessful() {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        boolean successful = response.isSuccessful();
+        Reporter.log("Verifying response is successful: " + successful, MessageTypes.Info);
+        assertTrue(successful, "Response is not successful. Status code: " + response.getStatusCode());
+    }
+    
+    /**
+     * Verifies the response contains a field.
+     * 
+     * @param field the field name to check
+     */
+    @QAFTestStep(description = "the response should contain field {field}")
+    public void verifyResponseContainsField(String field) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        boolean hasField = response.hasJsonField(field);
+        Reporter.log("Verifying response contains field '" + field + "': " + hasField, hasField ? MessageTypes.Pass : MessageTypes.Fail);
+        assertTrue(hasField, "Response does not contain field: " + field);
+    }
+    
+    /**
+     * Verifies a response field has a specific value.
+     * 
+     * @param field the field name
+     * @param expectedValue the expected value
+     */
+    @QAFTestStep(description = "the response field {field} should be {expectedValue}")
+    public void verifyResponseFieldValue(String field, String expectedValue) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field '" + field + "': expected=" + expectedValue + ", actual=" + actualValue, MessageTypes.Info);
+        
+        if (actualValue == null) {
+            Reporter.log("Field '" + field + "' not found in response", MessageTypes.Fail);
+            Assert.fail("Field not found in response: " + field);
+            return;
+        }
+        
+        boolean matches = isValueEqual(expectedValue, actualValue);
+        Reporter.log("Field '" + field + "' value " + (matches ? "matches" : "does not match") + " expected value", 
+                    matches ? MessageTypes.Pass : MessageTypes.Fail);
+        assertTrue(matches, "Field value mismatch for: " + field + " - Expected: " + expectedValue + ", Actual: " + actualValue);
+    }
+    
+    /**
+     * Verifies a response field contains a substring.
+     * 
+     * @param field the field name
+     * @param expectedText the expected substring
+     */
+    @QAFTestStep(description = "the response field {field} should contain {expectedText}")
+    public void verifyResponseFieldContains(String field, String expectedText) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field '" + field + "' contains: " + expectedText, MessageTypes.Info);
+        
+        if (actualValue == null) {
+            Reporter.log("Field '" + field + "' not found in response", MessageTypes.Fail);
+            Assert.fail("Field not found in response: " + field);
+            return;
+        }
+        
+        boolean contains = actualValue.contains(expectedText);
+        Reporter.log("Field '" + field + "' " + (contains ? "contains" : "does not contain") + " expected text", 
+                    contains ? MessageTypes.Pass : MessageTypes.Fail);
+        assertTrue(contains, "Field '" + field + "' does not contain: " + expectedText);
+    }
+    
+    /**
+     * Verifies a response field does not contain a substring.
+     * 
+     * @param field the field name
+     * @param unexpectedText the text that should not be present
+     */
+    @QAFTestStep(description = "the response field {field} should not contain {unexpectedText}")
+    public void verifyResponseFieldNotContains(String field, String unexpectedText) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        String actualValue = response.getValueFromJson(field);
+        Reporter.log("Verifying field '" + field + "' does not contain: " + unexpectedText, MessageTypes.Info);
+        
+        if (actualValue == null) {
+            Reporter.log("Field '" + field + "' not found in response", MessageTypes.Fail);
+            Assert.fail("Field not found in response: " + field);
+            return;
+        }
+        
+        boolean contains = actualValue.contains(unexpectedText);
+        Reporter.log("Field '" + field + "' " + (!contains ? "does not contain" : "contains") + " unexpected text", 
+                    !contains ? MessageTypes.Pass : MessageTypes.Fail);
+        assertFalse(contains, "Field '" + field + "' contains unexpected text: " + unexpectedText);
+    }
+    
+    /**
+     * Verifies a validation error message.
+     * 
+     * @param field the field with validation error
+     * @param expectedMessage the expected validation message
+     */
+    @QAFTestStep(description = "the validation error message for {field} should be {expectedMessage}")
+    public void verifyValidationErrorMessage(String field, String expectedMessage) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        String path = "validationErrorMessage." + field;
+        String actualMessage = response.getNestedValue(path);
+        
+        Reporter.log("Verifying validation error for field '" + field + "': expected=" + expectedMessage + ", actual=" + actualMessage, MessageTypes.Info);
+        assertEquals(actualMessage, expectedMessage, "Validation error message mismatch for field: " + field);
+    }
+    
+    /**
+     * Validates that the API response against UI data.
+     * 
+     * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
+     * @param responsePath the path to the array in the response (e.g., "empCalendarList")
+     */
+    @QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath}")
+    public void validateApiResponseAgainstUiData(String dataType, String responsePath) {
+        validateApiResponseAgainstUiDataWithKeys(dataType, responsePath, null);
+    }
+    
+    /**
+     * Validates that the API response against UI data using specific key fields.
+     * 
+     * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
+     * @param responsePath the path to the array in the response (e.g., "empCalendarList")
+     * @param keyFields comma-separated list of fields to use as keys for matching records
+     */
+    @QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath} with keys {keyFields}")
+    public void validateApiResponseAgainstUiDataWithKeys(String dataType, String responsePath, String keyFields) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        List<Map<String, String>> expectedData = TestContextManager.getUiCapturedData(dataType);
+        if (expectedData == null || expectedData.isEmpty()) {
+            Reporter.log("No expected data available for type: " + dataType, MessageTypes.Fail);
+            Assert.fail("No expected data available for type: " + dataType);
+            return;
+        }
+        
+        Reporter.log("Retrieved " + expectedData.size() + " expected records for validation", MessageTypes.Info);
+        
+        JSONObject jsonResponse = response.getJsonObject();
+        if (jsonResponse == null) {
+            Reporter.log("Invalid JSON response", MessageTypes.Fail);
+            Assert.fail("Invalid JSON response");
+            return;
+        }
+        
+        if (!jsonResponse.has(responsePath) || jsonResponse.isNull(responsePath)) {
+            Reporter.log("Response does not contain path: " + responsePath, MessageTypes.Fail);
+            Assert.fail("Response does not contain path: " + responsePath);
+            return;
+        }
+        
+        JSONArray responseArray = jsonResponse.getJSONArray(responsePath);
+        if (responseArray.length() == 0) {
+            Reporter.log(responsePath + " array is empty", MessageTypes.Fail);
+            Assert.fail(responsePath + " array is empty");
+            return;
+        }
+        
+        Reporter.log("Response contains " + responseArray.length() + " records", MessageTypes.Info);
+        
+        // Parse key fields if provided
+        String[] keyFieldArray = null;
+        if (keyFields != null && !keyFields.trim().isEmpty()) {
+            keyFieldArray = keyFields.split(",");
+            for (int i = 0; i < keyFieldArray.length; i++) {
+                keyFieldArray[i] = keyFieldArray[i].trim();
+            }
+            Reporter.log("Using key fields for matching: " + keyFields, MessageTypes.Info);
+        } else {
+            Reporter.log("No key fields specified - using scorecard matching", MessageTypes.Info);
+        }
+        
+        // Convert response array to a list of maps for easier processing
+        List<Map<String, String>> actualRecords = new ArrayList<>();
+        for (int i = 0; i < responseArray.length(); i++) {
+            JSONObject obj = responseArray.getJSONObject(i);
+            Map<String, String> map = new HashMap<>();
+            for (String key : obj.keySet()) {
+                Object value = obj.get(key);
+                map.put(key, value != null ? value.toString() : "null");
+            }
+            actualRecords.add(map);
+        }
+        
+        // Create a copy of actualRecords that we can modify
+        List<Map<String, String>> remainingActualRecords = new ArrayList<>(actualRecords);
+        
+        // Track overall statistics
+        int totalMatches = 0;
+        int totalMismatches = 0;
+        int unmatchedExpectedRecords = 0;
+        boolean validationFailed = false;
+        
+        // Process each map in expected data
+        for (int i = 0; i < expectedData.size(); i++) {
+            Map<String, String> expectedRecord = expectedData.get(i);
+            Reporter.log("\nValidating expected record #" + (i + 1) + ":", MessageTypes.Info);
+            
+            // Find the best matching map in actual data
+            int bestMatchIndex = -1;
+            
+            // If key fields are provided, use them for exact matching
+            if (keyFieldArray != null && keyFieldArray.length > 0) {
+                bestMatchIndex = findExactMatchByKeys(expectedRecord, remainingActualRecords, keyFieldArray);
+            }
+            
+            // If no match found by keys or no keys provided, use scorecard matching
+            if (bestMatchIndex == -1) {
+                bestMatchIndex = findBestMatch(expectedRecord, remainingActualRecords);
+            }
+            
+            if (bestMatchIndex != -1) {
+                Map<String, String> bestMatch = remainingActualRecords.get(bestMatchIndex);
+                
+                // Compare the maps in detail
+                int[] matchResults = compareRecords(expectedRecord, bestMatch, i, "Expected", "Actual");
+                totalMatches += matchResults[0];
+                totalMismatches += matchResults[1];
+                
+                if (matchResults[1] > 0) {
+                    validationFailed = true;
+                }
+                
+                // Remove the matched map to avoid matching it again
+                remainingActualRecords.remove(bestMatchIndex);
+            } else {
+                Reporter.log("No matching record found for expected record #" + (i + 1), MessageTypes.Fail);
+                unmatchedExpectedRecords++;
+                validationFailed = true;
             }
         }
         
-        // Store all results for potential later use
-        TestContextManager.setContext("db.lastQueryResults", results);
+        // Report any unmatched records in actual data
+        if (!remainingActualRecords.isEmpty()) {
+            Reporter.log("\nUnmatched records in response (" + remainingActualRecords.size() + "):", MessageTypes.Info);
+            for (int i = 0; i < Math.min(remainingActualRecords.size(), 3); i++) {
+                Reporter.log("Unmatched record: " + remainingActualRecords.get(i), MessageTypes.Info);
+            }
+            if (remainingActualRecords.size() > 3) {
+                Reporter.log("... and " + (remainingActualRecords.size() - 3) + " more unmatched records", MessageTypes.Info);
+            }
+        }
         
-        if (results.size() > 1) {
-            Reporter.log("Query returned multiple rows, only first row used for test data", MessageTypes.Info);
+        // Overall summary
+        Reporter.log("\nValidation Summary:", MessageTypes.Info);
+        Reporter.log("- Expected records: " + expectedData.size(), MessageTypes.Info);
+        Reporter.log("- Actual records: " + actualRecords.size(), MessageTypes.Info);
+        Reporter.log("- Matched records: " + (expectedData.size() - unmatchedExpectedRecords), MessageTypes.Info);
+        Reporter.log("- Unmatched expected records: " + unmatchedExpectedRecords, MessageTypes.Info);
+        Reporter.log("- Unmatched actual records: " + remainingActualRecords.size(), MessageTypes.Info);
+        Reporter.log("- Matching fields: " + totalMatches, MessageTypes.Info);
+        
+        if (totalMismatches > 0) {
+            Reporter.log("- Mismatched fields: " + totalMismatches, MessageTypes.Fail);
+        } else {
+            Reporter.log("- Mismatched fields: " + totalMismatches, MessageTypes.Pass);
         }
-    } catch (Exception e) {
-        Reporter.log("Error executing SQL query for test data: " + e.getMessage(), MessageTypes.Fail);
-        throw new RuntimeException("Failed to execute SQL query for test data", e);
-    }
-}
-
-/**
- * Validates that API response matches a database query result.
- * The keyField parameter is optional for matching records.
- * 
- * @param responseField the response field to validate
- * @param queryResult the stored query result name
- * @param keyField the field to use as a key for matching records (optional)
- */
-@QAFTestStep(description = "I validate response field {responseField} against SQL query result {queryResult} with key {keyField}")
-public void validateResponseAgainstQueryResult(String responseField, String queryResult, String keyField) {
-    validateResponseAgainstQueryResultInternal(responseField, queryResult, keyField);
-}
-
-/**
- * Validates that API response matches a database query result without specifying a key field.
- * 
- * @param responseField the response field to validate
- * @param queryResult the stored query result name
- */
-@QAFTestStep(description = "I validate response field {responseField} against SQL query result {queryResult}")
-public void validateResponseAgainstQueryResultNoKey(String responseField, String queryResult) {
-    validateResponseAgainstQueryResultInternal(responseField, queryResult, null);
-}
-
-/**
- * Internal implementation of response validation against query result.
- */
-private void validateResponseAgainstQueryResultInternal(String responseField, String queryResult, String keyField) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
-    }
-    
-    @SuppressWarnings("unchecked")
-    List<Map<String, Object>> dbResults = (List<Map<String, Object>>) TestContextManager.getContext("db.query." + queryResult);
-    if (dbResults == null || dbResults.isEmpty()) {
-        Reporter.log("No database results available for key: " + queryResult, MessageTypes.Fail);
-        Assert.fail("No database results available");
-        return;
-    }
-    
-    // Convert DB results to string values for comparison
-    List<Map<String, String>> expectedData = convertDbResultsToStringMaps(dbResults);
-    
-    // Extract the response data
-    JSONObject jsonResponse = response.getJsonObject();
-    if (!jsonResponse.has(responseField)) {
-        Reporter.log("Response does not contain field: " + responseField, MessageTypes.Fail);
-        Assert.fail("Response field not found: " + responseField);
-        return;
-    }
-    
-    JSONArray responseArray;
-    if (jsonResponse.get(responseField) instanceof JSONArray) {
-        responseArray = jsonResponse.getJSONArray(responseField);
-    } else if (jsonResponse.get(responseField) instanceof JSONObject) {
-        // If it's a single object, wrap in array for consistent processing
-        responseArray = new JSONArray();
-        responseArray.put(jsonResponse.getJSONObject(responseField));
-    } else {
-        Reporter.log("Response field is not an array or object: " + responseField, MessageTypes.Fail);
-        Assert.fail("Invalid response field type");
-        return;
-    }
-    
-    // Convert response array to list of maps
-    List<Map<String, String>> actualData = new ArrayList<>();
-    for (int i = 0; i < responseArray.length(); i++) {
-        JSONObject obj = responseArray.getJSONObject(i);
-        Map<String, String> map = new HashMap<>();
-        for (String key : obj.keySet()) {
-            map.put(key, obj.get(key) != null ? obj.get(key).toString() : "null");
-        }
-        actualData.add(map);
-    }
-    
-    // Split key fields if provided
-    String[] keyFields = keyField != null && !keyField.isEmpty() ? keyField.split(",") : null;
-    if (keyFields != null) {
-        for (int i = 0; i < keyFields.length; i++) {
-            keyFields[i] = keyFields[i].trim();
+        
+        if (validationFailed) {
+            Reporter.log("\nValidation failed. See above for details.", MessageTypes.Fail);
+            Assert.fail("API response validation failed with field mismatches or unmatched records");
+        } else {
+            Reporter.log("\nValidation successful - all expected records matched!", MessageTypes.Pass);
         }
     }
     
-    // Validate the data
-    validateDataSets(expectedData, actualData, keyFields, "Database", "Response");
-}
-
-//--------------------------------------------------------------------------------
-// Request Chaining Steps
-//--------------------------------------------------------------------------------
-
-/**
- * Extracts a value from the response and stores it as test data.
- * 
- * @param responseField the field to extract
- * @param testDataKey the key to store the value under
- */
-@QAFTestStep(description = "I extract response field {responseField} and store as test data {testDataKey}")
-public void extractResponseField(String responseField, String testDataKey) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
+    /**
+     * Prints all test data for debugging.
+     */
+    @QAFTestStep(description = "I print all test data for debugging")
+    public void printAllTestData() {
+        Map<String, Object> data = TestContextManager.getTestData();
+        Reporter.log("=== Current Test Data ===", MessageTypes.Info);
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            Reporter.log(entry.getKey() + " = " + entry.getValue(), MessageTypes.Info);
+        }
     }
     
-    String value = response.getValueFromJson(responseField);
-    if (value == null) {
-        Reporter.log("Response field not found: " + responseField, MessageTypes.Fail);
-        Assert.fail("Response field not found: " + responseField);
-        return;
+    /**
+     * Prints the response body for debugging.
+     */
+    @QAFTestStep(description = "I print the response body for debugging")
+    public void printResponseBody() {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            return;
+        }
+        
+        Reporter.log("=== Response Body ===", MessageTypes.Info);
+        Reporter.log(response.getResponseBody(), MessageTypes.Info);
     }
     
-    TestContextManager.setTestData(testDataKey, value);
-    Reporter.log("Extracted response field '" + responseField + "' value '" + value + "' and stored as '" + testDataKey + "'", MessageTypes.Info);
-}
-
-/**
- * Extracts a value from a nested path in the response and stores it as test data.
- * 
- * @param responsePath the path to extract (e.g. "data.pagination.nextPageToken")
- * @param testDataKey the key to store the value under
- */
-@QAFTestStep(description = "I extract value from response path {responsePath} and store as test data {testDataKey}")
-public void extractResponsePath(String responsePath, String testDataKey) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
+    //--------------------------------------------------------------------------------
+    // Database Integration Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Executes a SQL query and stores the result for later validation.
+     * 
+     * @param query the SQL query to execute
+     * @param resultName name to store the result under
+     */
+    @QAFTestStep(description = "I execute SQL query {query} and store result as {resultName}")
+    public void executeSqlQuery(String query, String resultName) {
+        try {
+            // Apply test data variables to query
+            query = processTemplateText(query);
+            
+            Reporter.log("Executing SQL query: " + query, MessageTypes.Info);
+            List<Map<String, Object>> results = executeQuery(query);
+            Reporter.log("Query returned " + results.size() + " rows", MessageTypes.Info);
+            
+            // Store result in test context
+            TestContextManager.setContext("db.query." + resultName, results);
+        } catch (Exception e) {
+            Reporter.log("Error executing SQL query: " + e.getMessage(), MessageTypes.Fail);
+            throw new RuntimeException("Failed to execute SQL query", e);
+        }
     }
     
-    String value = response.getNestedValue(responsePath);
-    if (value == null) {
-        Reporter.log("Response path not found: " + responsePath, MessageTypes.Fail);
-        Assert.fail("Response path not found: " + responsePath);
-        return;
+    /**
+     * Executes a stored procedure and stores the result.
+     * 
+     * @param procedure the stored procedure name
+     * @param parameters map of parameter names to values
+     * @param resultName name to store the result under
+     */
+    @QAFTestStep(description = "I execute stored procedure {procedure} with parameters {parameters} and store result as {resultName}")
+    public void executeStoredProcedure(String procedure, Map<String, Object> parameters, String resultName) {
+        try {
+            Reporter.log("Executing stored procedure: " + procedure, MessageTypes.Info);
+            
+            // Process parameters with test data
+            Map<String, Object> processedParams = new HashMap<>();
+            for (Map.Entry<String, Object> entry : parameters.entrySet()) {
+                if (entry.getValue() instanceof String) {
+                    processedParams.put(entry.getKey(), processTemplateText((String) entry.getValue()));
+                } else {
+                    processedParams.put(entry.getKey(), entry.getValue());
+                }
+            }
+            
+            List<Map<String, Object>> results = executeStoredProc(procedure, processedParams);
+            Reporter.log("Stored procedure returned " + results.size() + " rows", MessageTypes.Info);
+            
+            // Store result in test context
+            TestContextManager.setContext("db.proc." + resultName, results);
+        } catch (Exception e) {
+            Reporter.log("Error executing stored procedure: " + e.getMessage(), MessageTypes.Fail);
+            throw new RuntimeException("Failed to execute stored procedure", e);
+        }
     }
     
-    TestContextManager.setTestData(testDataKey, value);
-    Reporter.log("Extracted response path '" + responsePath + "' value '" + value + "' and stored as '" + testDataKey + "'", MessageTypes.Info);
-}
-
-/**
- * Extracts multiple values from response and stores them as test data.
- * 
- * @param fieldsToExtract map of response fields to test data keys
- */
-@QAFTestStep(description = "I extract response fields {fieldsToExtract} and store as test data")
-public void extractMultipleResponseFields(Map<String, String> fieldsToExtract) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
+    /**
+     * Executes a SQL query and uses the results as test data.
+     * 
+     * @param query the SQL query to execute
+     */
+    @QAFTestStep(description = "I execute SQL query {query} and use results as test data")
+    public void executeSqlQueryAsTestData(String query) {
+        try {
+            // Apply test data variables to query
+            query = processTemplateText(query);
+            
+            Reporter.log("Executing SQL query for test data: " + query, MessageTypes.Info);
+            List<Map<String, Object>> results = executeQuery(query);
+            Reporter.log("Query returned " + results.size() + " rows", MessageTypes.Info);
+            
+            // If no results, nothing to do
+            if (results.isEmpty()) {
+                Reporter.log("Query returned no results, no test data to set", MessageTypes.Warn);
+                return;
+            }
+            
+            // Take the first row and use its columns as test data
+            Map<String, Object> firstRow = results.get(0);
+            for (Map.Entry<String, Object> entry : firstRow.entrySet()) {
+                if (entry.getValue() != null) {
+                    TestContextManager.setTestData(entry.getKey(), entry.getValue());
+                    Reporter.log("Set test data from query: " + entry.getKey() + " = " + entry.getValue(), MessageTypes.Info);
+                }
+            }
+            
+            // Store all results for potential later use
+            TestContextManager.setContext("db.lastQueryResults", results);
+            
+            if (results.size() > 1) {
+                Reporter.log("Query returned multiple rows, only first row used for test data", MessageTypes.Info);
+            }
+        } catch (Exception e) {
+            Reporter.log("Error executing SQL query for test data: " + e.getMessage(), MessageTypes.Fail);
+            throw new RuntimeException("Failed to execute SQL query for test data", e);
+        }
     }
     
-    for (Map.Entry<String, String> entry : fieldsToExtract.entrySet()) {
-        String responseField = entry.getKey();
-        String testDataKey = entry.getValue();
+    /**
+     * Validates that API response matches a database query result.
+     * The keyField parameter is optional for matching records.
+     * 
+     * @param responseField the response field to validate
+     * @param queryResult the stored query result name
+     * @param keyField the field to use as a key for matching records (optional)
+     */
+    @QAFTestStep(description = "I validate response field {responseField} against SQL query result {queryResult} with key {keyField}")
+    public void validateResponseAgainstQueryResult(String responseField, String queryResult, String keyField) {
+        validateResponseAgainstQueryResultInternal(responseField, queryResult, keyField);
+    }
+    
+    /**
+     * Validates that API response matches a database query result without specifying a key field.
+     * 
+     * @param responseField the response field to validate
+     * @param queryResult the stored query result name
+     */
+    @QAFTestStep(description = "I validate response field {responseField} against SQL query result {queryResult}")
+    public void validateResponseAgainstQueryResultNoKey(String responseField, String queryResult) {
+        validateResponseAgainstQueryResultInternal(responseField, queryResult, null);
+    }
+    
+    /**
+     * Internal implementation of response validation against query result.
+     */
+    private void validateResponseAgainstQueryResultInternal(String responseField, String queryResult, String keyField) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> dbResults = (List<Map<String, Object>>) TestContextManager.getContext("db.query." + queryResult);
+        if (dbResults == null || dbResults.isEmpty()) {
+            Reporter.log("No database results available for key: " + queryResult, MessageTypes.Fail);
+            Assert.fail("No database results available");
+            return;
+        }
+        
+        // Convert DB results to string values for comparison
+        List<Map<String, String>> expectedData = convertDbResultsToStringMaps(dbResults);
+        
+        // Extract the response data
+        JSONObject jsonResponse = response.getJsonObject();
+        if (!jsonResponse.has(responseField)) {
+            Reporter.log("Response does not contain field: " + responseField, MessageTypes.Fail);
+            Assert.fail("Response field not found: " + responseField);
+            return;
+        }
+        
+        JSONArray responseArray;
+        if (jsonResponse.get(responseField) instanceof JSONArray) {
+            responseArray = jsonResponse.getJSONArray(responseField);
+        } else if (jsonResponse.get(responseField) instanceof JSONObject) {
+            // If it's a single object, wrap in array for consistent processing
+            responseArray = new JSONArray();
+            responseArray.put(jsonResponse.getJSONObject(responseField));
+        } else {
+            Reporter.log("Response field is not an array or object: " + responseField, MessageTypes.Fail);
+            Assert.fail("Invalid response field type");
+            return;
+        }
+        
+        // Convert response array to list of maps
+        List<Map<String, String>> actualData = new ArrayList<>();
+        for (int i = 0; i < responseArray.length(); i++) {
+            JSONObject obj = responseArray.getJSONObject(i);
+            Map<String, String> map = new HashMap<>();
+            for (String key : obj.keySet()) {
+                map.put(key, obj.get(key) != null ? obj.get(key).toString() : "null");
+            }
+            actualData.add(map);
+        }
+        
+        // Split key fields if provided
+        String[] keyFields = keyField != null && !keyField.isEmpty() ? keyField.split(",") : null;
+        if (keyFields != null) {
+            for (int i = 0; i < keyFields.length; i++) {
+                keyFields[i] = keyFields[i].trim();
+            }
+        }
+        
+        // Validate the data
+        validateDataSets(expectedData, actualData, keyFields, "Database", "Response");
+    }
+    
+    //--------------------------------------------------------------------------------
+    // Request Chaining Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Extracts a value from the response and stores it as test data.
+     * 
+     * @param responseField the field to extract
+     * @param testDataKey the key to store the value under
+     */
+    @QAFTestStep(description = "I extract response field {responseField} and store as test data {testDataKey}")
+    public void extractResponseField(String responseField, String testDataKey) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
         
         String value = response.getValueFromJson(responseField);
-        if (value != null) {
-            TestContextManager.setTestData(testDataKey, value);
-            Reporter.log("Extracted response field '" + responseField + "' value '" + value + "' and stored as '" + testDataKey + "'", MessageTypes.Info);
+        if (value == null) {
+            Reporter.log("Response field not found: " + responseField, MessageTypes.Fail);
+            Assert.fail("Response field not found: " + responseField);
+            return;
+        }
+        
+        TestContextManager.setTestData(testDataKey, value);
+        Reporter.log("Extracted response field '" + responseField + "' value '" + value + "' and stored as '" + testDataKey + "'", MessageTypes.Info);
+    }
+    
+    /**
+     * Extracts a value from a nested path in the response and stores it as test data.
+     * 
+     * @param responsePath the path to extract (e.g. "data.pagination.nextPageToken")
+     * @param testDataKey the key to store the value under
+     */
+    @QAFTestStep(description = "I extract value from response path {responsePath} and store as test data {testDataKey}")
+    public void extractResponsePath(String responsePath, String testDataKey) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        String value = response.getNestedValue(responsePath);
+        if (value == null) {
+            Reporter.log("Response path not found: " + responsePath, MessageTypes.Fail);
+            Assert.fail("Response path not found: " + responsePath);
+            return;
+        }
+        
+        TestContextManager.setTestData(testDataKey, value);
+        Reporter.log("Extracted response path '" + responsePath + "' value '" + value + "' and stored as '" + testDataKey + "'", MessageTypes.Info);
+    }
+    
+    /**
+     * Extracts multiple values from response and stores them as test data.
+     * 
+     * @param fieldsToExtract map of response fields to test data keys
+     */
+    @QAFTestStep(description = "I extract response fields {fieldsToExtract} and store as test data")
+    public void extractMultipleResponseFields(Map<String, String> fieldsToExtract) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        for (Map.Entry<String, String> entry : fieldsToExtract.entrySet()) {
+            String responseField = entry.getKey();
+            String testDataKey = entry.getValue();
+            
+            String value = response.getValueFromJson(responseField);
+            if (value != null) {
+                TestContextManager.setTestData(testDataKey, value);
+                Reporter.log("Extracted response field '" + responseField + "' value '" + value + "' and stored as '" + testDataKey + "'", MessageTypes.Info);
+            } else {
+                Reporter.log("Response field not found: " + responseField, MessageTypes.Warn);
+            }
+        }
+    }
+    
+    //--------------------------------------------------------------------------------
+    // Response Storage and Comparison Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Stores the current response for later comparison.
+     * 
+     * @param responseName the name to store the response under
+     */
+    @QAFTestStep(description = "I store current response as {responseName}")
+    public void storeCurrentResponse(String responseName) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        Map<String, ApiResponse> storedResponses = getStoredResponsesMap();
+        storedResponses.put(responseName, response);
+        
+        Reporter.log("Stored current response as '" + responseName + "'", MessageTypes.Info);
+    }
+    
+    /**
+     * Validates that the current response matches a previously stored response.
+     * 
+     * @param responseName the name of the stored response
+     */
+    @QAFTestStep(description = "I validate current response matches stored response {responseName}")
+    public void validateAgainstStoredResponse(String responseName) {
+        ApiResponse currentResponse = TestContextManager.getLastApiResponse();
+        if (currentResponse == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        Map<String, ApiResponse> storedResponses = getStoredResponsesMap();
+        ApiResponse storedResponse = storedResponses.get(responseName);
+        
+        if (storedResponse == null) {
+            Reporter.log("No stored response found with name: " + responseName, MessageTypes.Fail);
+            Assert.fail("No stored response found with name: " + responseName);
+            return;
+        }
+        
+        // Compare the response bodies
+        String currentBody = currentResponse.getResponseBody();
+        String storedBody = storedResponse.getResponseBody();
+        
+        if (currentBody.equals(storedBody)) {
+            Reporter.log("Current response matches stored response '" + responseName + "'", MessageTypes.Pass);
         } else {
-            Reporter.log("Response field not found: " + responseField, MessageTypes.Warn);
+            Reporter.log("Current response does not match stored response '" + responseName + "'", MessageTypes.Fail);
+            Reporter.log("Expected: " + storedBody, MessageTypes.Info);
+            Reporter.log("Actual: " + currentBody, MessageTypes.Info);
+            Assert.fail("Current response does not match stored response '" + responseName + "'");
         }
     }
-}
-
-//--------------------------------------------------------------------------------
-// Response Storage and Comparison Steps
-//--------------------------------------------------------------------------------
-
-/**
- * Stores the current response for later comparison.
- * 
- * @param responseName the name to store the response under
- */
-@QAFTestStep(description = "I store current response as {responseName}")
-public void storeCurrentResponse(String responseName) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
-    }
     
-    Map<String, ApiResponse> storedResponses = getStoredResponsesMap();
-    storedResponses.put(responseName, response);
+    //--------------------------------------------------------------------------------
+    // Advanced Validation Steps
+    //--------------------------------------------------------------------------------
     
-    Reporter.log("Stored current response as '" + responseName + "'", MessageTypes.Info);
-}
-
-/**
- * Validates that the current response matches a previously stored response.
- * 
- * @param responseName the name of the stored response
- */
-@QAFTestStep(description = "I validate current response matches stored response {responseName}")
-public void validateAgainstStoredResponse(String responseName) {
-    ApiResponse currentResponse = TestContextManager.getLastApiResponse();
-    if (currentResponse == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
-    }
-    
-    Map<String, ApiResponse> storedResponses = getStoredResponsesMap();
-    ApiResponse storedResponse = storedResponses.get(responseName);
-    
-    if (storedResponse == null) {
-        Reporter.log("No stored response found with name: " + responseName, MessageTypes.Fail);
-        Assert.fail("No stored response found with name: " + responseName);
-        return;
-    }
-    
-    // Compare the response bodies
-    String currentBody = currentResponse.getResponseBody();
-    String storedBody = storedResponse.getResponseBody();
-    
-    if (currentBody.equals(storedBody)) {
-        Reporter.log("Current response matches stored response '" + responseName + "'", MessageTypes.Pass);
-    } else {
-        Reporter.log("Current response does not match stored response '" + responseName + "'", MessageTypes.Fail);
-        Reporter.log("Expected: " + storedBody, MessageTypes.Info);
-        Reporter.log("Actual: " + currentBody, MessageTypes.Info);
-        Assert.fail("Current response does not match stored response '" + responseName + "'");
-    }
-}
-
-//--------------------------------------------------------------------------------
-// Advanced Validation Steps
-//--------------------------------------------------------------------------------
-
-/**
- * Validates that the response matches a JSON schema.
- * 
- * @param schemaFileName the JSON schema file name
- */
-@QAFTestStep(description = "I validate response against JSON schema {schemaFileName}")
-public void validateResponseSchema(String schemaFileName) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
-    }
-    
-    try {
-        String schemaDir = ConfigurationManager.getBundle().getString("schema.dir", "resources/schemas");
-        String path = schemaDir + "/" + schemaFileName;
-        
-        File schemaFile = new File(path);
-        if (!schemaFile.exists()) {
-            Reporter.log("Schema file not found: " + path, MessageTypes.Fail);
-            Assert.fail("Schema file not found: " + path);
+    /**
+     * Validates that the response matches a JSON schema.
+     * 
+     * @param schemaFileName the JSON schema file name
+     */
+    @QAFTestStep(description = "I validate response against JSON schema {schemaFileName}")
+    public void validateResponseSchema(String schemaFileName) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
             return;
         }
         
-        // Load schema
-        JSONObject rawSchema = new JSONObject(new JSONTokener(new FileInputStream(schemaFile)));
-        Schema schema = SchemaLoader.load(rawSchema);
-        
-        // Parse response body
-        JSONObject responseJson;
         try {
-            responseJson = new JSONObject(response.getResponseBody());
-        } catch (Exception e) {
-            Reporter.log("Response is not a valid JSON object", MessageTypes.Fail);
-            Assert.fail("Response is not a valid JSON object");
-            return;
-        }
-        
-        // Validate
-        try {
-            schema.validate(responseJson);
-            Reporter.log("Response validates against schema '" + schemaFileName + "'", MessageTypes.Pass);
-        } catch (Exception e) {
-            Reporter.log("Schema validation failed: " + e.getMessage(), MessageTypes.Fail);
-            Assert.fail("Schema validation failed: " + e.getMessage());
-        }
-    } catch (Exception e) {
-        Reporter.log("Error during schema validation: " + e.getMessage(), MessageTypes.Fail);
-        throw new RuntimeException("Schema validation error", e);
-    }
-}
-
-/**
- * Validates that a field matches a regular expression pattern.
- * 
- * @param field the field to check
- * @param pattern the regular expression pattern
- */
-@QAFTestStep(description = "the response field {field} should match pattern {pattern}")
-public void fieldShouldMatchPattern(String field, String pattern) {
-    ApiResponse response = TestContextManager.getLastApiResponse();
-    if (response == null) {
-        Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
-        Assert.fail("No API response available");
-        return;
-    }
-    
-    String value = response.getValueFromJson(field);
-    if (value == null) {
-        Reporter.log("Response field not found: " + field, MessageTypes.Fail);
-        Assert.fail("Response field not found");
-        return;
-    }
-    
-    boolean matches = Pattern.matches(pattern, value);
-    
-    if (matches) {
-        Reporter.log("Field '" + field + "' with value '" + value + "' matches pattern '" + pattern + "'", MessageTypes.Pass);
-    } else {
-        Reporter.log("Field '" + field + "' with value '" + value + "' does not match pattern '" + pattern + "'", MessageTypes.Fail);
-        Assert.fail("Field does not match pattern");
-    }
-}
-
-//--------------------------------------------------------------------------------
-// Conditional and Flow Control Steps
-//--------------------------------------------------------------------------------
-
-/**
- * Polls an API endpoint until a condition is met or timeout is reached.
- * 
- * @param apiName the API name
- * @param intervalSeconds the polling interval in seconds
- * @param maxTimeMinutes the maximum polling time in minutes
- * @param field the field to check
- * @param expectedStatus the expected status to wait for
- */
-@QAFTestStep(description = "I poll {apiName} API every {intervalSeconds} seconds for maximum {maxTimeMinutes} minutes until field {field} is {expectedStatus}")
-public void pollApiUntilCondition(String apiName, int intervalSeconds, int maxTimeMinutes, String field, String expectedStatus) {
-    LocalDateTime startTime = LocalDateTime.now();
-    LocalDateTime endTime = startTime.plusMinutes(maxTimeMinutes);
-    boolean conditionMet = false;
-    
-    String endpoint = ApiConfig.getEndpoint(apiName);
-    if (endpoint == null) {
-        Reporter.log("Unknown API name: " + apiName, MessageTypes.Fail);
-        Assert.fail("Unknown API name");
-        return;
-    }
-    
-    // Store original API endpoint to restore later
-    String originalEndpoint = TestContextManager.getCurrentApiEndpoint();
-    
-    try {
-        // Set up for polling
-        TestContextManager.setCurrentApi(apiName, endpoint);
-        
-        Reporter.log("Polling " + apiName + " API until field '" + field + "' is '" + expectedStatus + "' (timeout: " + maxTimeMinutes + " minutes)", MessageTypes.Info);
-        
-        int pollCount = 0;
-        while (LocalDateTime.now().isBefore(endTime) && !conditionMet) {
-            pollCount++;
+            String schemaDir = ConfigurationManager.getBundle().getString("schema.dir", "resources/schemas");
+            String path = schemaDir + "/" + schemaFileName;
             
-            // Send API request
+            File schemaFile = new File(path);
+            if (!schemaFile.exists()) {
+                Reporter.log("Schema file not found: " + path, MessageTypes.Fail);
+                Assert.fail("Schema file not found: " + path);
+                return;
+            }
+            
+            // Load schema
+            JSONObject rawSchema = new JSONObject(new JSONTokener(new FileInputStream(schemaFile)));
+            Schema schema = SchemaLoader.load(rawSchema);
+            
+            // Parse response body
+            JSONObject responseJson;
             try {
-                Reporter.log("Poll attempt #" + pollCount, MessageTypes.Info);
-                
-                // Assuming the payload file uses the API name
-                String payloadFile = apiName.toLowerCase().replace(" ", "-") + "-poll.json";
-                GenericApiService.sendRequestWithPayloadFile(endpoint, "GET", payloadFile, null);
-                
-                // Check condition
-                ApiResponse response = TestContextManager.getLastApiResponse();
-                String actualValue = response.getValueFromJson(field);
-                
-                if (expectedStatus.equals(actualValue)) {
-                    conditionMet = true;
-                    Reporter.log("Condition met: field '" + field + "' is '" + expectedStatus + "' after " + pollCount + " attempts", MessageTypes.Pass);
-                } else {
-                    Reporter.log("Current value of field '" + field + "' is '" + actualValue + "', waiting for '" + expectedStatus + "'", MessageTypes.Info);
-                }
+                responseJson = new JSONObject(response.getResponseBody());
             } catch (Exception e) {
-                Reporter.log("Error during polling attempt: " + e.getMessage(), MessageTypes.Info);
+                Reporter.log("Response is not a valid JSON object", MessageTypes.Fail);
+                Assert.fail("Response is not a valid JSON object");
+                return;
             }
             
-            // Wait for next interval if not done
-            if (!conditionMet && LocalDateTime.now().isBefore(endTime)) {
-                Thread.sleep(intervalSeconds * 1000);
+            // Validate
+            try {
+                schema.validate(responseJson);
+                Reporter.log("Response validates against schema '" + schemaFileName + "'", MessageTypes.Pass);
+            } catch (Exception e) {
+                Reporter.log("Schema validation failed: " + e.getMessage(), MessageTypes.Fail);
+                Assert.fail("Schema validation failed: " + e.getMessage());
+            }
+        } catch (Exception e) {
+            Reporter.log("Error during schema validation: " + e.getMessage(), MessageTypes.Fail);
+            throw new RuntimeException("Schema validation error", e);
+        }
+    }
+    
+    /**
+     * Validates that a field matches a regular expression pattern.
+     * 
+     * @param field the field to check
+     * @param pattern the regular expression pattern
+     */
+    @QAFTestStep(description = "the response field {field} should match pattern {pattern}")
+    public void fieldShouldMatchPattern(String field, String pattern) {
+        ApiResponse response = TestContextManager.getLastApiResponse();
+        if (response == null) {
+            Reporter.log("No API response available. Make sure to send a request first.", MessageTypes.Fail);
+            Assert.fail("No API response available");
+            return;
+        }
+        
+        String value = response.getValueFromJson(field);
+        if (value == null) {
+            Reporter.log("Response field not found: " + field, MessageTypes.Fail);
+            Assert.fail("Response field not found");
+            return;
+        }
+        
+        boolean matches = Pattern.matches(pattern, value);
+        
+        if (matches) {
+            Reporter.log("Field '" + field + "' with value '" + value + "' matches pattern '" + pattern + "'", MessageTypes.Pass);
+        } else {
+            Reporter.log("Field '" + field + "' with value '" + value + "' does not match pattern '" + pattern + "'", MessageTypes.Fail);
+            Assert.fail("Field does not match pattern");
+        }
+    }
+    
+    //--------------------------------------------------------------------------------
+    // Conditional and Flow Control Steps
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Polls an API endpoint until a condition is met or timeout is reached.
+     * 
+     * @param apiName the API name
+     * @param intervalSeconds the polling interval in seconds
+     * @param maxTimeMinutes the maximum polling time in minutes
+     * @param field the field to check
+     * @param expectedStatus the expected status to wait for
+     */
+    @QAFTestStep(description = "I poll {apiName} API every {intervalSeconds} seconds for maximum {maxTimeMinutes} minutes until field {field} is {expectedStatus}")
+    public void pollApiUntilCondition(String apiName, int intervalSeconds, int maxTimeMinutes, String field, String expectedStatus) {
+        LocalDateTime startTime = LocalDateTime.now();
+        LocalDateTime endTime = startTime.plusMinutes(maxTimeMinutes);
+        boolean conditionMet = false;
+        
+        String endpoint = ApiConfig.getEndpoint(apiName);
+        if (endpoint == null) {
+            Reporter.log("Unknown API name: " + apiName, MessageTypes.Fail);
+            Assert.fail("Unknown API name");
+            return;
+        }
+        
+        // Store original API endpoint to restore later
+        String originalEndpoint = TestContextManager.getCurrentApiEndpoint();
+        
+        try {
+            // Set up for polling
+            TestContextManager.setCurrentApi(apiName, endpoint);
+            
+            Reporter.log("Polling " + apiName + " API until field '" + field + "' is '" + expectedStatus + "' (timeout: " + maxTimeMinutes + " minutes)", MessageTypes.Info);
+            
+            int pollCount = 0;
+            while (LocalDateTime.now().isBefore(endTime) && !conditionMet) {
+                pollCount++;
+                
+                // Send API request
+                try {
+                    Reporter.log("Poll attempt #" + pollCount, MessageTypes.Info);
+                    
+                    // Assuming the payload file uses the API name
+                    String payloadFile = apiName.toLowerCase().replace(" ", "-") + "-poll.json";
+                    ApiResponse response = GenericApiService.sendRequestWithPayloadFile(endpoint, "GET", payloadFile, null);
+                    TestContextManager.setLastApiResponse(response);
+                    
+                    // Check condition
+                    String actualValue = response.getValueFromJson(field);
+                    
+                    if (expectedStatus.equals(actualValue)) {
+                        conditionMet = true;
+                        Reporter.log("Condition met: field '" + field + "' is '" + expectedStatus + "' after " + pollCount + " attempts", MessageTypes.Pass);
+                    } else {
+                        Reporter.log("Current value of field '" + field + "' is '" + actualValue + "', waiting for '" + expectedStatus + "'", MessageTypes.Info);
+                    }
+                } catch (Exception e) {
+                    Reporter.log("Error during polling attempt: " + e.getMessage(), MessageTypes.Info);
+                }
+                
+                // Wait for next interval if not done
+                if (!conditionMet && LocalDateTime.now().isBefore(endTime)) {
+                    Thread.sleep(intervalSeconds * 1000);
+                }
+            }
+            
+            if (!conditionMet) {
+                Reporter.log("Timeout reached. Condition not met after " + maxTimeMinutes + " minutes", MessageTypes.Fail);
+                Assert.fail("Polling timeout reached");
+            }
+        } catch (Exception e) {
+            Reporter.log("Error during polling: " + e.getMessage(), MessageTypes.Fail);
+            throw new RuntimeException("Polling failed", e);
+        } finally {
+            // Restore original API endpoint if there was one
+            if (originalEndpoint != null) {
+                TestContextManager.setCurrentApi("Original", originalEndpoint);
+            }
+        }
+    }
+    
+    //--------------------------------------------------------------------------------
+    // Helper Methods
+    //--------------------------------------------------------------------------------
+    
+    /**
+     * Helper method to execute a SQL query and return results.
+     */
+    private List<Map<String, Object>> executeQuery(String query) throws Exception {
+        List<Map<String, Object>> results = new ArrayList<>();
+        Connection conn = null;
+        Statement stmt = null;
+        ResultSet rs = null;
+        
+        try {
+            conn = getDatabaseConnection();
+            stmt = conn.createStatement();
+            rs = stmt.executeQuery(query);
+            
+            // Get column names
+            int columnCount = rs.getMetaData().getColumnCount();
+            String[] columnNames = new String[columnCount];
+            for (int i = 1; i <= columnCount; i++) {
+                columnNames[i-1] = rs.getMetaData().getColumnName(i);
+            }
+            
+            // Process rows
+            while (rs.next()) {
+                Map<String, Object> row = new HashMap<>();
+                for (String columnName : columnNames) {
+                    row.put(columnName, rs.getObject(columnName));
+                }
+                results.add(row);
+            }
+        } finally {
+            if (rs != null) try { rs.close(); } catch (Exception e) { /* ignore */ }
+            if (stmt != null) try { stmt.close(); } catch (Exception e) { /* ignore */ }
+            if (conn != null) try { conn.close(); } catch (Exception e) { /* ignore */ }
+        }
+        
+        return results;
+    }
+    
+    /**
+     * Helper method to execute a stored procedure and return results.
+     */
+    private List<Map<String, Object>> executeStoredProc(String procedure, Map<String, Object> parameters) throws Exception {
+        List<Map<String, Object>> results = new ArrayList<>();
+        Connection conn = null;
+        CallableStatement stmt = null;
+        ResultSet rs = null;
+        
+        try {
+            conn = getDatabaseConnection();
+            
+            // Prepare call based on parameters
+            StringBuilder callBuilder = new StringBuilder("{call " + procedure + "(");
+            for (int i = 0; i < parameters.size(); i++) {
+                callBuilder.append("?");
+                if (i < parameters.size() - 1) {
+                    callBuilder.append(",");
+                }
+            }
+            callBuilder.append(")}");
+            
+            stmt = conn.prepareCall(callBuilder.toString());
+            
+            // Set parameters
+            int paramIndex = 1;
+            for (Object value : parameters.values()) {
+                stmt.setObject(paramIndex++, value);
+            }
+            
+            // Execute and process results
+            rs = stmt.executeQuery();
+            
+            // Get column names
+            int columnCount = rs.getMetaData().getColumnCount();
+            String[] columnNames = new String[columnCount];
+            for (int i = 1; i <= columnCount; i++) {
+                columnNames[i-1] = rs.getMetaData().getColumnName(i);
+            }
+            
+            // Process rows
+            while (rs.next()) {
+                Map<String, Object> row = new HashMap<>();
+                for (String columnName : columnNames) {
+                    row.put(columnName, rs.getObject(columnName));
+                }
+                results.add(row);
+            }
+        } finally {
+            if (rs != null) try { rs.close(); } catch (Exception e) { /* ignore */ }
+            if (stmt != null) try { stmt.close(); } catch (Exception e) { /* ignore */ }
+            if (conn != null) try { conn.close(); } catch (Exception e) { /* ignore */ }
+        }
+        
+        return results;
+    }
+    
+    /**
+     * Helper method to get a database connection.
+     */
+    private Connection getDatabaseConnection() throws Exception {
+        String url = ConfigurationManager.getBundle().getString("db.url");
+        String username = ConfigurationManager.getBundle().getString("db.username");
+        String password = ConfigurationManager.getBundle().getString("db.password");
+        
+        return DriverManager.getConnection(url, username, password);
+    }
+    
+    /**
+     * Helper method to convert database results to string maps.
+     */
+    private List<Map<String, String>> convertDbResultsToStringMaps(List<Map<String, Object>> dbResults) {
+        List<Map<String, String>> result = new ArrayList<>();
+        
+        for (Map<String, Object> row : dbResults) {
+            Map<String, String> stringMap = new HashMap<>();
+            for (Map.Entry<String, Object> entry : row.entrySet()) {
+                stringMap.put(entry.getKey(), entry.getValue() != null ? entry.getValue().toString() : "null");
+            }
+            result.add(stringMap);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Helper method to process template text with test data.
+     */
+    private String processTemplateText(String template) {
+        if (template == null) {
+            return null;
+        }
+        
+        Map<String, Object> testData = TestContextManager.getTestData();
+        return ApiClientUtil.processTemplate(template, testData);
+    }
+    
+    /**
+     * Helper method to get stored responses map.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, ApiResponse> getStoredResponsesMap() {
+        Map<String, ApiResponse> storedResponses = 
+            (Map<String, ApiResponse>) TestContextManager.getContext(STORED_RESPONSES_KEY);
+        
+        if (storedResponses == null) {
+            storedResponses = new HashMap<>();
+            TestContextManager.setContext(STORED_RESPONSES_KEY, storedResponses);
+        }
+        
+        return storedResponses;
+    }
+    
+    /**
+     * Helper method to validate two datasets against each other.
+     */
+    private void validateDataSets(List<Map<String, String>> expectedData, List<Map<String, String>> actualData, 
+                                 String[] keyFields, String expectedSource, String actualSource) {
+        // Create a copy of actualData that we can modify
+        List<Map<String, String>> remainingActualRecords = new ArrayList<>(actualData);
+        
+        // Track overall statistics
+        int totalMatches = 0;
+        int totalMismatches = 0;
+        int unmatchedExpectedRecords = 0;
+        boolean validationFailed = false;
+        
+        // Process each map in expected data
+        for (int i = 0; i < expectedData.size(); i++) {
+            Map<String, String> expectedRecord = expectedData.get(i);
+            Reporter.log("\nValidating expected record #" + (i + 1) + ":", MessageTypes.Info);
+            
+            // Find the best matching map in actual data
+            int bestMatchIndex = -1;
+            
+            // If key fields are provided, use them for exact matching
+            if (keyFields != null && keyFields.length > 0) {
+                bestMatchIndex = findExactMatchByKeys(expectedRecord, remainingActualRecords, keyFields);
+            }
+            
+            // If no match found by keys or no keys provided, use scorecard matching
+            if (bestMatchIndex == -1) {
+                bestMatchIndex = findBestMatch(expectedRecord, remainingActualRecords);
+            }
+            
+            if (bestMatchIndex != -1) {
+                Map<String, String> bestMatch = remainingActualRecords.get(bestMatchIndex);
+                
+                // Compare the maps in detail
+                int[] matchResults = compareRecords(expectedRecord, bestMatch, i, expectedSource, actualSource);
+                totalMatches += matchResults[0];
+                totalMismatches += matchResults[1];
+                
+                if (matchResults[1] > 0) {
+                    validationFailed = true;
+                }
+                
+                // Remove the matched map to avoid matching it again
+                remainingActualRecords.remove(bestMatchIndex);
+            } else {
+                Reporter.log("No matching record found for expected record #" + (i + 1), MessageTypes.Fail);
+                unmatchedExpectedRecords++;
+                validationFailed = true;
             }
         }
         
-        if (!conditionMet) {
-            Reporter.log("Timeout reached. Condition not met after " + maxTimeMinutes + " minutes", MessageTypes.Fail);
-            Assert.fail("Polling timeout reached");
-        }
-    } catch (Exception e) {
-        Reporter.log("Error during polling: " + e.getMessage(), MessageTypes.Fail);
-        throw new RuntimeException("Polling failed", e);
-    } finally {
-        // Restore original API endpoint if there was one
-        if (originalEndpoint != null) {
-            TestContextManager.setCurrentApi("Original", originalEndpoint);
-        }
-    }
-}
-
-/**
- * Helper method to execute a SQL query and return results.
- */
-private List<Map<String, Object>> executeQuery(String query) throws Exception {
-    List<Map<String, Object>> results = new ArrayList<>();
-    Connection conn = null;
-    Statement stmt = null;
-    ResultSet rs = null;
-    
-    try {
-        conn = getDatabaseConnection();
-        stmt = conn.createStatement();
-        rs = stmt.executeQuery(query);
-        
-        // Get column names
-        int columnCount = rs.getMetaData().getColumnCount();
-        String[] columnNames = new String[columnCount];
-        for (int i = 1; i <= columnCount; i++) {
-            columnNames[i-1] = rs.getMetaData().getColumnName(i);
-        }
-        
-        // Process rows
-        while (rs.next()) {
-            Map<String, Object> row = new HashMap<>();
-            for (String columnName : columnNames) {
-                row.put(columnName, rs.getObject(columnName));
+        // Report any unmatched records in actual data
+        if (!remainingActualRecords.isEmpty()) {
+            Reporter.log("\nUnmatched records in " + actualSource + " (" + remainingActualRecords.size() + "):", MessageTypes.Info);
+            for (int i = 0; i < Math.min(remainingActualRecords.size(), 3); i++) {
+                Reporter.log("Unmatched record: " + remainingActualRecords.get(i), MessageTypes.Info);
             }
-            results.add(row);
+            if (remainingActualRecords.size() > 3) {
+                Reporter.log("... and " + (remainingActualRecords.size() - 3) + " more unmatched records", MessageTypes.Info);
+            }
         }
-    } finally {
-        if (rs != null) try { rs.close(); } catch (Exception e) { /* ignore */ }
-        if (stmt != null) try { stmt.close(); } catch (Exception e) { /* ignore */ }
-        if (conn != null) try { conn.close(); } catch (Exception e) { /* ignore */ }
-    }
-    
-    return results;
-}
-
-/**
- * Helper method to execute a stored procedure and return results.
- */
-private List<Map<String, Object>> executeStoredProc(String procedure, Map<String, Object> parameters) throws Exception {
-    // Implementation as provided earlier...
-}
-
-/**
- * Helper method to convert database results to string maps.
- */
-private List<Map<String, String>> convertDbResultsToStringMaps(List<Map<String, Object>> dbResults) {
-    List<Map<String, String>> result = new ArrayList<>();
-    
-    for (Map<String, Object> row : dbResults) {
-        Map<String, String> stringMap = new HashMap<>();
-        for (Map.Entry<String, Object> entry : row.entrySet()) {
-            stringMap.put(entry.getKey(), entry.getValue() != null ? entry.getValue().toString() : "null");
+        
+        // Overall summary
+        Reporter.log("\nValidation Summary:", MessageTypes.Info);
+        Reporter.log("- Expected records: " + expectedData.size(), MessageTypes.Info);
+        Reporter.log("- Actual records: " + actualData.size(), MessageTypes.Info);
+        Reporter.log("- Matched records: " + (expectedData.size() - unmatchedExpectedRecords), MessageTypes.Info);
+        Reporter.log("- Unmatched expected records: " + unmatchedExpectedRecords, MessageTypes.Info);
+        Reporter.log("- Unmatched actual records: " + remainingActualRecords.size(), MessageTypes.Info);
+        Reporter.log("- Matching fields: " + totalMatches, MessageTypes.Info);
+        
+        if (totalMismatches > 0) {
+            Reporter.log("- Mismatched fields: " + totalMismatches, MessageTypes.Fail);
+        } else {
+            Reporter.log("- Mismatched fields: " + totalMismatches, MessageTypes.Pass);
         }
-        result.add(stringMap);
+        
+        if (validationFailed) {
+            Reporter.log("\nValidation failed. See above for details.", MessageTypes.Fail);
+            Assert.fail("Data validation failed with field mismatches or unmatched records");
+        } else {
+            Reporter.log("\nValidation successful - all expected records matched!", MessageTypes.Pass);
+        }
     }
     
-    return result;
-}
-
-/**
- * Helper method to get stored responses map.
- */
-@SuppressWarnings("unchecked")
-private Map<String, ApiResponse> getStoredResponsesMap() {
-    Map<String, ApiResponse> storedResponses = 
-        (Map<String, ApiResponse>) TestContextManager.getContext(STORED_RESPONSES_KEY);
-    
-    if (storedResponses == null) {
-        storedResponses = new HashMap<>();
-        TestContextManager.setContext(STORED_RESPONSES_KEY, storedResponses);
+    /**
+     * Helper method to compare two records and report differences.
+     * Returns an array with [matchCount, mismatchCount]
+     */
+    private int[] compareRecords(Map<String, String> expectedRecord, Map<String, String> actualRecord, 
+                              int recordIndex, String expectedSource, String actualSource) {
+        int matchCount = 0;
+        int mismatchCount = 0;
+        Set<String> processedKeys = new HashSet<>();
+        
+        Reporter.log("Record details:", MessageTypes.Info);
+        
+        // Check all keys in expected record
+        for (String key : expectedRecord.keySet()) {
+            processedKeys.add(key);
+            
+            String expectedValue = expectedRecord.get(key);
+            
+            if (actualRecord.containsKey(key)) {
+                String actualValue = actualRecord.get(key);
+                
+                if (isValueEqual(expectedValue, actualValue)) {
+                    matchCount++;
+                    Reporter.log("✓ Field '" + key + "' matches: '" + expectedValue + "'", MessageTypes.Pass);
+                } else {
+                    mismatchCount++;
+                    Reporter.log("✗ Field '" + key + "' mismatch - " + expectedSource + ": '" + expectedValue + 
+                               "', " + actualSource + ": '" + actualValue + "'", MessageTypes.Fail);
+                }
+            } else {
+                Reporter.log("! Field '" + key + "' exists only in " + expectedSource + " with value '" + 
+                           expectedValue + "'", MessageTypes.Fail);
+                mismatchCount++;
+            }
+        }
+        
+        // Check for keys in actual record that aren't in expected record
+        for (String key : actualRecord.keySet()) {
+            if (!processedKeys.contains(key)) {
+                Reporter.log("! Field '" + key + "' exists only in " + actualSource + " with value '" + 
+                           actualRecord.get(key) + "'", MessageTypes.Info);
+            }
+        }
+        
+        return new int[] { matchCount, mismatchCount };
     }
     
-    return storedResponses;
-}
-
-/**
- * Helper method to process template text with test data.
- */
-private String processTemplateText(String template) {
-    if (template == null) {
-        return null;
+    /**
+     * Helper method to check if two values are equal, treating null and blank as equal.
+     */
+    private boolean isValueEqual(String value1, String value2) {
+        // If both are null or blank, consider them equal
+        if (isNullOrBlank(value1) && isNullOrBlank(value2)) {
+            return true;
+        }
+        
+        // If one is null and the other isn't, they're not equal
+        if (value1 == null || value2 == null) {
+            return false;
+        }
+        
+        // Compare the trimmed values
+        return value1.trim().equals(value2.trim());
     }
     
-    Map<String, Object> testData = TestContextManager.getTestData();
-    return ApiClientUtil.processTemplate(template, testData);
+    /**
+     * Helper method to check if a string is null, empty, or blank.
+     */
+    private boolean isNullOrBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+    
+    /**
+     * Helper method to find an exact match by key fields.
+     */
+    private int findExactMatchByKeys(Map<String, String> targetMap, List<Map<String, String>> mapList, String[] keyFields) {
+        for (int i = 0; i < mapList.size(); i++) {
+            Map<String, String> candidateMap = mapList.get(i);
+            boolean allKeysMatch = true;
+            
+            for (String keyField : keyFields) {
+                // Skip if target doesn't have the key
+                if (!targetMap.containsKey(keyField)) {
+                    allKeysMatch = false;
+                    break;
+                }
+                
+                // Skip if candidate doesn't have the key
+                if (!candidateMap.containsKey(keyField)) {
+                    allKeysMatch = false;
+                    break;
+                }
+                
+                // Compare values, treating null and blank as equal
+                String targetValue = targetMap.get(keyField);
+                String candidateValue = candidateMap.get(keyField);
+                
+                if (!isValueEqual(targetValue, candidateValue)) {
+                    allKeysMatch = false;
+                    break;
+                }
+            }
+            
+            if (allKeysMatch) {
+                return i;
+            }
+        }
+        
+        return -1;
+    }
+    
+    /**
+     * Helper method to find the best match based on scoring.
+     */
+    private int findBestMatch(Map<String, String> targetMap, List<Map<String, String>> mapList) {
+        if (mapList.isEmpty()) {
+            return -1;
+        }
+        
+        int bestMatchIndex = -1;
+        int highestScore = -1;
+        
+        for (int i = 0; i < mapList.size(); i++) {
+            Map<String, String> candidateMap = mapList.get(i);
+            int score = calculateMatchScore(targetMap, candidateMap);
+            
+            if (score > highestScore) {
+                highestScore = score;
+                bestMatchIndex = i;
+            }
+        }
+        
+        // Only consider it a match if score is above threshold
+        return highestScore > 0 ? bestMatchIndex : -1;
+    }
+    
+    /**
+     * Helper method to calculate a match score between two maps.
+     */
+    private int calculateMatchScore(Map<String, String> map1, Map<String, String> map2) {
+        int score = 0;
+        
+        // Check all keys in map1
+        for (String key : map1.keySet()) {
+            if (map2.containsKey(key)) {
+                String value1 = map1.get(key);
+                String value2 = map2.get(key);
+                
+                if (isValueEqual(value1, value2)) {
+                    // Matching key-value pair
+                    score += 10;
+                } else {
+                    // Key exists but values differ
+                    score += 2;
+                }
+            }
+        }
+        
+        return score;
+    }
 }
 
-/**
- * Helper method to get a database connection.
- */
-private Connection getDatabaseConnection() throws Exception {
-    String url = ConfigurationManager.getBundle().getString("db.url");
-    String username = ConfigurationManager.getBundle().getString("db.username");
-    String password = ConfigurationManager.getBundle().getString("db.password");
-    
-    return DriverManager.getConnection(url, username, password);
-}
