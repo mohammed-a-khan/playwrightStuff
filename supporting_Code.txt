@@ -1766,20 +1766,7 @@ private int compareFields(Map<String, String> expectedRecord, Map<String, Object
 }
 
 /**
- * Validates API response against UI captured data without specifying key fields.
- * Uses index-based comparison.
- * 
- * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
- * @param responsePath the path to the array in the response (e.g., "empCalendarList")
- */
-@QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath}")
-public void validateApiResponseAgainstUiData(String dataType, String responsePath) {
-    validateApiResponseAgainstUiDataWithKeys(dataType, responsePath, null);
-}
-
-
-/**
- * Validates API response against UI captured data using specified key fields for matching.
+ * Validates API response against UI captured data using scorecard matching approach.
  * 
  * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
  * @param responsePath the path to the array in the response (e.g., "empCalendarList")
@@ -1834,235 +1821,313 @@ public void validateApiResponseAgainstUiDataWithKeys(String dataType, String res
         }
         Reporter.log("Using key fields for matching: " + keyFields, MessageTypes.Info);
     } else {
-        Reporter.log("No key fields specified - using index-based comparison", MessageTypes.Info);
+        Reporter.log("No key fields specified - using scorecard matching", MessageTypes.Info);
     }
     
     // Convert response array to a list of maps for easier processing
-    List<Map<String, Object>> actualRecords = new ArrayList<>();
+    List<Map<String, Object>> actualRecordObjects = new ArrayList<>();
     for (int i = 0; i < responseArray.length(); i++) {
         JSONObject obj = responseArray.getJSONObject(i);
         Map<String, Object> map = new HashMap<>();
         for (String key : obj.keySet()) {
             map.put(key, obj.get(key));
         }
-        actualRecords.add(map);
+        actualRecordObjects.add(map);
     }
     
-    // Debug - print first few records of each 
-    if (!expectedData.isEmpty()) {
-        Reporter.log("First expected record sample: " + expectedData.get(0), MessageTypes.Info);
-    }
-    if (!actualRecords.isEmpty()) {
-        Reporter.log("First actual record sample: " + actualRecords.get(0), MessageTypes.Info);
+    // Convert Object values to String values for easier comparison
+    List<Map<String, String>> actualRecords = new ArrayList<>();
+    for (Map<String, Object> objMap : actualRecordObjects) {
+        Map<String, String> strMap = new HashMap<>();
+        for (Map.Entry<String, Object> entry : objMap.entrySet()) {
+            strMap.put(entry.getKey(), entry.getValue() != null ? entry.getValue().toString() : "null");
+        }
+        actualRecords.add(strMap);
     }
     
-    // Track matches and issues
-    int matchedRecords = 0;
-    int mismatchedFields = 0;
-    int totalExpectedRecords = expectedData.size();
-    int totalActualRecords = actualRecords.size();
-    List<String> issues = new ArrayList<>();
+    // Create a copy of actualRecords that we can modify
+    List<Map<String, String>> remainingActualRecords = new ArrayList<>(actualRecords);
     
-    // For key-based comparison
-    if (keyFieldArray != null && keyFieldArray.length > 0) {
-        // Track which actual records have been matched
-        boolean[] actualRecordMatched = new boolean[actualRecords.size()];
+    // Track overall statistics
+    int totalMatches = 0;
+    int totalMismatches = 0;
+    int unmatchedExpectedRecords = 0;
+    boolean validationFailed = false;
+    List<String> summaryIssues = new ArrayList<>();
+    
+    // Process each map in expected data
+    for (int i = 0; i < expectedData.size(); i++) {
+        Map<String, String> expectedRecord = expectedData.get(i);
+        Reporter.log("\nValidating expected record #" + (i + 1) + ":", MessageTypes.Info);
         
-        // For each expected record
-        for (int i = 0; i < expectedData.size(); i++) {
-            Map<String, String> expectedRecord = expectedData.get(i);
-            String recordInfo = "expected[" + i + "]";
+        // Find the best matching map in actual data
+        int bestMatchIndex = -1;
+        
+        // If key fields are provided, use them for exact matching
+        if (keyFieldArray != null && keyFieldArray.length > 0) {
+            bestMatchIndex = findExactMatchByKeys(expectedRecord, remainingActualRecords, keyFieldArray);
+        }
+        
+        // If no match found by keys or no keys provided, use scorecard matching
+        if (bestMatchIndex == -1) {
+            bestMatchIndex = findBestMatch(expectedRecord, remainingActualRecords);
+        }
+        
+        if (bestMatchIndex != -1) {
+            Map<String, String> bestMatch = remainingActualRecords.get(bestMatchIndex);
             
-            // Extract the key values from this expected record
-            Map<String, String> keyValues = new HashMap<>();
-            boolean hasAllKeyFields = true;
+            // Compare the maps in detail
+            ComparisonResult result = compareIndividualMaps(expectedRecord, bestMatch, i);
+            totalMatches += result.matchCount;
+            totalMismatches += result.mismatchCount;
             
-            for (String keyField : keyFieldArray) {
-                if (expectedRecord.containsKey(keyField)) {
-                    keyValues.put(keyField, expectedRecord.get(keyField));
-                } else {
-                    hasAllKeyFields = false;
-                    issues.add("Expected record " + recordInfo + " is missing key field: " + keyField);
-                }
+            if (result.mismatchCount > 0) {
+                validationFailed = true;
             }
             
-            if (!hasAllKeyFields) {
-                continue; // Skip this record if it doesn't have all key fields
-            }
-            
-            // Find a matching actual record
-            boolean foundMatch = false;
-            int matchIndex = -1;
-            
-            // Search through all actual records
-            recordSearch: for (int j = 0; j < actualRecords.size(); j++) {
-                // Skip already matched records
-                if (actualRecordMatched[j]) {
-                    continue;
-                }
-                
-                Map<String, Object> actualRecord = actualRecords.get(j);
-                
-                // Check if this actual record matches on all key fields
-                for (Map.Entry<String, String> keyEntry : keyValues.entrySet()) {
-                    String keyField = keyEntry.getKey();
-                    String expectedValue = keyEntry.getValue();
-                    
-                    if (!actualRecord.containsKey(keyField)) {
-                        continue recordSearch; // Key field missing in actual record
-                    }
-                    
-                    Object actualValue = actualRecord.get(keyField);
-                    if (!isValueEqual(expectedValue, actualValue)) {
-                        continue recordSearch; // Key value doesn't match
-                    }
-                }
-                
-                // If we get here, all key fields match
-                foundMatch = true;
-                matchIndex = j;
-                actualRecordMatched[j] = true;
-                matchedRecords++;
+            // Remove the matched map to avoid matching it again
+            remainingActualRecords.remove(bestMatchIndex);
+        } else {
+            Reporter.log("No matching record found for expected record #" + (i + 1), MessageTypes.Fail);
+            unmatchedExpectedRecords++;
+            validationFailed = true;
+        }
+    }
+    
+    // Report any unmatched records in actual data
+    if (!remainingActualRecords.isEmpty()) {
+        Reporter.log("\nUnmatched records in response (" + remainingActualRecords.size() + "):", MessageTypes.Info);
+        for (int i = 0; i < Math.min(remainingActualRecords.size(), 3); i++) {
+            Reporter.log("Unmatched response record: " + remainingActualRecords.get(i), MessageTypes.Info);
+        }
+        if (remainingActualRecords.size() > 3) {
+            Reporter.log("... and " + (remainingActualRecords.size() - 3) + " more unmatched records", MessageTypes.Info);
+        }
+    }
+    
+    // Overall summary
+    Reporter.log("\nValidation Summary:", MessageTypes.Info);
+    Reporter.log("- Expected records: " + expectedData.size(), MessageTypes.Info);
+    Reporter.log("- Actual records: " + actualRecords.size(), MessageTypes.Info);
+    Reporter.log("- Matched records: " + (expectedData.size() - unmatchedExpectedRecords), MessageTypes.Info);
+    Reporter.log("- Unmatched expected records: " + unmatchedExpectedRecords, MessageTypes.Info);
+    Reporter.log("- Unmatched actual records: " + remainingActualRecords.size(), MessageTypes.Info);
+    Reporter.log("- Matching fields: " + totalMatches, MessageTypes.Info);
+    
+    if (totalMismatches > 0) {
+        Reporter.log("- Mismatched fields: " + totalMismatches, MessageTypes.Fail);
+    } else {
+        Reporter.log("- Mismatched fields: " + totalMismatches, MessageTypes.Pass);
+    }
+    
+    if (validationFailed) {
+        Reporter.log("\nValidation failed. See above for details.", MessageTypes.Fail);
+        Assert.fail("API response validation failed with field mismatches or unmatched records");
+    } else {
+        Reporter.log("\nValidation successful - all expected records matched!", MessageTypes.Pass);
+    }
+}
+
+/**
+ * Find an exact match by specified key fields.
+ * 
+ * @param targetMap the map to find a match for
+ * @param mapList the list of maps to search in
+ * @param keyFields the fields to use as keys
+ * @return index of the best match, or -1 if no match
+ */
+private int findExactMatchByKeys(Map<String, String> targetMap, List<Map<String, String>> mapList, String[] keyFields) {
+    for (int i = 0; i < mapList.size(); i++) {
+        Map<String, String> candidateMap = mapList.get(i);
+        boolean allKeysMatch = true;
+        
+        for (String keyField : keyFields) {
+            // Skip if target doesn't have the key
+            if (!targetMap.containsKey(keyField)) {
+                allKeysMatch = false;
                 break;
             }
             
-            // If we found a match, compare all fields
-            if (foundMatch) {
-                Map<String, Object> actualRecord = actualRecords.get(matchIndex);
-                String keyDescription = buildKeyDescription(keyValues);
-                
-                // Compare all fields
-                for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
-                    String fieldName = entry.getKey();
-                    String expectedValue = entry.getValue();
-                    
-                    if (!actualRecord.containsKey(fieldName)) {
-                        issues.add("Field '" + fieldName + "' missing in record with " + keyDescription);
-                        mismatchedFields++;
-                        continue;
-                    }
-                    
-                    Object actualValue = actualRecord.get(fieldName);
-                    if (!isValueEqual(expectedValue, actualValue)) {
-                        issues.add("Field '" + fieldName + "' mismatch in record with " + keyDescription + 
-                                  " - Expected: '" + expectedValue + "', Actual: '" + 
-                                  (actualValue != null ? actualValue : "null") + "'");
-                        mismatchedFields++;
-                    }
-                }
-            } else {
-                issues.add("No matching record found for expected record " + recordInfo + 
-                          " with keys: " + buildKeyDescription(keyValues));
+            // Skip if candidate doesn't have the key
+            if (!candidateMap.containsKey(keyField)) {
+                allKeysMatch = false;
+                break;
             }
-        }
-    } else {
-        // Index-based comparison (when no key fields are specified)
-        int compareCount = Math.min(expectedData.size(), actualRecords.size());
-        
-        for (int i = 0; i < compareCount; i++) {
-            Map<String, String> expectedRecord = expectedData.get(i);
-            Map<String, Object> actualRecord = actualRecords.get(i);
-            matchedRecords++;
             
-            // Compare all fields
-            for (Map.Entry<String, String> entry : expectedRecord.entrySet()) {
-                String fieldName = entry.getKey();
-                String expectedValue = entry.getValue();
-                
-                if (!actualRecord.containsKey(fieldName)) {
-                    issues.add("Field '" + fieldName + "' missing in record at index " + i);
-                    mismatchedFields++;
-                    continue;
-                }
-                
-                Object actualValue = actualRecord.get(fieldName);
-                if (!isValueEqual(expectedValue, actualValue)) {
-                    issues.add("Field '" + fieldName + "' mismatch in record at index " + i + 
-                              " - Expected: '" + expectedValue + "', Actual: '" + 
-                              (actualValue != null ? actualValue : "null") + "'");
-                    mismatchedFields++;
-                }
+            // Compare values, treating null and blank as equal
+            String targetValue = targetMap.get(keyField);
+            String candidateValue = candidateMap.get(keyField);
+            
+            if (!isValueEqual(targetValue, candidateValue)) {
+                allKeysMatch = false;
+                break;
             }
         }
         
-        // Report if any expected records weren't compared (actual data has fewer records)
-        if (expectedData.size() > actualRecords.size()) {
-            issues.add((expectedData.size() - actualRecords.size()) + 
-                      " expected records not found in response (response has fewer records)");
+        if (allKeysMatch) {
+            return i;
         }
     }
     
-    // Report results
-    Reporter.log("API response validation results for " + dataType + ":", MessageTypes.Info);
-    Reporter.log("- Total expected records: " + totalExpectedRecords, MessageTypes.Info);
-    Reporter.log("- Total actual records: " + totalActualRecords, MessageTypes.Info);
-    Reporter.log("- Records matched: " + matchedRecords, MessageTypes.Info);
-    
-    if (mismatchedFields > 0) {
-        Reporter.log("- Fields mismatched: " + mismatchedFields, MessageTypes.Fail);
-    } else {
-        Reporter.log("- Fields mismatched: " + mismatchedFields, MessageTypes.Pass);
+    return -1;
+}
+
+/**
+ * Find the best matching map in mapList for the given target map.
+ * Uses a scoring system based on matching key-value pairs.
+ * 
+ * @param targetMap the map to find a match for
+ * @param mapList the list of maps to search in
+ * @return index of the best match, or -1 if no match
+ */
+private int findBestMatch(Map<String, String> targetMap, List<Map<String, String>> mapList) {
+    if (mapList.isEmpty()) {
+        return -1;
     }
     
-    if (!issues.isEmpty()) {
-        Reporter.log("Validation issues (" + issues.size() + "):", MessageTypes.Fail);
-        // Show at most 20 issues to avoid flooding the log
-        int issuesToShow = Math.min(issues.size(), 20);
-        for (int i = 0; i < issuesToShow; i++) {
-            Reporter.log("  " + (i+1) + ". " + issues.get(i), MessageTypes.Fail);
+    int bestMatchIndex = -1;
+    int highestScore = -1;
+    
+    for (int i = 0; i < mapList.size(); i++) {
+        Map<String, String> candidateMap = mapList.get(i);
+        int score = calculateMatchScore(targetMap, candidateMap);
+        
+        if (score > highestScore) {
+            highestScore = score;
+            bestMatchIndex = i;
         }
-        if (issues.size() > issuesToShow) {
-            Reporter.log("  ... and " + (issues.size() - issuesToShow) + " more issues", MessageTypes.Fail);
+    }
+    
+    // Only consider it a match if score is above threshold
+    return highestScore > 0 ? bestMatchIndex : -1;
+}
+
+/**
+ * Calculate a match score between two maps.
+ * Score is based on matching key-value pairs.
+ * 
+ * @param map1 first map
+ * @param map2 second map
+ * @return score representing match quality
+ */
+private int calculateMatchScore(Map<String, String> map1, Map<String, String> map2) {
+    int score = 0;
+    
+    // Check all keys in map1
+    for (String key : map1.keySet()) {
+        if (map2.containsKey(key)) {
+            String value1 = map1.get(key);
+            String value2 = map2.get(key);
+            
+            if (isValueEqual(value1, value2)) {
+                // Matching key-value pair
+                score += 10;
+            } else {
+                // Key exists but values differ
+                score += 2;
+            }
         }
-        Assert.fail("API response validation failed with " + issues.size() + " issues");
-    } else {
-        Reporter.log("Validation successful - all data matches!", MessageTypes.Pass);
+    }
+    
+    return score;
+}
+
+/**
+ * Result class for storing comparison results.
+ */
+private static class ComparisonResult {
+    int matchCount;
+    int mismatchCount;
+    int extraKeysCount;
+    
+    public ComparisonResult(int matchCount, int mismatchCount, int extraKeysCount) {
+        this.matchCount = matchCount;
+        this.mismatchCount = mismatchCount;
+        this.extraKeysCount = extraKeysCount;
     }
 }
 
 /**
- * Builds a description string for a set of key values.
+ * Compares two maps in detail and reports differences.
  * 
- * @param keyValues map of key field names to values
- * @return formatted string describing the keys
+ * @param map1 expected map
+ * @param map2 actual map
+ * @param mapIndex index for reporting
+ * @return ComparisonResult with match statistics
  */
-private String buildKeyDescription(Map<String, String> keyValues) {
-    StringBuilder sb = new StringBuilder("keys [");
-    boolean first = true;
+private ComparisonResult compareIndividualMaps(Map<String, String> map1, Map<String, String> map2, int mapIndex) {
+    // Track match statistics
+    int matchCount = 0;
+    int mismatchCount = 0;
+    int extraKeysCount = 0;
+    Set<String> processedKeys = new HashSet<>();
     
-    for (Map.Entry<String, String> entry : keyValues.entrySet()) {
-        if (!first) {
-            sb.append(", ");
+    Reporter.log("Record details:", MessageTypes.Info);
+    
+    // Check all keys in expected map
+    for (String key : map1.keySet()) {
+        processedKeys.add(key);
+        
+        if (map2.containsKey(key)) {
+            String value1 = map1.get(key);
+            String value2 = map2.get(key);
+            
+            if (isValueEqual(value1, value2)) {
+                matchCount++;
+                Reporter.log("✓ Field '" + key + "' matches: '" + value1 + "'", MessageTypes.Pass);
+            } else {
+                mismatchCount++;
+                Reporter.log("✗ Field '" + key + "' mismatch - Expected: '" + value1 + "', Actual: '" + value2 + "'", MessageTypes.Fail);
+            }
+        } else {
+            extraKeysCount++;
+            Reporter.log("! Field '" + key + "' exists only in expected data with value '" + map1.get(key) + "'", MessageTypes.Fail);
         }
-        sb.append(entry.getKey()).append("=").append(entry.getValue());
-        first = false;
     }
     
-    sb.append("]");
-    return sb.toString();
+    // Check for keys in actual map that aren't in expected map
+    for (String key : map2.keySet()) {
+        if (!processedKeys.contains(key)) {
+            extraKeysCount++;
+            Reporter.log("! Field '" + key + "' exists only in actual data with value '" + map2.get(key) + "'", MessageTypes.Info);
+        }
+    }
+    
+    // Summarize match/mismatch statistics
+    Reporter.log("Match summary for record #" + (mapIndex + 1) + ":", MessageTypes.Info);
+    Reporter.log("- " + matchCount + " matching fields", MessageTypes.Info);
+    
+    if (mismatchCount > 0) {
+        Reporter.log("- " + mismatchCount + " mismatched fields", MessageTypes.Fail);
+    } else {
+        Reporter.log("- " + mismatchCount + " mismatched fields", MessageTypes.Pass);
+    }
+    
+    Reporter.log("- " + extraKeysCount + " fields found in only one record", MessageTypes.Info);
+    
+    return new ComparisonResult(matchCount, mismatchCount, extraKeysCount);
 }
 
 /**
- * Checks if an expected value (string) equals an actual value (any type),
- * with special handling for null/blank values.
+ * Checks if two string values are equal, treating null and blank as equal.
  * 
- * @param expected the expected value as a string
- * @param actual the actual value (can be any type)
- * @return true if the values are considered equal
+ * @param value1 first value
+ * @param value2 second value
+ * @return true if values are considered equal
  */
-private boolean isValueEqual(String expected, Object actual) {
+private boolean isValueEqual(String value1, String value2) {
     // If both are null or blank, consider them equal
-    if (isNullOrBlank(expected) && (actual == null || isNullOrBlank(String.valueOf(actual)))) {
+    if (isNullOrBlank(value1) && isNullOrBlank(value2)) {
         return true;
     }
     
     // If one is null and the other isn't, they're not equal
-    if (expected == null || actual == null) {
+    if (value1 == null || value2 == null) {
         return false;
     }
     
-    // Compare the string values
-    return expected.equals(String.valueOf(actual));
+    // Compare the trimmed values
+    return value1.trim().equals(value2.trim());
 }
 
 /**
@@ -2073,16 +2138,4 @@ private boolean isValueEqual(String expected, Object actual) {
  */
 private boolean isNullOrBlank(String value) {
     return value == null || value.trim().isEmpty();
-}
-
-/**
- * Validates API response against UI captured data without specifying key fields.
- * Uses index-based comparison.
- * 
- * @param dataType the data type (e.g., "employeeCalendar", "dealStaticInfo")
- * @param responsePath the path to the array in the response (e.g., "empCalendarList")
- */
-@QAFTestStep(description = "I validate {dataType} API response against UI data using path {responsePath}")
-public void validateApiResponseAgainstUiData(String dataType, String responsePath) {
-    validateApiResponseAgainstUiDataWithKeys(dataType, responsePath, null);
 }
