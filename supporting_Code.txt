@@ -2139,3 +2139,191 @@ private boolean isValueEqual(String value1, String value2) {
 private boolean isNullOrBlank(String value) {
     return value == null || value.trim().isEmpty();
 }
+
+
+# Generic API Testing Framework Quick Start Guide
+
+## Setup
+
+1. Configure API endpoints in `application.properties`:
+   ```properties
+   api.endpoint.UserProfile=/api/v1/users/profile
+   api.endpoint.ProductCatalog=/api/v1/products/catalog
+   api.endpoint.OrderManagement=/api/v1/orders
+   ```
+
+2. Create payload templates in `resources/payloads/`:
+   ```json
+   // user-profile.json
+   {
+     "messageId": "${messageId}",
+     "userId": ${userId},
+     "includePreferences": ${includePreferences}
+   }
+   ```
+
+## Writing Tests
+
+1. Write feature files using generic steps:
+   ```gherkin
+   Feature: User Profile API Testing
+
+   Scenario: Test User Profile API
+     # Step 1: Setup
+     Given I am testing the "User Profile" API
+     And I set test data "userId" to "12345"
+     And I set test data "includePreferences" to true
+     
+     # Step 2: Capture UI data (if validating)
+     Given I capture userProfile data with values
+       | name | John Smith |
+       | email | john.smith@example.com |
+     
+     # Step 3: Send request
+     When I send a GET request with payload file "user-profile.json"
+     
+     # Step 4: Validate response
+     Then the response status code should be 200
+     And the response field "status" should be "success"
+     And I validate userProfile API response against UI data using path "userData" with keys "name,email"
+   ```
+
+## Complete List of Generic API Steps
+
+### Setup Steps
+```gherkin
+I am testing the "API Name" API
+I set the API endpoint to "/api/v1/custom/endpoint"
+I set test data "key" to "value"
+I set test data "numericKey" to 12345
+I set test data "booleanKey" to true
+I set test data
+  | key1 | value1 |
+  | key2 | value2 |
+I clear all test data
+```
+
+### Data Capture Steps
+```gherkin
+I create a new "dataType" data record
+I add "field" with value "value" to "dataType" data
+I capture "dataType" data with values
+  | field1 | value1 |
+  | field2 | value2 |
+I clear stored "dataType" data
+```
+
+### Request Steps
+```gherkin
+I send a GET request with payload file "filename.json"
+I send a POST request with payload file "filename.json"
+I send a PUT request with payload file "filename.json"
+I send a DELETE request with payload file "filename.json"
+I send a PATCH request with payload file "filename.json"
+
+I send a GET request to "API Name" API with payload file "filename.json"
+I send a POST request to "API Name" API with payload file "filename.json"
+I send a PUT request to "API Name" API with payload file "filename.json"
+I send a DELETE request to "API Name" API with payload file "filename.json"
+I send a PATCH request to "API Name" API with payload file "filename.json"
+
+I send a GET request to "/api/custom/path" with payload file "filename.json"
+I send a POST request to "/api/custom/path" with payload file "filename.json"
+I send a PUT request to "/api/custom/path" with payload file "filename.json"
+I send a DELETE request to "/api/custom/path" with payload file "filename.json"
+I send a PATCH request to "/api/custom/path" with payload file "filename.json"
+
+I send a GET request with payload: "{\"key\":\"value\"}"
+I send a POST request with payload: "{\"key\":\"value\"}"
+I send a PUT request with payload: "{\"key\":\"value\"}"
+I send a DELETE request with payload: "{\"key\":\"value\"}"
+I send a PATCH request with payload: "{\"key\":\"value\"}"
+```
+
+### Validation Steps
+```gherkin
+# Basic validations
+the response status code should be 200
+the response should be successful
+the response should contain field "fieldName"
+the response field "fieldName" should be "expectedValue"
+the response field "fieldName" should contain "partialText"
+the response field "fieldName" should not be "unexpectedValue"
+the response field "fieldName" should not contain "unwantedText"
+the validation error message for "fieldName" should be "errorMessage"
+
+# Array validations
+the response should contain a non-empty "items" array
+the "items" array should have size 5
+the "items" array at index 0 should contain field "name"
+the "items" array at index 0 field "name" should be "expectedValue"
+
+# Advanced validation against UI data
+I validate "dataType" API response against UI data using path "path"
+I validate "dataType" API response against UI data using path "path" with keys "key1,key2"
+```
+
+### Debugging Steps
+```gherkin
+I print all test data for debugging
+I print the response body for debugging
+I log the current API endpoint information
+```
+
+## Testing a New API
+
+1. **Register the API**: Add to `application.properties` or `ApiConfig.java`
+2. **Create Payload Templates**: Add JSON files in `resources/payloads/`
+3. **Write Feature Files**: Use the generic steps shown above
+4. **Run the Tests**: No additional Java code required!
+
+## Example: Order Management API Test
+
+```gherkin
+Feature: Order Management API Testing
+
+Scenario: Create a new order
+  # Setup test data
+  Given I am testing the "Order Management" API
+  And I set test data "customerId" to "54321"
+  And I set test data "items" to [{"productId": 101, "quantity": 2}, {"productId": 203, "quantity": 1}]
+  And I set test data "shippingAddress" to {"street": "123 Main St", "city": "Anytown", "zip": "12345"}
+  
+  # Send create order request
+  When I send a POST request with payload file "create-order.json"
+  
+  # Validate response
+  Then the response status code should be 201
+  And the response should be successful
+  And the response should contain field "orderId"
+  And the response should contain field "estimatedDelivery"
+  And the response field "status" should be "PROCESSING"
+```
+
+## Example: Product Catalog API Test
+
+```gherkin
+Feature: Product Catalog API Testing
+
+Scenario: Search products with filters
+  # Setup test data
+  Given I am testing the "Product Catalog" API
+  And I set test data "category" to "electronics"
+  And I set test data "minPrice" to 100
+  And I set test data "maxPrice" to 500
+  And I set test data "inStock" to true
+  
+  # Send search request
+  When I send a GET request with payload file "product-search.json"
+  
+  # Validate response
+  Then the response status code should be 200
+  And the response should be successful
+  And the response should contain field "products"
+  And the response should contain field "totalCount"
+  And the response field "totalCount" should be greater than "0"
+  And the "products" array should have size greater than 0
+  
+  # Validate all returned products match our category filter
+  And all items in "products" array should have field "category" with value "electronics"
+```
