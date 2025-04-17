@@ -1,0 +1,4808 @@
+// ActionType.java
+package com.cssmart.ai.engine.model;
+
+public enum ActionType {
+    CLICK,
+    TYPE,
+    SELECT,
+    VERIFY_PRESENCE,
+    VERIFY_VISIBILITY,
+    VERIFY_STATE,
+    WAIT,
+    HOVER,
+    DOUBLE_CLICK,
+    RIGHT_CLICK,
+    SCROLL_TO,
+    DRAG_AND_DROP,
+    NAVIGATE
+}
+
+// LocatorType.java
+package com.cssmart.ai.engine.model;
+
+public enum LocatorType {
+    ID,
+    NAME,
+    CLASS_NAME,
+    TAG_NAME,
+    LINK_TEXT,
+    PARTIAL_LINK_TEXT,
+    CSS,
+    XPATH
+}
+
+// TestStatus.java
+package com.cssmart.reporting.model;
+
+public enum TestStatus {
+    PASSED,
+    FAILED,
+    SKIPPED
+}
+
+// InsightType.java
+package com.cssmart.reporting.model;
+
+public enum InsightType {
+    PERFORMANCE,
+    RELIABILITY,
+    STABILITY,
+    COVERAGE,
+    IMPROVEMENT
+}
+
+
+// Action.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+
+@Data
+public class Action {
+    private final ActionType type;
+    private String value;
+    private String validation;
+    
+    public Action(ActionType type) {
+        this.type = type;
+    }
+}
+
+// ElementProperties.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+
+@Data
+public class ElementProperties {
+    private boolean clickable;
+    private boolean input;
+    private boolean selectable;
+    private boolean visible;
+    private String state;
+    
+    public boolean shouldBeVisible() {
+        return visible;
+    }
+    
+    public boolean hasState() {
+        return state != null && !state.isEmpty();
+    }
+}
+
+// ElementAnalysis.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import java.util.HashMap;
+import java.util.Map;
+
+@Data
+public class ElementAnalysis {
+    private String elementType;
+    private Map<String, String> attributes = new HashMap<>();
+    private double confidence;
+}
+
+// Locator.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import org.openqa.selenium.By;
+
+@Data
+public class Locator {
+    private final LocatorType type;
+    private final String value;
+    private final double confidence;
+    
+    public Locator(LocatorType type, String value, double confidence) {
+        this.type = type;
+        this.value = value;
+        this.confidence = confidence;
+    }
+    
+    public By toBy() {
+        return switch(type) {
+            case ID -> By.id(value);
+            case NAME -> By.name(value);
+            case CLASS_NAME -> By.className(value);
+            case TAG_NAME -> By.tagName(value);
+            case LINK_TEXT -> By.linkText(value);
+            case PARTIAL_LINK_TEXT -> By.partialLinkText(value);
+            case CSS -> By.cssSelector(value);
+            case XPATH -> By.xpath(value);
+            default -> throw new IllegalArgumentException("Unsupported locator type: " + type);
+        };
+    }
+}
+
+// ElementPrediction.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import java.util.List;
+
+@Data
+public class ElementPrediction {
+    private final List<Locator> locators;
+    private final double confidence;
+    
+    public ElementPrediction(List<Locator> locators, double confidence) {
+        this.locators = locators;
+        this.confidence = confidence;
+    }
+}
+
+
+// Pattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import lombok.Data;
+import java.util.List;
+
+@Data
+public abstract class Pattern {
+    protected final String name;
+    protected final String description;
+    protected final double confidence;
+    
+    public Pattern(String name, String description, double confidence) {
+        this.name = name;
+        this.description = description;
+        this.confidence = confidence;
+    }
+    
+    public abstract boolean matches(List<Action> actions);
+}
+
+// SequencePattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import lombok.Getter;
+import java.util.List;
+import java.util.ArrayList;
+
+public class SequencePattern extends Pattern {
+    @Getter
+    private final List<Action> actions;
+    
+    public SequencePattern(List<Action> actions, String name, String description, double confidence) {
+        super(name, description, confidence);
+        this.actions = new ArrayList<>(actions);  // Create a copy to avoid modification
+    }
+    
+    // Constructor with default name and description
+    public SequencePattern(List<Action> actions) {
+        super("Sequence", "Repeating action sequence", calculateConfidence(actions));
+        this.actions = new ArrayList<>(actions);
+    }
+    
+    private static double calculateConfidence(List<Action> actions) {
+        // Simple confidence calculation based on sequence length
+        return Math.min(1.0, actions.size() / 10.0);
+    }
+    
+    @Override
+    public boolean matches(List<Action> inputActions) {
+        // Check if input actions contain this sequence
+        for (int i = 0; i <= inputActions.size() - actions.size(); i++) {
+            boolean matches = true;
+            
+            for (int j = 0; j < actions.size(); j++) {
+                if (actions.get(j).getType() != inputActions.get(i + j).getType()) {
+                    matches = false;
+                    break;
+                }
+            }
+            
+            if (matches) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    public String generateDescription() {
+        StringBuilder description = new StringBuilder("Sequence of actions: ");
+        
+        for (int i = 0; i < actions.size(); i++) {
+            if (i > 0) {
+                description.append(" → ");
+            }
+            description.append(actions.get(i).getType());
+        }
+        
+        return description.toString();
+    }
+}
+
+// TestStep.java 
+package com.cssmart.ai.codegen.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class TestStep {
+    private String description;
+    private String action;
+    private String element;
+    private String value;
+    private String screenshot;
+    private long duration;
+}
+
+// Scenario.java
+package com.cssmart.ai.codegen.model;
+
+import lombok.Builder;
+import lombok.Data;
+import com.cssmart.ai.patterns.model.Pattern;
+import java.util.List;
+
+@Data
+@Builder
+public class Scenario {
+    private String name;
+    private String description;
+    private List<TestStep> steps;
+    private List<Pattern> patterns;
+}
+
+// ScenarioAnalysis.java
+package com.cssmart.ai.codegen.model;
+
+import lombok.Data;
+import com.cssmart.ai.patterns.model.Pattern;
+import java.util.List;
+
+@Data
+public class ScenarioAnalysis {
+    private final Scenario scenario;
+    private final List<Pattern> patterns;
+    private final double confidence;
+    
+    public ScenarioAnalysis(Scenario scenario, List<Pattern> patterns) {
+        this.scenario = scenario;
+        this.patterns = patterns;
+        this.confidence = calculateConfidence();
+    }
+    
+    private double calculateConfidence() {
+        return patterns.stream()
+            .mapToDouble(Pattern::getConfidence)
+            .average()
+            .orElse(0.0);
+    }
+}
+
+// PageElement.java
+package com.cssmart.ai.codegen.model;
+
+import com.cssmart.ai.engine.model.Locator;
+import lombok.Builder;
+import lombok.Data;
+import java.util.List;
+
+@Data
+@Builder
+public class PageElement {
+    private String name;
+    private String description;
+    private List<Locator> locators;
+}
+
+// TestCase.java
+package com.cssmart.ai.codegen.model;
+
+import com.github.javaparser.ast.CompilationUnit;
+import lombok.Data;
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
+
+@Data
+public class TestCase {
+    private final CompilationUnit compilationUnit;
+    private final String className;
+    private final List<TestStep> steps;
+    
+    public TestCase(CompilationUnit compilationUnit) {
+        this.compilationUnit = compilationUnit;
+        this.className = compilationUnit.getPrimaryTypeName().orElse("UnknownClass");
+        this.steps = null;
+    }
+    
+    public TestCase(CompilationUnit compilationUnit, String className, List<TestStep> steps) {
+        this.compilationUnit = compilationUnit;
+        this.className = className;
+        this.steps = steps;
+    }
+    
+    public void saveToFile(String path) {
+        // Save generated test to file
+        try {
+            if (compilationUnit.getStorage().isPresent()) {
+                compilationUnit.getStorage().get().save();
+            } else {
+                File file = new File(path);
+                file.getParentFile().mkdirs();
+                compilationUnit.setStorage(file);
+                compilationUnit.getStorage().get().save();
+            }
+        } catch (IOException e) {
+            throw new com.cssmart.ai.codegen.exceptions.CodeGenerationException("Failed to save test case", e);
+        }
+    }
+}
+
+// TestContext.java
+package com.cssmart.core.base;
+
+import lombok.Data;
+import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.HashMap;
+
+@Data
+public class TestContext {
+    private Method testMethod;
+    private Map<String, Object> testData;
+    private Map<String, Object> runtime;
+    
+    public TestContext() {
+        this.testData = new HashMap<>();
+        this.runtime = new HashMap<>();
+    }
+    
+    public void setTestData(Map<String, Object> data) {
+        this.testData.putAll(data);
+    }
+    
+    public <T> T getTestData(String key, Class<T> type) {
+        Object value = testData.get(key);
+        if (value == null) {
+            return null;
+        }
+        return type.cast(value);
+    }
+    
+    public void setRuntimeData(String key, Object value) {
+        runtime.put(key, value);
+    }
+    
+    public <T> T getRuntimeData(String key, Class<T> type) {
+        Object value = runtime.get(key);
+        if (value == null) {
+            return null;
+        }
+        return type.cast(value);
+    }
+}
+
+// TestConfiguration.java
+package com.cssmart.core.config.model;
+
+import lombok.Data;
+import lombok.Builder;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@Builder
+public class TestConfiguration {
+    private BrowserConfig browser;
+    private ExecutionConfig execution;
+    private ReportingConfig reporting;
+    private DataConfig data;
+    
+    @Data
+    @Builder
+    public static class BrowserConfig {
+        private String type;
+        private boolean headless;
+        private Map<String, String> capabilities;
+    }
+    
+    @Data
+    @Builder
+    public static class ExecutionConfig {
+        private boolean parallel;
+        private int threadCount;
+        private int retryCount;
+        private long timeout;
+    }
+    
+    @Data
+    @Builder
+    public static class ReportingConfig {
+        private String format;
+        private boolean screenshots;
+        private boolean video;
+        private String outputDir;
+    }
+    
+    @Data
+    @Builder
+    public static class DataConfig {
+        private List<DataSource> sources;
+        private String defaultPath;
+    }
+    
+    @Data
+    @Builder
+    public static class DataSource {
+        private String type;
+        private String path;
+    }
+}
+
+// CSSmartTest.java
+package com.cssmart.core.annotations;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.METHOD, ElementType.TYPE})
+public @interface CSSmartTest {
+    String description() default "";
+    String[] tags() default {};
+    String dataProvider() default "";
+    String browser() default "";
+    boolean captureVideo() default false;
+    boolean retryOnFailure() default false;
+    int maxRetries() default 1;
+}
+
+// TestReport.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@Builder
+public class TestReport {
+    private String id;
+    private String name;
+    private String description;
+    private TestStatus status;
+    private long duration;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private List<String> tags;
+    private String browser;
+    private String environment;
+    private String className;
+    private String methodName;
+    private String exception;
+    private String stackTrace;
+    private String screenshot;
+    private List<TestStep> steps;
+    private Map<String, Object> metadata;
+}
+
+// TestStep.java (Reporting)
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class TestStep {
+    private String description;
+    private String action;
+    private String element;
+    private String value;
+    private TestStatus status;
+    private String screenshot;
+    private String exception;
+    private long duration;
+}
+
+// ExecutionMetrics.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class ExecutionMetrics {
+    private int totalTests;
+    private int passedTests;
+    private int failedTests;
+    private int skippedTests;
+    private double successRate;
+    private long duration;
+    private long avgDuration;
+    private long minDuration;
+    private long maxDuration;
+}
+
+// Insight.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class Insight {
+    private String title;
+    private String description;
+    private InsightType type;
+    private double confidence;
+}
+
+// TrendData.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+public class TrendData {
+    private LocalDateTime date;
+    private int total;
+    private int passed;
+    private int failed;
+    private int skipped;
+    private double successRate;
+    private long avgDuration;
+}
+
+// RecordedStep.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+public class RecordedStep {
+    private String action;
+    private String element;
+    private String value;
+    private String description;
+    private LocalDateTime timestamp;
+    private String screenshot;
+}
+
+// TestCase.java (UI)
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Data
+public class TestCase {
+    private String id;
+    private String name;
+    private String description;
+    private List<RecordedStep> steps;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String className;
+    private String methodName;
+    private String code;
+}
+
+// RecorderMessage.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class RecorderMessage {
+    private String type;
+    private Object data;
+}
+
+// DashboardMetrics.java
+package com.cssmart.ui.dashboard.model;
+
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.model.Insight;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import java.util.List;
+
+@Data
+@AllArgsConstructor
+public class DashboardMetrics {
+    private ExecutionMetrics metrics;
+    private List<Insight> insights;
+}
+
+// StepError.java
+package com.cssmart.bdd.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.util.List;
+
+@Data
+@Builder
+public class StepError {
+    private String message;
+    private String stackTrace;
+    private boolean recoverable;
+    private List<RecoveryAction> recoveryActions;
+    
+    public boolean isRecoverable() {
+        return recoverable && recoveryActions != null && !recoveryActions.isEmpty();
+    }
+}
+
+// RecoveryAction.java
+package com.cssmart.bdd.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.util.function.Consumer;
+
+@Data
+@Builder
+public class RecoveryAction {
+    private String description;
+    private Consumer<Object> action;
+}
+
+// AI Engine Exceptions
+package com.cssmart.ai.engine.exceptions;
+
+public class AIPredictionException extends RuntimeException {
+    public AIPredictionException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.ai.engine.exceptions;
+
+public class AIActionException extends RuntimeException {
+    public AIActionException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.ai.engine.exceptions;
+
+public class AIPatternException extends RuntimeException {
+    public AIPatternException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// AI Codegen Exceptions
+package com.cssmart.ai.codegen.exceptions;
+
+public class CodeGenerationException extends RuntimeException {
+    public CodeGenerationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public CodeGenerationException(String message) {
+        super(message);
+    }
+}
+
+package com.cssmart.ai.codegen.exceptions;
+
+public class TemplateProcessingException extends RuntimeException {
+    public TemplateProcessingException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// Core Config Exceptions
+package com.cssmart.core.config.exceptions;
+
+public class ConfigurationException extends RuntimeException {
+    public ConfigurationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.core.config.exceptions;
+
+public class EnvironmentException extends RuntimeException {
+    public EnvironmentException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// Core Driver Exceptions
+package com.cssmart.core.driver.exceptions;
+
+public class BrowserCreationException extends RuntimeException {
+    public BrowserCreationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.core.driver.exceptions;
+
+public class UnsupportedBrowserException extends RuntimeException {
+    public UnsupportedBrowserException(String message) {
+        super(message);
+    }
+}
+
+package com.cssmart.core.driver.exceptions;
+
+public class ElementNotFoundException extends RuntimeException {
+    public ElementNotFoundException(String message) {
+        super(message);
+    }
+}
+
+// Core Base Exceptions
+package com.cssmart.core.base.exceptions;
+
+public class FrameworkInitializationException extends RuntimeException {
+    public FrameworkInitializationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.core.base.exceptions;
+
+public class PageInitializationException extends RuntimeException {
+    public PageInitializationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// BDD Exceptions
+package com.cssmart.bdd.exceptions;
+
+public class StepExecutionException extends RuntimeException {
+    public StepExecutionException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.bdd.exceptions;
+
+public class StepDefinitionException extends RuntimeException {
+    public StepDefinitionException(String message) {
+        super(message);
+    }
+}
+
+// Data Exceptions
+package com.cssmart.data.exceptions;
+
+public class DataProviderException extends RuntimeException {
+    public DataProviderException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.data.exceptions;
+
+public class DataReadException extends RuntimeException {
+    public DataReadException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.data.exceptions;
+
+public class UnsupportedDataSourceException extends RuntimeException {
+    public UnsupportedDataSourceException(String message) {
+        super(message);
+    }
+}
+
+// Reporting Exceptions
+package com.cssmart.reporting.exceptions;
+
+public class ReportGenerationException extends RuntimeException {
+    public ReportGenerationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+package com.cssmart.reporting.exceptions;
+
+public class ChartGenerationException extends RuntimeException {
+    public ChartGenerationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// DataProvider.java
+package com.cssmart.data.provider;
+
+public interface DataProvider {
+    Object[][] getData(String filePath);
+}
+
+// AIEngine.java (continued)
+package com.cssmart.ai.engine;
+
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebElement;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.model.*;
+import com.cssmart.ai.engine.exceptions.*;
+import com.cssmart.ai.patterns.PatternRecognizer;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ui.recorder.model.TestCase;
+
+@Slf4j
+public class AIEngine {
+    private static AIEngine instance;
+    private final ElementPredictor elementPredictor;
+    private final ActionGenerator actionGenerator;
+    private final PatternRecognizer patternRecognizer;
+    
+    private AIEngine() {
+        this.elementPredictor = new ElementPredictor();
+        this.actionGenerator = new ActionGenerator();
+        this.patternRecognizer = new PatternRecognizer();
+    }
+    
+    public static AIEngine getInstance() {
+        if (instance == null) {
+            synchronized (AIEngine.class) {
+                if (instance == null) {
+                    instance = new AIEngine();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    public ElementPrediction predictElement(String description) {
+        try {
+            return elementPredictor.predict(description);
+        } catch (Exception e) {
+            log.error("Error predicting element: {}", description, e);
+            throw new AIPredictionException("Failed to predict element", e);
+        }
+    }
+    
+    public List<Action> suggestActions(WebElement element) {
+        try {
+            return actionGenerator.generateActions(element);
+        } catch (Exception e) {
+            log.error("Error generating actions for element", e);
+            throw new AIActionException("Failed to generate actions", e);
+        }
+    }
+    
+    public List<Pattern> recognizePatterns(List<Action> actions) {
+        try {
+            return patternRecognizer.findPatterns(actions);
+        } catch (Exception e) {
+            log.error("Error recognizing patterns", e);
+            throw new AIPatternException("Failed to recognize patterns", e);
+        }
+    }
+    
+    public ElementAnalysis analyzeElement(String description) {
+        ElementAnalysis analysis = new ElementAnalysis();
+        
+        // Simple implementation for now
+        String[] parts = description.split("\\s+");
+        if (parts.length > 0) {
+            // Extract element type from the last word
+            analysis.setElementType(parts[parts.length - 1]);
+            
+            // Build attributes
+            if (description.contains("id=")) {
+                String id = description.replaceAll(".*id=['\"](.*?)['\"].*", "$1");
+                analysis.getAttributes().put("id", id);
+            }
+            
+            if (description.contains("class=")) {
+                String className = description.replaceAll(".*class=['\"](.*?)['\"].*", "$1");
+                analysis.getAttributes().put("class", className);
+            }
+            
+            // Add text as an attribute if it appears to be a link
+            if (analysis.getElementType().equals("link") || analysis.getElementType().equals("button")) {
+                analysis.getAttributes().put("text", description.replaceAll("\\s+" + analysis.getElementType() + "$", ""));
+            }
+            
+            // Set confidence based on the number of attributes
+            analysis.setConfidence(Math.min(1.0, 0.3 + analysis.getAttributes().size() * 0.2));
+        }
+        
+        return analysis;
+    }
+    
+    public List<Locator> generateLocators(String description) {
+        ElementAnalysis analysis = analyzeElement(description);
+        return new LocatorStrategy().generateLocators(analysis);
+    }
+    
+    public TestCase enhanceTestCase(TestCase testCase) {
+        // A more sophisticated implementation would analyze the test case
+        // and enhance it with AI insights, but for now we'll just return it
+        return testCase;
+    }
+    
+    public com.cssmart.ai.codegen.model.TestStep[] enhanceSteps(com.cssmart.ai.codegen.model.TestStep[] steps) {
+        // Placeholder for step enhancement logic
+        return steps;
+    }
+    
+    public boolean verifyTextPresence(org.openqa.selenium.WebDriver driver, String text) {
+        return driver.getPageSource().contains(text);
+    }
+    
+    public com.cssmart.ui.recorder.model.TestCase enhanceScenario(com.cssmart.ui.recorder.model.TestCase scenario) {
+        // Placeholder for scenario enhancement logic
+        return scenario;
+    }
+}
+
+// ElementPredictor.java
+package com.cssmart.ai.engine;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.model.ElementAnalysis;
+import com.cssmart.ai.engine.model.ElementPrediction;
+import com.cssmart.ai.engine.model.Locator;
+
+@Slf4j
+public class ElementPredictor {
+    private final LocatorStrategy locatorStrategy;
+    
+    public ElementPredictor() {
+        this.locatorStrategy = new LocatorStrategy();
+    }
+    
+    public ElementPrediction predict(String description) {
+        // Analyze description
+        ElementAnalysis analysis = analyzeDescription(description);
+        
+        // Generate locator strategies
+        List<Locator> locators = locatorStrategy.generateLocators(analysis);
+        
+        // Create prediction
+        return new ElementPrediction(locators, analysis.getConfidence());
+    }
+    
+    private ElementAnalysis analyzeDescription(String description) {
+        ElementAnalysis analysis = new ElementAnalysis();
+        
+        // Analyze element type
+        analysis.setElementType(determineElementType(description));
+        
+        // Analyze attributes
+        analysis.setAttributes(extractAttributes(description));
+        
+        // Calculate confidence
+        analysis.setConfidence(calculateConfidence(analysis));
+        
+        return analysis;
+    }
+    
+    private String determineElementType(String description) {
+        String lowerDesc = description.toLowerCase();
+        
+        if (lowerDesc.contains("button")) return "button";
+        if (lowerDesc.contains("link")) return "a";
+        if (lowerDesc.contains("input") || lowerDesc.contains("field") || lowerDesc.contains("textbox")) return "input";
+        if (lowerDesc.contains("checkbox")) return "input"; // type="checkbox"
+        if (lowerDesc.contains("radio")) return "input"; // type="radio"
+        if (lowerDesc.contains("select") || lowerDesc.contains("dropdown")) return "select";
+        if (lowerDesc.contains("image")) return "img";
+        if (lowerDesc.contains("text")) return "span";
+        
+        return "div"; // Default to div if we can't determine element type
+    }
+    
+    private java.util.Map<String, String> extractAttributes(String description) {
+        java.util.Map<String, String> attributes = new java.util.HashMap<>();
+        
+        // Extract ID if present (format: "id=xyz" or "with id xyz")
+        if (description.matches(".*\\bid\\s*=\\s*['\"]([^'\"]+)['\"].*")) {
+            String id = description.replaceAll(".*\\bid\\s*=\\s*['\"]([^'\"]+)['\"].*", "$1");
+            attributes.put("id", id);
+        } else if (description.matches(".*\\bwith\\s+id\\s+([^\\s]+).*")) {
+            String id = description.replaceAll(".*\\bwith\\s+id\\s+([^\\s]+).*", "$1");
+            attributes.put("id", id);
+        }
+        
+        // Extract class if present
+        if (description.matches(".*\\bclass\\s*=\\s*['\"]([^'\"]+)['\"].*")) {
+            String className = description.replaceAll(".*\\bclass\\s*=\\s*['\"]([^'\"]+)['\"].*", "$1");
+            attributes.put("class", className);
+        } else if (description.matches(".*\\bwith\\s+class\\s+([^\\s]+).*")) {
+            String className = description.replaceAll(".*\\bwith\\s+class\\s+([^\\s]+).*", "$1");
+            attributes.put("class", className);
+        }
+        
+        // Extract name if present
+        if (description.matches(".*\\bname\\s*=\\s*['\"]([^'\"]+)['\"].*")) {
+            String name = description.replaceAll(".*\\bname\\s*=\\s*['\"]([^'\"]+)['\"].*", "$1");
+            attributes.put("name", name);
+        } else if (description.matches(".*\\bwith\\s+name\\s+([^\\s]+).*")) {
+            String name = description.replaceAll(".*\\bwith\\s+name\\s+([^\\s]+).*", "$1");
+            attributes.put("name", name);
+        }
+        
+        // Extract text content for buttons, links, etc.
+        String elementType = determineElementType(description);
+        if ("button".equals(elementType) || "a".equals(elementType)) {
+            // Extract text between quotes if present
+            if (description.matches(".*['\"]([^'\"]+)['\"].*")) {
+                String text = description.replaceAll(".*['\"]([^'\"]+)['\"].*", "$1");
+                attributes.put("text", text);
+            } else {
+                // Otherwise use the first part of the description
+                String[] words = description.split("\\s+");
+                if (words.length > 1) {
+                    StringBuilder text = new StringBuilder();
+                    for (int i = 0; i < words.length - 1; i++) { // Exclude the last word as it's usually "button"/"link"
+                        if (!words[i].equals("the") && !words[i].equals("a") && !words[i].equals("an")) {
+                            text.append(words[i]).append(" ");
+                        }
+                    }
+                    if (text.length() > 0) {
+                        attributes.put("text", text.toString().trim());
+                    }
+                }
+            }
+        }
+        
+        return attributes;
+    }
+    
+    private double calculateConfidence(ElementAnalysis analysis) {
+        double confidence = 0.0;
+        
+        // Add confidence based on element type match
+        if (analysis.getElementType() != null) {
+            confidence += 0.4;
+        }
+        
+        // Add confidence based on attributes
+        confidence += analysis.getAttributes().size() * 0.2;
+        
+        return Math.min(confidence, 1.0);
+    }
+}
+
+// ActionGenerator.java
+package com.cssmart.ai.engine;
+
+import org.openqa.selenium.WebElement;
+import java.util.List;
+import java.util.ArrayList;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.engine.model.ElementProperties;
+
+@Slf4j
+public class ActionGenerator {
+    private final ElementAnalyzer elementAnalyzer;
+    
+    public ActionGenerator() {
+        this.elementAnalyzer = new ElementAnalyzer();
+    }
+    
+    public List<Action> generateActions(WebElement element) {
+        List<Action> actions = new ArrayList<>();
+        
+        // Analyze element
+        ElementProperties properties = elementAnalyzer.analyze(element);
+        
+        // Generate appropriate actions
+        if (properties.isClickable()) {
+            actions.add(new Action(ActionType.CLICK));
+        }
+        
+        if (properties.isInput()) {
+            actions.add(new Action(ActionType.TYPE));
+        }
+        
+        if (properties.isSelectable()) {
+            actions.add(new Action(ActionType.SELECT));
+        }
+        
+        // Add validations
+        actions.addAll(generateValidations(properties));
+        
+        return actions;
+    }
+    
+    private List<Action> generateValidations(ElementProperties properties) {
+        List<Action> validations = new ArrayList<>();
+        
+        // Add presence validation
+        validations.add(new Action(ActionType.VERIFY_PRESENCE));
+        
+        // Add visibility validation if element should be visible
+        if (properties.shouldBeVisible()) {
+            validations.add(new Action(ActionType.VERIFY_VISIBILITY));
+        }
+        
+        // Add state validations
+        if (properties.hasState()) {
+            Action stateValidation = new Action(ActionType.VERIFY_STATE);
+            stateValidation.setValue(properties.getState());
+            validations.add(stateValidation);
+        }
+        
+        return validations;
+    }
+}
+
+// LocatorStrategy.java
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.ElementAnalysis;
+import com.cssmart.ai.engine.model.Locator;
+import com.cssmart.ai.engine.model.LocatorType;
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+
+@Slf4j
+public class LocatorStrategy {
+    
+    public List<Locator> generateLocators(ElementAnalysis analysis) {
+        List<Locator> locators = new ArrayList<>();
+        
+        // Get element attributes
+        Map<String, String> attributes = analysis.getAttributes();
+        
+        // Try to create locators based on ID (highest priority)
+        if (attributes.containsKey("id")) {
+            locators.add(new Locator(LocatorType.ID, attributes.get("id"), 0.9));
+        }
+        
+        // Try to create locators based on name
+        if (attributes.containsKey("name")) {
+            locators.add(new Locator(LocatorType.NAME, attributes.get("name"), 0.8));
+        }
+        
+        // Try to create locators based on class
+        if (attributes.containsKey("class")) {
+            locators.add(new Locator(LocatorType.CLASS_NAME, attributes.get("class"), 0.7));
+        }
+        
+        // Try to create CSS selector
+        String cssSelector = createCssSelector(analysis);
+        if (cssSelector != null) {
+            locators.add(new Locator(LocatorType.CSS, cssSelector, 0.6));
+        }
+        
+        // Try to create XPath
+        String xpath = createXPath(analysis);
+        if (xpath != null) {
+            locators.add(new Locator(LocatorType.XPATH, xpath, 0.5));
+        }
+        
+        // Create text-based locators for links
+        if ("a".equals(analysis.getElementType()) && attributes.containsKey("text")) {
+            locators.add(new Locator(LocatorType.LINK_TEXT, attributes.get("text"), 0.8));
+            locators.add(new Locator(LocatorType.PARTIAL_LINK_TEXT, attributes.get("text"), 0.7));
+        }
+        
+        log.debug("Generated {} locators for element type: {}", locators.size(), analysis.getElementType());
+        return locators;
+    }
+    
+    private String createCssSelector(ElementAnalysis analysis) {
+        StringBuilder selector = new StringBuilder();
+        
+        // Add element type
+        if (analysis.getElementType() != null) {
+            selector.append(analysis.getElementType());
+        } else {
+            return null;
+        }
+        
+        // Add ID if available
+        if (analysis.getAttributes().containsKey("id")) {
+            selector.append("#").append(analysis.getAttributes().get("id"));
+            return selector.toString();
+        }
+        
+        // Add class if available
+        if (analysis.getAttributes().containsKey("class")) {
+            String[] classes = analysis.getAttributes().get("class").split("\\s+");
+            for (String cssClass : classes) {
+                selector.append(".").append(cssClass);
+            }
+        }
+        
+        // Add other attributes
+        for (Map.Entry<String, String> entry : analysis.getAttributes().entrySet()) {
+            if (!entry.getKey().equals("id") && !entry.getKey().equals("class")) {
+                selector.append("[").append(entry.getKey()).append("='").append(entry.getValue()).append("']");
+            }
+        }
+        
+        return selector.toString();
+    }
+    
+    private String createXPath(ElementAnalysis analysis) {
+        StringBuilder xpath = new StringBuilder("//");
+        
+        // Add element type
+        if (analysis.getElementType() != null) {
+            xpath.append(analysis.getElementType());
+        } else {
+            xpath.append("*");
+        }
+        
+        // Add attributes
+        for (Map.Entry<String, String> entry : analysis.getAttributes().entrySet()) {
+            if (!entry.getKey().equals("text")) {
+                xpath.append("[@").append(entry.getKey()).append("='").append(entry.getValue()).append("']");
+            }
+        }
+        
+        // Add text condition if available
+        if (analysis.getAttributes().containsKey("text")) {
+            xpath.append("[contains(text(),'").append(analysis.getAttributes().get("text")).append("')]");
+        }
+        
+        return xpath.toString();
+    }
+}
+
+// ElementAnalyzer.java
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.ElementProperties;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.support.ui.Select;
+import java.util.Arrays;
+import java.util.List;
+
+@Slf4j
+public class ElementAnalyzer {
+    
+    private static final List<String> INPUT_TYPES = Arrays.asList(
+        "text", "password", "email", "number", "tel", "search", "url", "date", "datetime-local", "time", "month", "week"
+    );
+    
+    private static final List<String> CLICKABLE_TAGS = Arrays.asList(
+        "a", "button", "input"
+    );
+    
+    private final WebDriver driver;
+    
+    public ElementAnalyzer(WebDriver driver) {
+        this.driver = driver;
+    }
+    
+    public ElementAnalyzer() {
+        this.driver = null;
+    }
+    
+    public ElementProperties analyze(WebElement element) {
+        ElementProperties properties = new ElementProperties();
+        
+        try {
+            // Get tag name
+            String tagName = element.getTagName().toLowerCase();
+            
+            // Check if element is an input
+            boolean isInput = "input".equals(tagName) || "textarea".equals(tagName);
+            if (isInput) {
+                properties.setInput(true);
+                
+                // Check input type
+                String inputType = element.getAttribute("type");
+                if (inputType == null || INPUT_TYPES.contains(inputType.toLowerCase())) {
+                    properties.setInput(true);
+                }
+            }
+            
+            // Check if element is selectable
+            boolean isSelectable = "select".equals(tagName);
+            if (isSelectable) {
+                properties.setSelectable(true);
+                
+                // Try to verify if select has options
+                try {
+                    Select select = new Select(element);
+                    properties.setSelectable(select.getOptions().size() > 0);
+                } catch (Exception e) {
+                    log.debug("Error checking select options: {}", e.getMessage());
+                }
+            }
+            
+            // Check if element is clickable
+            boolean isClickable = CLICKABLE_TAGS.contains(tagName) || 
+                                  isInput || 
+                                  isSelectable || 
+                                  "true".equals(element.getAttribute("onclick")) ||
+                                  element.getCssValue("cursor").contains("pointer");
+            properties.setClickable(isClickable);
+            
+            // Check visibility
+            boolean isVisible = element.isDisplayed();
+            properties.setVisible(isVisible);
+            
+            // Check state
+            if ("input".equals(tagName) && "checkbox".equals(element.getAttribute("type"))) {
+                boolean isChecked = element.isSelected();
+                properties.setState(isChecked ? "checked" : "unchecked");
+            } else if ("input".equals(tagName) && "radio".equals(element.getAttribute("type"))) {
+                boolean isSelected = element.isSelected();
+                properties.setState(isSelected ? "selected" : "unselected");
+            }
+            
+        } catch (Exception e) {
+            log.error("Error analyzing element: {}", e.getMessage());
+        }
+        
+        return properties;
+    }
+    
+    public ElementProperties analyzeUsingJS(WebElement element) {
+        if (driver == null) {
+            throw new IllegalStateException("Driver not initialized for JavaScript analysis");
+        }
+        
+        ElementProperties properties = new ElementProperties();
+        
+        try {
+            JavascriptExecutor js = (JavascriptExecutor) driver;
+            
+            // Check if element is clickable using JS
+            Boolean isClickable = (Boolean) js.executeScript(
+                "return window.getComputedStyle(arguments[0]).getPropertyValue('cursor') === 'pointer' || " +
+                "!!arguments[0].onclick || " +
+                "arguments[0].tagName === 'A' || " +
+                "arguments[0].tagName === 'BUTTON' || " +
+                "(arguments[0].tagName === 'INPUT' && arguments[0].type !== 'hidden')", 
+                element
+            );
+            properties.setClickable(isClickable != null && isClickable);
+            
+            // Check visibility using JS
+            Boolean isVisible = (Boolean) js.executeScript(
+                "var elem = arguments[0];" +
+                "return !!(elem.offsetWidth || elem.offsetHeight || elem.getClientRects().length);", 
+                element
+            );
+            properties.setVisible(isVisible != null && isVisible);
+            
+        } catch (Exception e) {
+            log.error("Error analyzing element using JS: {}", e.getMessage());
+        }
+        
+        return properties;
+    }
+}
+
+// PatternRecognizer.java
+package com.cssmart.ai.patterns;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.patterns.model.Pattern;
+
+@Slf4j
+public class PatternRecognizer {
+    private final BehaviorAnalyzer behaviorAnalyzer;
+    private final SequenceDetector sequenceDetector;
+    
+    public PatternRecognizer() {
+        this.behaviorAnalyzer = new BehaviorAnalyzer();
+        this.sequenceDetector = new SequenceDetector();
+    }
+    
+    public List<Pattern> findPatterns(List<Action> actions) {
+        List<Pattern> patterns = new ArrayList<>();
+        
+        // Analyze behavior patterns
+        patterns.addAll(behaviorAnalyzer.analyzeBehavior(actions));
+        
+        // Detect sequences
+        patterns.addAll(sequenceDetector.detectSequences(actions));
+        
+        return patterns;
+    }
+}
+
+// BehaviorAnalyzer.java
+package com.cssmart.ai.patterns;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ai.patterns.model.FormPattern;
+import com.cssmart.ai.patterns.model.NavigationPattern;
+import com.cssmart.ai.patterns.model.ValidationPattern;
+
+@Slf4j
+public class BehaviorAnalyzer {
+    private final PatternMatcher patternMatcher;
+    
+    public BehaviorAnalyzer() {
+        this.patternMatcher = new PatternMatcher();
+    }
+    
+    public List<Pattern> analyzeBehavior(List<Action> actions) {
+        List<Pattern> patterns = new ArrayList<>();
+        
+        // Find form filling patterns
+        if (containsFormPattern(actions)) {
+            patterns.add(new FormPattern(actions));
+        }
+        
+        // Find navigation patterns
+        if (containsNavigationPattern(actions)) {
+            patterns.add(new NavigationPattern(actions));
+        }
+        
+        // Find validation patterns
+        if (containsValidationPattern(actions)) {
+            patterns.add(new ValidationPattern(actions));
+        }
+        
+        return patterns;
+    }
+    
+    private boolean containsFormPattern(List<Action> actions) {
+        return actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.TYPE ||
+                              action.getType() == ActionType.SELECT);
+    }
+    
+    private boolean containsNavigationPattern(List<Action> actions) {
+        return actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.CLICK || 
+                             action.getType() == ActionType.NAVIGATE);
+    }
+    
+    private boolean containsValidationPattern(List<Action> actions) {
+        return actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.VERIFY_PRESENCE || 
+                             action.getType() == ActionType.VERIFY_VISIBILITY || 
+                             action.getType() == ActionType.VERIFY_STATE);
+    }
+    
+    private boolean isNavigationElement(Action action) {
+        // In a real implementation, this would check if the element is a navigation element
+        // based on its properties, but for simplicity, we'll return true if it's a CLICK action
+        return action.getType() == ActionType.CLICK || action.getType() == ActionType.NAVIGATE;
+    }
+}
+
+// SequenceDetector.java
+package com.cssmart.ai.patterns;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ai.patterns.model.SequencePattern;
+
+@Slf4j
+public class SequenceDetector {
+    private final FrequencyAnalyzer frequencyAnalyzer;
+    
+    public SequenceDetector() {
+        this.frequencyAnalyzer = new FrequencyAnalyzer();
+    }
+    
+    public List<Pattern> detectSequences(List<Action> actions) {
+        List<Pattern> sequences = new ArrayList<>();
+        
+        // Find common sequences
+        Map<List<Action>, Integer> frequencies = 
+            frequencyAnalyzer.analyzeFrequencies(actions);
+            
+        // Convert frequent sequences to patterns
+        frequencies.forEach((sequence, count) -> {
+            if (count > 1) {  // Sequence appears multiple times
+                double confidence = calculateConfidence(count, actions.size(), sequence.size());
+                sequences.add(new SequencePattern(sequence, "Sequence", 
+                    "Repeating action sequence", confidence));
+            }
+        });
+        
+        log.debug("Detected {} sequence patterns", sequences.size());
+        return sequences;
+    }
+    
+    private double calculateConfidence(int occurrences, int totalActions, int sequenceLength) {
+        // More occurrences and longer sequences increase confidence
+        double baseConfidence = Math.min(1.0, occurrences / 5.0);
+        double lengthFactor = Math.min(1.0, sequenceLength / 5.0);
+        
+        return Math.min(1.0, baseConfidence * 0.7 + lengthFactor * 0.3);
+    }
+    
+    public List<Pattern> findRepeatingPatterns(List<Action> actions) {
+        List<Pattern> patterns = new ArrayList<>();
+        
+        // Find simple repeating patterns (same action multiple times)
+        Map<ActionType, Integer> typeCounts = new java.util.HashMap<>();
+        
+        for (Action action : actions) {
+            typeCounts.merge(action.getType(), 1, Integer::sum);
+        }
+        
+        // Convert to patterns
+        typeCounts.forEach((type, count) -> {
+            if (count > 3) {  // Significant repetition
+                patterns.add(new RepeatingActionPattern(type, count));
+            }
+        });
+        
+        return patterns;
+    }
+    
+    // Simple repeating action pattern implementation
+    private static class RepeatingActionPattern extends Pattern {
+        private final ActionType actionType;
+        private final int count;
+        
+        public RepeatingActionPattern(ActionType actionType, int count) {
+            super("Repeating " + actionType, 
+                  "Repeating action pattern: " + actionType + " x" + count, 
+                  Math.min(1.0, count / 10.0));
+            this.actionType = actionType;
+            this.count = count;
+        }
+        
+        @Override
+        public boolean matches(List<Action> actions) {
+            int matchCount = 0;
+            for (Action action : actions) {
+                if (action.getType() == actionType) {
+                    matchCount++;
+                }
+            }
+            
+            return matchCount >= count * 0.8;  // 80% match threshold
+        }
+    }
+}
+
+// PatternMatcher.java (continued)
+package com.cssmart.ai.patterns;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.patterns.model.Pattern;
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+@Slf4j
+public class PatternMatcher {
+    private final List<Pattern> knownPatterns;
+    
+    public PatternMatcher() {
+        this.knownPatterns = new ArrayList<>();
+        initializePatterns();
+    }
+    
+    private void initializePatterns() {
+        // This would be initialized with known patterns
+        // For now, it's empty as patterns are created dynamically
+    }
+    
+    public List<Pattern> findPatterns(List<String> sentences) {
+        List<Pattern> foundPatterns = new ArrayList<>();
+        
+        // Analyze sentences for patterns
+        // This is simplified - a real implementation would use NLP
+        for (String sentence : sentences) {
+            log.debug("Analyzing sentence for patterns: {}", sentence);
+            
+            if (sentence.toLowerCase().contains("login") || 
+                sentence.toLowerCase().contains("sign in")) {
+                foundPatterns.add(createLoginPattern());
+            }
+            
+            if (sentence.toLowerCase().contains("search") || 
+                sentence.toLowerCase().contains("find")) {
+                foundPatterns.add(createSearchPattern());
+            }
+            
+            if (sentence.toLowerCase().contains("form") || 
+                sentence.toLowerCase().contains("fill") || 
+                sentence.toLowerCase().contains("enter")) {
+                foundPatterns.add(createFormPattern());
+            }
+            
+            if (sentence.toLowerCase().contains("navigate") || 
+                sentence.toLowerCase().contains("go to")) {
+                foundPatterns.add(createNavigationPattern());
+            }
+            
+            if (sentence.toLowerCase().contains("validate") || 
+                sentence.toLowerCase().contains("verify") || 
+                sentence.toLowerCase().contains("check") || 
+                sentence.toLowerCase().contains("assert")) {
+                foundPatterns.add(createValidationPattern());
+            }
+        }
+        
+        return foundPatterns;
+    }
+    
+    public List<Pattern> findMatchingPatterns(List<Action> actions) {
+        List<Pattern> matchingPatterns = new ArrayList<>();
+        
+        for (Pattern pattern : knownPatterns) {
+            if (pattern.matches(actions)) {
+                matchingPatterns.add(pattern);
+            }
+        }
+        
+        return matchingPatterns;
+    }
+    
+    // Example pattern creation methods
+    private Pattern createLoginPattern() {
+        // This would create a login pattern
+        // Simplified implementation for now
+        return new LoginPattern();
+    }
+    
+    private Pattern createSearchPattern() {
+        // This would create a search pattern
+        return new SearchPattern();
+    }
+    
+    private Pattern createFormPattern() {
+        // This would create a form pattern
+        return new FormPattern();
+    }
+    
+    private Pattern createNavigationPattern() {
+        // This would create a navigation pattern
+        return new NavigationPattern();
+    }
+    
+    private Pattern createValidationPattern() {
+        // This would create a validation pattern
+        return new ValidationPattern();
+    }
+    
+    // Simplified pattern implementations for demonstration
+    private static class LoginPattern extends Pattern {
+        public LoginPattern() {
+            super("Login", "Login pattern", 0.9);
+        }
+        
+        @Override
+        public boolean matches(List<Action> actions) {
+            // Implementation would check for login pattern
+            return true;
+        }
+    }
+    
+    private static class SearchPattern extends Pattern {
+        public SearchPattern() {
+            super("Search", "Search pattern", 0.9);
+        }
+        
+        @Override
+        public boolean matches(List<Action> actions) {
+            // Implementation would check for search pattern
+            return true;
+        }
+    }
+    
+    private static class FormPattern extends Pattern {
+        public FormPattern() {
+            super("Form", "Form filling pattern", 0.9);
+        }
+        
+        @Override
+        public boolean matches(List<Action> actions) {
+            // Implementation would check for form filling pattern
+            return true;
+        }
+    }
+    
+    private static class NavigationPattern extends Pattern {
+        public NavigationPattern() {
+            super("Navigation", "Navigation pattern", 0.9);
+        }
+        
+        @Override
+        public boolean matches(List<Action> actions) {
+            // Implementation would check for navigation pattern
+            return true;
+        }
+    }
+    
+    private static class ValidationPattern extends Pattern {
+        public ValidationPattern() {
+            super("Validation", "Validation pattern", 0.9);
+        }
+        
+        @Override
+        public boolean matches(List<Action> actions) {
+            // Implementation would check for validation pattern
+            return true;
+        }
+    }
+}
+
+// FrequencyAnalyzer.java
+package com.cssmart.ai.patterns;
+
+import com.cssmart.ai.engine.model.Action;
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.ArrayList;
+
+@Slf4j
+public class FrequencyAnalyzer {
+    
+    public Map<List<Action>, Integer> analyzeFrequencies(List<Action> actions) {
+        Map<List<Action>, Integer> frequencies = new HashMap<>();
+        
+        // Find sequences of different lengths
+        for (int length = 2; length <= Math.min(5, actions.size()); length++) {
+            findSequences(actions, length, frequencies);
+        }
+        
+        log.debug("Found {} unique sequences", frequencies.size());
+        return frequencies;
+    }
+    
+    private void findSequences(List<Action> actions, int length, Map<List<Action>, Integer> frequencies) {
+        for (int i = 0; i <= actions.size() - length; i++) {
+            List<Action> sequence = actions.subList(i, i + length);
+            
+            // Check if sequence is already in frequencies
+            boolean foundMatch = false;
+            for (Map.Entry<List<Action>, Integer> entry : frequencies.entrySet()) {
+                if (areActionsEqual(entry.getKey(), sequence)) {
+                    entry.setValue(entry.getValue() + 1);
+                    foundMatch = true;
+                    break;
+                }
+            }
+            
+            // If no match found, add new sequence
+            if (!foundMatch) {
+                // Create a copy of the sequence to avoid modification
+                List<Action> sequenceCopy = new ArrayList<>(sequence);
+                frequencies.put(sequenceCopy, 1);
+            }
+        }
+    }
+    
+    private boolean areActionsEqual(List<Action> list1, List<Action> list2) {
+        if (list1.size() != list2.size()) {
+            return false;
+        }
+        
+        for (int i = 0; i < list1.size(); i++) {
+            Action action1 = list1.get(i);
+            Action action2 = list2.get(i);
+            
+            if (action1.getType() != action2.getType()) {
+                return false;
+            }
+            
+            // Compare additional properties if needed
+            if (action1.getValue() != null && !action1.getValue().equals(action2.getValue())) {
+                return false;
+            }
+            
+            if (action1.getValidation() != null && !action1.getValidation().equals(action2.getValidation())) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+}
+
+// NavigationPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import java.util.List;
+
+public class NavigationPattern extends Pattern {
+    private final List<Action> navigationActions;
+    
+    public NavigationPattern(List<Action> actions) {
+        super("Navigation", "Navigation pattern", calculateConfidence(actions));
+        this.navigationActions = actions;
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        return actions.stream()
+            .filter(action -> action.getType() == ActionType.CLICK || action.getType() == ActionType.NAVIGATE)
+            .count() >= navigationActions.size() * 0.8;
+    }
+    
+    private static double calculateConfidence(List<Action> actions) {
+        long navigationActionCount = actions.stream()
+            .filter(action -> action.getType() == ActionType.CLICK || action.getType() == ActionType.NAVIGATE)
+            .count();
+            
+        return Math.min(1.0, navigationActionCount / (double) actions.size());
+    }
+}
+
+// ValidationPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import java.util.List;
+
+public class ValidationPattern extends Pattern {
+    private final List<Action> validationActions;
+    
+    public ValidationPattern(List<Action> actions) {
+        super("Validation", "Validation pattern", calculateConfidence(actions));
+        this.validationActions = actions;
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        return actions.stream()
+            .filter(action -> isValidationType(action.getType()))
+            .count() >= validationActions.size() * 0.8;
+    }
+    
+    private boolean isValidationType(ActionType type) {
+        return type == ActionType.VERIFY_PRESENCE || 
+               type == ActionType.VERIFY_VISIBILITY || 
+               type == ActionType.VERIFY_STATE;
+    }
+    
+    private static double calculateConfidence(List<Action> actions) {
+        long validationActionCount = actions.stream()
+            .filter(action -> action.getType() == ActionType.VERIFY_PRESENCE || 
+                           action.getType() == ActionType.VERIFY_VISIBILITY || 
+                           action.getType() == ActionType.VERIFY_STATE)
+            .count();
+            
+        return Math.min(1.0, validationActionCount / (double) actions.size());
+    }
+}
+
+// FormPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import java.util.List;
+
+public class FormPattern extends Pattern {
+    private final List<Action> formActions;
+    
+    public FormPattern(List<Action> actions) {
+        super("Form", "Form filling pattern", calculateConfidence(actions));
+        this.formActions = actions;
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        return actions.stream()
+            .filter(action -> action.getType() == ActionType.TYPE ||
+                            action.getType() == ActionType.SELECT)
+            .count() >= formActions.size() * 0.8;  // 80% match threshold
+    }
+    
+    private static double calculateConfidence(List<Action> actions) {
+        long formActionCount = actions.stream()
+            .filter(action -> action.getType() == ActionType.TYPE ||
+                            action.getType() == ActionType.SELECT)
+            .count();
+            
+        return Math.min(1.0, formActionCount / (double) actions.size());
+    }
+}
+
+// TestGenerator.java
+package com.cssmart.ai.codegen;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.codegen.model.TestCase;
+import com.cssmart.ai.codegen.model.TestStep;
+import com.cssmart.ai.codegen.model.ScenarioAnalysis;
+import com.cssmart.ai.codegen.exceptions.CodeGenerationException;
+
+@Slf4j
+public class TestGenerator {
+    private final ScenarioAnalyzer scenarioAnalyzer;
+    private final CodeBuilder codeBuilder;
+    private final AIEngine aiEngine;
+    
+    public TestGenerator() {
+        this.scenarioAnalyzer = new ScenarioAnalyzer();
+        this.codeBuilder = new CodeBuilder();
+        this.aiEngine = AIEngine.getInstance();
+    }
+    
+    public TestCase generateTest(String description) {
+        try {
+            // Analyze scenario
+            ScenarioAnalysis analysis = scenarioAnalyzer.analyze(description);
+            
+            // Generate test steps
+            List<TestStep> steps = generateSteps(analysis);
+            
+            // Build test code
+            return codeBuilder.buildTestCase(steps, analysis);
+            
+        } catch (Exception e) {
+            log.error("Failed to generate test: {}", description, e);
+            throw new CodeGenerationException("Test generation failed", e);
+        }
+    }
+    
+    private List<TestStep> generateSteps(ScenarioAnalysis analysis) {
+        // Generate basic steps
+        List<TestStep> steps = analysis.getScenario().getSteps();
+        
+        // Enhance with AI
+        TestStep[] stepsArray = steps.toArray(new TestStep[0]);
+        TestStep[] enhancedStepsArray = aiEngine.enhanceSteps(stepsArray);
+        List<TestStep> enhancedSteps = new ArrayList<>();
+        for (TestStep step : enhancedStepsArray) {
+            enhancedSteps.add(step);
+        }
+        
+        // Add validations
+        enhancedSteps.addAll(generateValidations(analysis));
+        
+        return enhancedSteps;
+    }
+    
+    private List<TestStep> generateValidations(ScenarioAnalysis analysis) {
+        // In a real implementation, this would generate validations based on the scenario
+        // For now, we'll return an empty list
+        return new ArrayList<>();
+    }
+}
+
+// CodeBuilder.java
+package com.cssmart.ai.codegen;
+
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+
+import com.cssmart.ai.codegen.model.TestCase;
+import com.cssmart.ai.codegen.model.TestStep;
+import com.cssmart.ai.codegen.model.ScenarioAnalysis;
+
+@Slf4j
+public class CodeBuilder {
+    private final TemplateEngine templateEngine;
+    private final ElementGenerator elementGenerator;
+    
+    public CodeBuilder() {
+        this.templateEngine = new TemplateEngine();
+        this.elementGenerator = new ElementGenerator();
+    }
+    
+    public TestCase buildTestCase(List<TestStep> steps, ScenarioAnalysis analysis) {
+        CompilationUnit cu = new CompilationUnit();
+        
+        // Add package
+        cu.setPackageDeclaration("com.cssmart.tests.generated");
+        
+        // Add imports
+        addRequiredImports(cu);
+        
+        // Create test class
+        ClassOrInterfaceDeclaration classDecl = createTestClass(cu, analysis);
+        
+        // Add test method
+        addTestMethod(classDecl, steps, analysis);
+        
+        return new TestCase(cu);
+    }
+    
+    private void addRequiredImports(CompilationUnit cu) {
+        cu.addImport("com.cssmart.core.base.CSSmartTestBase");
+        cu.addImport("com.cssmart.core.annotations.CSSmartTest");
+        cu.addImport("org.testng.annotations.Test");
+        cu.addImport("org.testng.Assert");
+        cu.addImport("org.openqa.selenium.WebElement");
+        cu.addImport("lombok.extern.slf4j.Slf4j");
+    }
+    
+    private ClassOrInterfaceDeclaration createTestClass(CompilationUnit cu, ScenarioAnalysis analysis) {
+        String className = generateClassName(analysis);
+        ClassOrInterfaceDeclaration classDecl = cu.addClass(className);
+        classDecl.addExtendedType("CSSmartTestBase");
+        
+        // Add class annotations
+        classDecl.addAnnotation("CSSmartTest");
+        classDecl.addAnnotation("Slf4j");
+        
+        return classDecl;
+    }
+    
+    private String generateClassName(ScenarioAnalysis analysis) {
+        String className = analysis.getScenario().getName().replaceAll("[^a-zA-Z0-9]", "");
+        return className + "Test";
+    }
+    
+    private void addTestMethod(ClassOrInterfaceDeclaration classDecl, List<TestStep> steps, ScenarioAnalysis analysis) {
+        String methodName = "test" + analysis.getScenario().getName().replaceAll("[^a-zA-Z0-9]", "");
+        
+        // Create method declaration with Test annotation
+        MethodDeclaration methodDecl = classDecl.addMethod(methodName, com.github.javaparser.ast.Modifier.Keyword.PUBLIC);
+        methodDecl.addAnnotation("Test");
+        
+        // Add CSSmartTest annotation
+        methodDecl.addSingleMemberAnnotation("CSSmartTest", 
+            "description = \"" + analysis.getScenario().getDescription() + "\"");
+        
+        // Add method body
+        StringBuilder body = new StringBuilder();
+        body.append("log.info(\"Starting test: " + analysis.getScenario().getDescription() + "\");\n\n");
+        
+        // Add steps
+        for (TestStep step : steps) {
+            body.append("// " + step.getDescription() + "\n");
+            
+            if ("NAVIGATE".equals(step.getAction())) {
+                body.append("driver.get(\"" + step.getValue() + "\");\n");
+            } else if ("CLICK".equals(step.getAction())) {
+                body.append("WebElement element = elementFinder.findElement(\"" + step.getElement() + "\");\n");
+                body.append("element.click();\n");
+            } else if ("TYPE".equals(step.getAction())) {
+                body.append("WebElement element = elementFinder.findElement(\"" + step.getElement() + "\");\n");
+                body.append("element.clear();\n");
+                body.append("element.sendKeys(\"" + step.getValue() + "\");\n");
+            } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                body.append("WebElement element = elementFinder.findElement(\"" + step.getElement() + "\");\n");
+                body.append("Assert.assertTrue(element.isDisplayed(), \"" + step.getElement() + " should be present\");\n");
+            }
+            
+            body.append("\n");
+        }
+        
+        body.append("log.info(\"Test completed successfully\");\n");
+        
+        // Set method body
+        methodDecl.setBody(com.github.javaparser.ast.stmt.BlockStmt.parse("{" + body.toString() + "}"));
+    }
+}
+
+// ScenarioAnalyzer.java
+package com.cssmart.ai.codegen;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.patterns.PatternMatcher;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ai.codegen.model.Scenario;
+import com.cssmart.ai.codegen.model.ScenarioAnalysis;
+import com.cssmart.ai.codegen.model.TestStep;
+
+@Slf4j
+public class ScenarioAnalyzer {
+    private final NLPProcessor nlpProcessor;
+    private final PatternMatcher patternMatcher;
+    private final AIEngine aiEngine;
+    
+    public ScenarioAnalyzer() {
+        this.nlpProcessor = new NLPProcessor();
+        this.patternMatcher = new PatternMatcher();
+        this.aiEngine = AIEngine.getInstance();
+    }
+    
+    public ScenarioAnalysis analyze(String description) {
+        // Process natural language
+        List<String> sentences = nlpProcessor.process(description);
+        
+        // Match patterns
+        List<Pattern> patterns = patternMatcher.findPatterns(sentences);
+        
+        // Create scenario
+        Scenario scenario = createScenario(sentences, patterns);
+        
+        return new ScenarioAnalysis(scenario, patterns);
+    }
+    
+    private Scenario createScenario(List<String> sentences, List<Pattern> patterns) {
+        // Extract steps using NLP
+        List<TestStep> steps = new ArrayList<>();
+        List<NLPProcessor.TestStep> nlpSteps = nlpProcessor.extractTestSteps(String.join(" ", sentences));
+        
+        for (NLPProcessor.TestStep nlpStep : nlpSteps) {
+            TestStep step = TestStep.builder()
+                .description(nlpStep.getDescription())
+                .action(nlpStep.getAction())
+                .element(nlpStep.getElement())
+                .value(nlpStep.getValue())
+                .build();
+            steps.add(step);
+        }
+        
+        // Generate scenario name
+        String name = generateScenarioName(sentences);
+        
+        return Scenario.builder()
+            .name(name)
+            .description(String.join(" ", sentences))
+            .steps(steps)
+            .patterns(patterns)
+            .build();
+    }
+    
+    private String generateScenarioName(List<String> sentences) {
+        // Simple implementation: use the first sentence or part of it
+        if (sentences.isEmpty()) {
+            return "Scenario";
+        }
+        
+        String firstSentence = sentences.get(0);
+        if (firstSentence.length() > 50) {
+            return firstSentence.substring(0, 50).replaceAll("[.!?]$", "") + "...";
+        }
+        
+        return firstSentence.replaceAll("[.!?]$", "");
+    }
+}
+
+// ElementGenerator.java
+package com.cssmart.ai.codegen;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.LocatorStrategy;
+import com.cssmart.ai.engine.model.ElementAnalysis;
+import com.cssmart.ai.engine.model.Locator;
+import com.cssmart.ai.codegen.model.PageElement;
+
+@Slf4j
+public class ElementGenerator {
+    private final AIEngine aiEngine;
+    private final LocatorStrategy locatorStrategy;
+    
+    public ElementGenerator() {
+        this.aiEngine = AIEngine.getInstance();
+        this.locatorStrategy = new LocatorStrategy();
+    }
+    
+    public PageElement generateElement(String description) {
+        // Analyze element
+        ElementAnalysis analysis = aiEngine.analyzeElement(description);
+        
+        // Generate locators
+        List<Locator> locators = locatorStrategy.generateLocators(analysis);
+        
+        // Create element
+        return PageElement.builder()
+            .name(generateElementName(description))
+            .description(description)
+            .locators(locators)
+            .build();
+    }
+    
+    private String generateElementName(String description) {
+        return description
+            .toLowerCase()
+            .replaceAll("[^a-z0-9]", "_")
+            .replaceAll("_+", "_")
+            .trim();
+    }
+}
+
+// NLPProcessor.java
+package com.cssmart.ai.codegen;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+
+@Slf4j
+public class NLPProcessor {
+    
+    private final Map<String, String> actionKeywords;
+    private final Pattern actionPattern;
+    private final Pattern elementPattern;
+    
+    public NLPProcessor() {
+        this.actionKeywords = initializeActionKeywords();
+        this.actionPattern = Pattern.compile("\\b(navigate|go to|click|enter|type|select|choose|pick|verify|validate|check|assert|wait|hover)\\b", 
+                                           Pattern.CASE_INSENSITIVE);
+        this.elementPattern = Pattern.compile("(?:the\\s+)?[\"']?([\\w\\s-]+(?:\\s+button|\\s+link|\\s+field|\\s+input|\\s+dropdown|\\s+checkbox|\\s+radio|\\s+tab|\\s+menu|\\s+page|\\s+element))[\"']?", 
+                                            Pattern.CASE_INSENSITIVE);
+    }
+    
+    private Map<String, String> initializeActionKeywords() {
+        Map<String, String> keywords = new HashMap<>();
+        
+        // Navigation actions
+        keywords.put("navigate", "NAVIGATE");
+        keywords.put("go to", "NAVIGATE");
+        
+        // Click actions
+        keywords.put("click", "CLICK");
+        
+        // Input actions
+        keywords.put("enter", "TYPE");
+        keywords.put("type", "TYPE");
+        
+        // Selection actions
+        keywords.put("select", "SELECT");
+        keywords.put("choose", "SELECT");
+        keywords.put("pick", "SELECT");
+        
+        // Verification actions
+        keywords.put("verify", "VERIFY_PRESENCE");
+        keywords.put("validate", "VERIFY_PRESENCE");
+        keywords.put("check", "VERIFY_PRESENCE");
+        keywords.put("assert", "VERIFY_PRESENCE");
+        
+        // Wait actions
+        keywords.put("wait", "WAIT");
+        
+        // Hover actions
+        keywords.put("hover", "HOVER");
+        
+        return keywords;
+    }
+    
+    public List<String> process(String description) {
+        // Split description into sentences
+        List<String> sentences = splitIntoSentences(description);
+        
+        // Pre-process sentences
+        List<String> processedSentences = preprocessSentences(sentences);
+        
+        log.debug("Processed {} sentences from description", processedSentences.size());
+        return processedSentences;
+    }
+    
+    private List<String> splitIntoSentences(String text) {
+        // Simple sentence splitting based on common delimiters
+        String[] sentences = text.split("(?<=[.!?])\\s+");
+        return Arrays.asList(sentences);
+    }
+    
+    private List<String> preprocessSentences(List<String> sentences) {
+        List<String> processed = new ArrayList<>();
+        
+        for (String sentence : sentences) {
+            // Trim whitespace
+            String trimmed = sentence.trim();
+            
+            // Skip empty sentences
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            
+            // Add sentence
+            processed.add(trimmed);
+        }
+        
+        return processed;
+    }
+    
+    public List<TestStep> extractTestSteps(String description) {
+        List<TestStep> steps = new ArrayList<>();
+        List<String> sentences = process(description);
+        
+        for (String sentence : sentences) {
+            TestStep step = parseTestStep(sentence);
+            if (step != null) {
+                steps.add(step);
+            }
+        }
+        
+        log.debug("Extracted {} test steps from description", steps.size());
+        return steps;
+    }
+    
+    private TestStep parseTestStep(String sentence) {
+        // Find action
+        Matcher actionMatcher = actionPattern.matcher(sentence);
+        if (!actionMatcher.find()) {
+            return null;  // No action found
+        }
+        
+        String actionKeyword = actionMatcher.group().toLowerCase();
+        String action = actionKeywords.getOrDefault(actionKeyword, "UNKNOWN");
+        
+        // Find element
+        Matcher elementMatcher = elementPattern.matcher(sentence);
+        String element = elementMatcher.find() ? elementMatcher.group(1).trim() : null;
+        
+        // Find value (for TYPE and SELECT actions)
+        String value = null;
+        if ("TYPE".equals(action) || "SELECT".equals(action)) {
+            Pattern valuePattern = Pattern.compile("[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE);
+            Matcher valueMatcher = valuePattern.matcher(sentence);
+            value = valueMatcher.find() ? valueMatcher.group(1) : null;
+        }
+        
+        return new TestStep(action, element, value, sentence);
+    }
+    
+    // Simple TestStep class for NLP processing
+    public static class TestStep {
+        private final String action;
+        private final String element;
+        private final String value;
+        private final String description;
+        
+        public TestStep(String action, String element, String value, String description) {
+            this.action = action;
+            this.element = element;
+            this.value = value;
+            this.description = description;
+        }
+        
+        public String getAction() {
+            return action;
+        }
+        
+        public String getElement() {
+            return element;
+        }
+        
+        public String getValue() {
+            return value;
+        }
+        
+        public String getDescription() {
+            return description;
+        }
+        
+        @Override
+        public String toString() {
+            return "TestStep{" +
+                   "action='" + action + '\'' +
+                   ", element='" + element + '\'' +
+                   ", value='" + value + '\'' +
+                   '}';
+        }
+    }
+}
+
+// TemplateEngine.java (continued)
+package com.cssmart.ai.codegen;
+
+import lombok.extern.slf4j.Slf4j;
+import java.io.StringWriter;
+import java.io.Writer;
+import java.util.Map;
+import java.util.HashMap;
+
+import freemarker.template.Configuration;
+import freemarker.template.Template;
+import freemarker.template.TemplateExceptionHandler;
+import freemarker.template.Version;
+import com.cssmart.ai.codegen.exceptions.TemplateProcessingException;
+
+@Slf4j
+public class TemplateEngine {
+    private final Configuration config;
+    private final Map<String, Template> templateCache;
+    
+    public TemplateEngine() {
+        this.config = new Configuration(new Version(2, 3, 31));
+        this.templateCache = new HashMap<>();
+        initializeConfiguration();
+    }
+    
+    private void initializeConfiguration() {
+        try {
+            // Set the template loading directory
+            config.setClassLoaderForTemplateLoading(getClass().getClassLoader(), "templates/code");
+            
+            // Set template exception handling
+            config.setTemplateExceptionHandler(TemplateExceptionHandler.RETHROW_HANDLER);
+            
+            // Set character encoding
+            config.setDefaultEncoding("UTF-8");
+            
+            // Load common templates
+            preloadTemplates();
+            
+        } catch (Exception e) {
+            log.error("Failed to initialize template engine", e);
+            throw new TemplateProcessingException("Template engine initialization failed", e);
+        }
+    }
+    
+    private void preloadTemplates() {
+        try {
+            // Load common templates
+            loadTemplate("test_class.ftl");
+            loadTemplate("test_method.ftl");
+            loadTemplate("step_definition.ftl");
+            loadTemplate("page_object.ftl");
+            
+        } catch (Exception e) {
+            log.error("Failed to preload templates", e);
+        }
+    }
+    
+    private void loadTemplate(String templateName) {
+        try {
+            Template template = config.getTemplate(templateName);
+            templateCache.put(templateName, template);
+            log.debug("Loaded template: {}", templateName);
+        } catch (Exception e) {
+            log.error("Failed to load template: {}", templateName, e);
+        }
+    }
+    
+    public String processTemplate(String templateName, Map<String, Object> data) {
+        try {
+            // Get template from cache or load it
+            Template template = templateCache.getOrDefault(templateName, config.getTemplate(templateName));
+            
+            // Process template
+            Writer out = new StringWriter();
+            template.process(data, out);
+            
+            return out.toString();
+            
+        } catch (Exception e) {
+            log.error("Failed to process template: {}", templateName, e);
+            throw new TemplateProcessingException("Template processing failed: " + templateName, e);
+        }
+    }
+    
+    public String generateTestClass(Map<String, Object> data) {
+        return processTemplate("test_class.ftl", data);
+    }
+    
+    public String generateTestMethod(Map<String, Object> data) {
+        return processTemplate("test_method.ftl", data);
+    }
+    
+    public String generateStepDefinition(Map<String, Object> data) {
+        return processTemplate("step_definition.ftl", data);
+    }
+    
+    public String generatePageObject(Map<String, Object> data) {
+        return processTemplate("page_object.ftl", data);
+    }
+}
+
+// ConfigurationManager.java
+package com.cssmart.core.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.core.type.TypeReference;
+import lombok.extern.slf4j.Slf4j;
+import java.io.File;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.cssmart.core.config.exceptions.ConfigurationException;
+
+@Slf4j
+public class ConfigurationManager {
+    private static ConfigurationManager instance;
+    private final Map<String, Object> configCache;
+    private final ObjectMapper yamlMapper;
+    private final EnvironmentManager environmentManager;
+    
+    private ConfigurationManager() {
+        this.configCache = new ConcurrentHashMap<>();
+        this.yamlMapper = new ObjectMapper(new YAMLFactory());
+        this.environmentManager = new EnvironmentManager();
+        loadDefaultConfig();
+    }
+    
+    public static ConfigurationManager getInstance() {
+        if (instance == null) {
+            synchronized (ConfigurationManager.class) {
+                if (instance == null) {
+                    instance = new ConfigurationManager();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    public void loadConfig(String configPath) {
+        try {
+            // Load configuration file
+            Map<String, Object> config = yamlMapper.readValue(
+                new File(configPath), 
+                new TypeReference<Map<String, Object>>() {}
+            );
+            
+            // Process environment variables
+            config = environmentManager.processEnvironmentVariables(config);
+            
+            // Update cache
+            configCache.putAll(config);
+            
+        } catch (Exception e) {
+            log.error("Failed to load configuration from: {}", configPath, e);
+            throw new ConfigurationException("Configuration loading failed", e);
+        }
+    }
+    
+    public <T> T getConfig(String key, Class<T> type) {
+        Object value = configCache.get(key);
+        if (value == null) {
+            return null;
+        }
+        
+        try {
+            return yamlMapper.convertValue(value, type);
+        } catch (Exception e) {
+            log.error("Failed to convert configuration value: {}", key, e);
+            throw new ConfigurationException("Configuration conversion failed", e);
+        }
+    }
+    
+    private void loadDefaultConfig() {
+        try {
+            // Load default configuration from resources
+            Map<String, Object> defaults = yamlMapper.readValue(
+                getClass().getResourceAsStream("/config/default.yaml"),
+                new TypeReference<Map<String, Object>>() {}
+            );
+            
+            configCache.putAll(defaults);
+            
+        } catch (Exception e) {
+            log.error("Failed to load default configuration", e);
+            throw new ConfigurationException("Default configuration loading failed", e);
+        }
+    }
+}
+
+// EnvironmentManager.java
+package com.cssmart.core.config;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+
+@Slf4j
+public class EnvironmentManager {
+    private final Map<String, String> environmentCache;
+    
+    public EnvironmentManager() {
+        this.environmentCache = new HashMap<>();
+        loadEnvironmentVariables();
+    }
+    
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> processEnvironmentVariables(Map<String, Object> config) {
+        Map<String, Object> processed = new LinkedHashMap<>();
+        
+        config.forEach((key, value) -> {
+            if (value instanceof String) {
+                processed.put(key, processValue((String) value));
+            } else if (value instanceof Map) {
+                processed.put(key, processEnvironmentVariables((Map<String, Object>) value));
+            } else {
+                processed.put(key, value);
+            }
+        });
+        
+        return processed;
+    }
+    
+    private String processValue(String value) {
+        if (value.startsWith("${") && value.endsWith("}")) {
+            String envKey = value.substring(2, value.length() - 1);
+            return environmentCache.getOrDefault(envKey, value);
+        }
+        return value;
+    }
+    
+    private void loadEnvironmentVariables() {
+        // Load system environment variables
+        environmentCache.putAll(System.getenv());
+        
+        // Load system properties
+        System.getProperties().forEach((key, value) -> 
+            environmentCache.put(key.toString(), value.toString()));
+    }
+}
+
+// DriverManager.java
+package com.cssmart.core.driver;
+
+import org.openqa.selenium.WebDriver;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.core.driver.exceptions.BrowserCreationException;
+
+@Slf4j
+public class DriverManager {
+    private static DriverManager instance;
+    private final ThreadLocal<WebDriver> driverThreadLocal;
+    private final ConfigurationManager configManager;
+    private final BrowserManager browserManager;
+    
+    private DriverManager() {
+        this.driverThreadLocal = new ThreadLocal<>();
+        this.configManager = ConfigurationManager.getInstance();
+        this.browserManager = BrowserManager.getInstance();
+    }
+    
+    public static DriverManager getInstance() {
+        if (instance == null) {
+            synchronized (DriverManager.class) {
+                if (instance == null) {
+                    instance = new DriverManager();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    public WebDriver getDriver() {
+        WebDriver driver = driverThreadLocal.get();
+        if (driver == null) {
+            driver = initializeDriver();
+            driverThreadLocal.set(driver);
+        }
+        return driver;
+    }
+    
+    private WebDriver initializeDriver() {
+        String browserType = configManager.getConfig("browser.type", String.class);
+        return browserManager.createDriver(browserType);
+    }
+    
+    public void quitDriver() {
+        WebDriver driver = driverThreadLocal.get();
+        if (driver != null) {
+            try {
+                driver.quit();
+            } catch (Exception e) {
+                log.error("Error quitting driver", e);
+            } finally {
+                driverThreadLocal.remove();
+            }
+        }
+    }
+}
+
+// BrowserManager.java
+package com.cssmart.core.driver;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.firefox.FirefoxOptions;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.edge.EdgeOptions;
+import org.openqa.selenium.safari.SafariDriver;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.core.driver.exceptions.BrowserCreationException;
+import com.cssmart.core.driver.exceptions.UnsupportedBrowserException;
+
+@Slf4j
+public class BrowserManager {
+    private static BrowserManager instance;
+    private final Map<String, WebDriver> browserInstances;
+    private final ConfigurationManager configManager;
+    
+    private BrowserManager() {
+        this.browserInstances = new ConcurrentHashMap<>();
+        this.configManager = ConfigurationManager.getInstance();
+    }
+    
+    public static BrowserManager getInstance() {
+        if (instance == null) {
+            synchronized (BrowserManager.class) {
+                if (instance == null) {
+                    instance = new BrowserManager();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    public WebDriver createDriver(String browserType) {
+        try {
+            WebDriver driver = switch(browserType.toLowerCase()) {
+                case "chrome" -> createChromeDriver();
+                case "firefox" -> createFirefoxDriver();
+                case "edge" -> createEdgeDriver();
+                case "safari" -> createSafariDriver();
+                default -> throw new UnsupportedBrowserException(
+                    "Unsupported browser type: " + browserType);
+            };
+            
+            // Configure browser
+            configureBrowser(driver);
+            
+            return driver;
+        } catch (Exception e) {
+            log.error("Failed to create browser: {}", browserType, e);
+            throw new BrowserCreationException(
+                "Failed to create browser: " + browserType, e);
+        }
+    }
+    
+    private ChromeDriver createChromeDriver() {
+        WebDriverManager.chromedriver().setup();
+        ChromeOptions options = new ChromeOptions();
+        options.addArguments(getDefaultArguments());
+        options.addArguments(getChromeArguments());
+        return new ChromeDriver(options);
+    }
+    
+    private FirefoxDriver createFirefoxDriver() {
+        WebDriverManager.firefoxdriver().setup();
+        FirefoxOptions options = new FirefoxOptions();
+        options.addArguments(getDefaultArguments());
+        options.addArguments(getFirefoxArguments());
+        return new FirefoxDriver(options);
+    }
+    
+    private EdgeDriver createEdgeDriver() {
+        WebDriverManager.edgedriver().setup();
+        EdgeOptions options = new EdgeOptions();
+        options.addArguments(getDefaultArguments());
+        return new EdgeDriver(options);
+    }
+    
+    private SafariDriver createSafariDriver() {
+        return new SafariDriver();
+    }
+    
+    private List<String> getDefaultArguments() {
+        return Arrays.asList(
+            "--start-maximized",
+            "--disable-notifications",
+            "--disable-infobars"
+        );
+    }
+    
+    private List<String> getChromeArguments() {
+        List<String> args = new ArrayList<>();
+        if (configManager.getConfig("browser.headless", Boolean.class)) {
+            args.add("--headless");
+        }
+        return args;
+    }
+    
+    private List<String> getFirefoxArguments() {
+        List<String> args = new ArrayList<>();
+        if (configManager.getConfig("browser.headless", Boolean.class)) {
+            args.add("-headless");
+        }
+        return args;
+    }
+    
+    private void configureBrowser(WebDriver driver) {
+        int timeout = configManager.getConfig("browser.timeout", Integer.class);
+        driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(timeout));
+        driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(timeout));
+        driver.manage().window().maximize();
+    }
+}
+
+// ElementFinder.java
+package com.cssmart.core.driver;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.By;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;
+import java.util.List;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Locator;
+import com.cssmart.core.driver.exceptions.ElementNotFoundException;
+
+@Slf4j
+public class ElementFinder {
+    private final WebDriver driver;
+    private final WebDriverWait wait;
+    private final AIEngine aiEngine;
+    
+    public ElementFinder(WebDriver driver) {
+        this.driver = driver;
+        this.wait = new WebDriverWait(driver, Duration.ofSeconds(
+            ConfigurationManager.getInstance().getConfig("element.timeout", Integer.class)
+        ));
+        this.aiEngine = AIEngine.getInstance();
+    }
+    
+    public WebElement findElement(String description) {
+        // Get AI-generated locators
+        List<Locator> locators = aiEngine.generateLocators(description);
+        
+        // Try each locator
+        for (Locator locator : locators) {
+            try {
+                return wait.until(ExpectedConditions.presenceOfElementLocated(locator.toBy()));
+            } catch (Exception e) {
+                log.debug("Failed to find element with locator: {}", locator);
+            }
+        }
+        
+        throw new ElementNotFoundException(
+            "Could not find element: " + description);
+    }
+    
+    public List<WebElement> findElements(String description) {
+        List<Locator> locators = aiEngine.generateLocators(description);
+        
+        for (Locator locator : locators) {
+            try {
+                List<WebElement> elements = wait.until(ExpectedConditions.presenceOfAllElementsLocatedBy(locator.toBy()));
+                if (!elements.isEmpty()) {
+                    return elements;
+                }
+            } catch (Exception e) {
+                log.debug("Failed to find elements with locator: {}", locator);
+            }
+        }
+        
+        throw new ElementNotFoundException(
+            "Could not find elements: " + description);
+    }
+    
+    public void waitForElement(String description) {
+        findElement(description);
+    }
+    
+    public void waitForElementVisible(String description) {
+        List<Locator> locators = aiEngine.generateLocators(description);
+        
+        for (Locator locator : locators) {
+            try {
+                wait.until(ExpectedConditions.visibilityOfElementLocated(locator.toBy()));
+                return;
+            } catch (Exception e) {
+                log.debug("Failed to wait for visible element with locator: {}", locator);
+            }
+        }
+        
+        throw new ElementNotFoundException(
+            "Could not find visible element: " + description);
+    }
+    
+    public boolean isElementPresent(String description) {
+        try {
+            findElement(description);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+    
+    public boolean isElementVisible(String description) {
+        try {
+            List<Locator> locators = aiEngine.generateLocators(description);
+            
+            for (Locator locator : locators) {
+                try {
+                    return wait.until(ExpectedConditions.visibilityOfElementLocated(locator.toBy())) != null;
+                } catch (Exception e) {
+                    // Continue trying other locators
+                }
+            }
+            
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+}
+
+// CSSmartTestBase.java
+package com.cssmart.core.base;
+
+import org.testng.ITestResult;
+import org.testng.annotations.*;
+import org.openqa.selenium.WebDriver;
+import java.lang.reflect.Method;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.core.driver.DriverManager;
+import com.cssmart.core.driver.ElementFinder;
+import com.cssmart.core.base.exceptions.FrameworkInitializationException;
+import com.cssmart.core.annotations.CSSmartTest;
+import com.cssmart.reporting.ReportManager;
+import com.cssmart.reporting.util.ScreenshotManager;
+import com.cssmart.ai.engine.AIEngine;
+
+@Slf4j
+public class CSSmartTestBase {
+    protected WebDriver driver;
+    protected ElementFinder elementFinder;
+    protected TestContext context;
+    protected ConfigurationManager configManager;
+    
+    @BeforeSuite
+    public void beforeSuite() {
+        configManager = ConfigurationManager.getInstance();
+        initializeFramework();
+    }
+    
+    @BeforeMethod
+    public void beforeMethod(Method method) {
+        // Initialize driver
+        driver = DriverManager.getInstance().getDriver();
+        elementFinder = new ElementFinder(driver);
+        
+        // Initialize context
+        context = new TestContext();
+        context.setTestMethod(method);
+        
+        // Process test configuration
+        processTestConfig(method);
+    }
+    
+    @AfterMethod
+    public void afterMethod(ITestResult result) {
+        try {
+            // Handle test result
+            handleTestResult(result);
+            
+            // Generate report
+            ReportManager.getInstance().generateTestReport(result);
+            
+        } finally {
+            // Cleanup
+            cleanup();
+        }
+    }
+    
+    protected void initializeFramework() {
+        try {
+            // Load configuration
+            String configPath = System.getProperty(
+                "config", "config/test-config.yaml");
+            configManager.loadConfig(configPath);
+            
+            // Initialize components
+            initializeComponents();
+            
+        } catch (Exception e) {
+            log.error("Failed to initialize framework", e);
+            throw new FrameworkInitializationException(
+                "Framework initialization failed", e);
+        }
+    }
+    
+    protected void initializeComponents() {
+        // Initialize AI Engine
+        AIEngine.getInstance();
+        
+        // Initialize Report Manager
+        ReportManager.getInstance();
+        
+        // Additional components...
+    }
+    
+    protected void processTestConfig(Method method) {
+        CSSmartTest testAnnotation = 
+            method.getAnnotation(CSSmartTest.class);
+            
+        if (testAnnotation != null) {
+            // Process test configuration
+            processTestAnnotation(testAnnotation);
+        }
+    }
+    
+    protected void processTestAnnotation(CSSmartTest testAnnotation) {
+        // Process tags
+        if (testAnnotation.tags().length > 0) {
+            context.setRuntimeData("tags", testAnnotation.tags());
+        }
+        
+        // Process browser
+        if (!testAnnotation.browser().isEmpty()) {
+            context.setRuntimeData("browser", testAnnotation.browser());
+        }
+        
+        // Process other test configuration
+        context.setRuntimeData("description", testAnnotation.description());
+        context.setRuntimeData("retryOnFailure", testAnnotation.retryOnFailure());
+        context.setRuntimeData("maxRetries", testAnnotation.maxRetries());
+        context.setRuntimeData("captureVideo", testAnnotation.captureVideo());
+    }
+    
+    protected void handleTestResult(ITestResult result) {
+        if (result.getStatus() == ITestResult.FAILURE) {
+            // Capture screenshot
+            String screenshot = captureScreenshot();
+            
+            // Add to report
+            if (screenshot != null) {
+                ReportManager.getInstance().addScreenshot(result, screenshot);
+            }
+        }
+    }
+    
+    protected String captureScreenshot() {
+        return ScreenshotManager.capture(driver);
+    }
+    
+    protected void cleanup() {
+        if (driver != null) {
+            try {
+                driver.quit();
+            } catch (Exception e) {
+                log.error("Error quitting driver", e);
+            }
+        }
+    }
+}
+
+// BasePage.java
+package com.cssmart.core.base;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.support.PageFactory;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.support.ui.Select;
+import lombok.extern.slf4j.Slf4j;
+import java.time.Duration;
+
+import com.cssmart.core.driver.ElementFinder;
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.core.config.ConfigurationManager;
+
+@Slf4j
+public class BasePage {
+    protected WebDriver driver;
+    protected ElementFinder elementFinder;
+    protected AIEngine aiEngine;
+    
+    public BasePage(WebDriver driver) {
+        this.driver = driver;
+        this.elementFinder = new ElementFinder(driver);
+        this.aiEngine = AIEngine.getInstance();
+        PageFactory.initElements(driver, this);
+    }
+    
+    protected void waitForPageLoad() {
+        new WebDriverWait(driver, Duration.ofSeconds(30))
+            .until(webDriver -> ((JavascriptExecutor) webDriver)
+                .executeScript("return document.readyState")
+                .equals("complete"));
+    }
+    
+    protected void waitForElement(String description) {
+        elementFinder.waitForElement(description);
+    }
+    
+    protected void click(String description) {
+        WebElement element = elementFinder.findElement(description);
+        click(element);
+    }
+    
+    protected void click(WebElement element) {
+        try {
+            element.click();
+        } catch (Exception e) {
+            // Try JavaScript click if normal click fails
+            ((JavascriptExecutor) driver).executeScript(
+                "arguments[0].click();", element);
+        }
+    }
+    
+    protected void type(String description, String text) {
+        WebElement element = elementFinder.findElement(description);
+        element.clear();
+        element.sendKeys(text);
+    }
+    
+    protected void selectByText(String description, String text) {
+        WebElement element = elementFinder.findElement(description);
+        new Select(element).selectByVisibleText(text);
+    }
+    
+    protected boolean isElementPresent(String description) {
+        return elementFinder.isElementPresent(description);
+    }
+    
+    protected boolean isElementVisible(String description) {
+        return elementFinder.isElementVisible(description);
+    }
+    
+    protected String getText(String description) {
+        WebElement element = elementFinder.findElement(description);
+        return element.getText();
+    }
+    
+    protected void navigateTo(String url) {
+        driver.get(url);
+    }
+}
+
+// StepHandler.java
+package com.cssmart.bdd.steps;
+
+import io.cucumber.java.en.*;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.core.driver.DriverManager;
+import com.cssmart.core.driver.ElementFinder;
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.core.base.TestContext;
+
+@Slf4j
+public class StepHandler {
+    private final WebDriver driver;
+    private final ElementFinder elementFinder;
+    private final AIEngine aiEngine;
+    private final TestContext context;
+    
+    public StepHandler() {
+        this.driver = DriverManager.getInstance().getDriver();
+        this.elementFinder = new ElementFinder(driver);
+        this.aiEngine = AIEngine.getInstance();
+        this.context = new TestContext();
+    }
+    
+    @Given("I am on {string} page")
+    public void navigateToPage(String page) {
+        String url = System.getProperty("base.url", "https://example.com") + "/" + page;
+        driver.get(url);
+        log.info("Navigated to page: {}", page);
+    }
+    
+    @When("I enter {string} in {string}")
+    public void enterText(String text, String field) {
+        WebElement element = elementFinder.findElement(field);
+        element.clear();
+        element.sendKeys(text);
+        log.info("Entered text '{}' in field: {}", text, field);
+    }
+    
+    @When("I click {string}")
+    public void clickElement(String element) {
+        WebElement el = elementFinder.findElement(element);
+        el.click();
+        log.info("Clicked on element: {}", element);
+    }
+    
+    @Then("I should see {string}")
+    public void verifyText(String text) {
+        // AI-powered text verification
+        boolean isPresent = aiEngine.verifyTextPresence(driver, text);
+        if (!isPresent) {
+            throw new AssertionError("Text not found: " + text);
+        }
+        log.info("Verified text is present: {}", text);
+    }
+    
+    @Then("I should see {string} in {string}")
+    public void verifyTextInElement(String text, String element) {
+        WebElement el = elementFinder.findElement(element);
+        boolean contains = el.getText().contains(text);
+        if (!contains) {
+            throw new AssertionError("Element " + element + " does not contain text: " + text);
+        }
+        log.info("Verified text '{}' is present in element: {}", text, element);
+    }
+    
+    @When("I select {string} from {string}")
+    public void selectOption(String option, String dropdown) {
+        WebElement element = elementFinder.findElement(dropdown);
+        new org.openqa.selenium.support.ui.Select(element).selectByVisibleText(option);
+        log.info("Selected option '{}' from dropdown: {}", option, dropdown);
+    }
+    
+    @Then("element {string} should be visible")
+    public void verifyElementVisible(String element) {
+        boolean isVisible = elementFinder.isElementVisible(element);
+        if (!isVisible) {
+            throw new AssertionError("Element not visible: " + element);
+        }
+        log.info("Verified element is visible: {}", element);
+    }
+    
+    @Then("element {string} should not be visible")
+    public void verifyElementNotVisible(String element) {
+        boolean isVisible = elementFinder.isElementVisible(element);
+        if (isVisible) {
+            throw new AssertionError("Element is visible but should not be: " + element);
+        }
+        log.info("Verified element is not visible: {}", element);
+    }
+}
+
+// TestRunner.java
+package com.cssmart.bdd.runner;
+
+import io.cucumber.testng.AbstractTestNGCucumberTests;
+import io.cucumber.testng.CucumberOptions;
+import org.testng.annotations.DataProvider;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Parameters;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.core.config.ConfigurationManager;
+
+@Slf4j
+@CucumberOptions(
+    features = "features",
+    glue = "com.cssmart.bdd.steps",
+    plugin = {
+        "pretty",
+        "html:target/cucumber-reports/cucumber-pretty",
+        "json:target/cucumber-reports/CucumberTestReport.json"
+    },
+    monochrome = true
+)
+public class TestRunner extends AbstractTestNGCucumberTests {
+    
+    @Override
+    @DataProvider(parallel = true)
+    public Object[][] scenarios() {
+        return super.scenarios();
+    }
+    
+    @BeforeClass
+    @Parameters({"config"})
+    public void setup(String configPath) {
+        // Initialize configuration
+        ConfigurationManager.getInstance().loadConfig(configPath);
+        log.info("Initialized configuration from {}", configPath);
+    }
+}
+
+// StepDefinitionScanner.java
+package com.cssmart.bdd.scanner;
+
+import io.cucumber.java.en.*;
+import java.lang.reflect.Method;
+import java.util.Set;
+import org.reflections.Reflections;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class StepDefinitionScanner {
+    
+    public Set<Method> scanStepDefinitions() {
+        Reflections reflections = new Reflections("com.cssmart.bdd.steps");
+        
+        Set<Method> stepMethods = reflections.getMethodsAnnotatedWith(Given.class);
+        stepMethods.addAll(reflections.getMethodsAnnotatedWith(When.class));
+        stepMethods.addAll(reflections.getMethodsAnnotatedWith(Then.class));
+        stepMethods.addAll(reflections.getMethodsAnnotatedWith(And.class));
+        
+        log.info("Scanned {} step definition methods", stepMethods.size());
+        return stepMethods;
+    }
+}
+
+// StepExecutor.java
+package com.cssmart.bdd.executor;
+
+import java.lang.reflect.Method;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.core.base.TestContext;
+import com.cssmart.bdd.model.StepError;
+import com.cssmart.bdd.model.RecoveryAction;
+import com.cssmart.bdd.exceptions.StepExecutionException;
+
+@Slf4j
+public class StepExecutor {
+    private final AIEngine aiEngine;
+    private final TestContext context;
+    
+    public StepExecutor(TestContext context) {
+        this.aiEngine = AIEngine.getInstance();
+        this.context = context;
+    }
+    
+    public void executeStep(Method stepMethod, Object[] parameters) {
+        try {
+            // Pre-execution
+            preExecute(stepMethod);
+            
+            // Execute step
+            Object instance = stepMethod.getDeclaringClass().getDeclaredConstructor().newInstance();
+            stepMethod.invoke(instance, parameters);
+            
+            // Post-execution
+            postExecute(stepMethod);
+            
+        } catch (Exception e) {
+            handleStepFailure(stepMethod, e);
+        }
+    }
+    
+    private void preExecute(Method stepMethod) {
+        // Placeholder for AI-powered step preparation
+        log.debug("Preparing to execute step: {}", stepMethod.getName());
+    }
+    
+    private void postExecute(Method stepMethod) {
+        // Placeholder for AI-powered validation
+        log.debug("Successfully executed step: {}", stepMethod.getName());
+    }
+    
+    private void handleStepFailure(Method stepMethod, Exception e) {
+        log.error("Failed to execute step: {}", stepMethod.getName(), e);
+        
+        // Create a step error
+        StepError error = StepError.builder()
+            .message(e.getMessage())
+            .stackTrace(getStackTrace(e))
+            .recoverable(false)
+            .build();
+        
+        // Throw exception as error is not recoverable
+        throw new StepExecutionException("Step execution failed: " + stepMethod.getName(), e);
+    }
+    
+    private String getStackTrace(Exception e) {
+        StringBuilder sb = new StringBuilder();
+        for (StackTraceElement element : e.getStackTrace()) {
+            sb.append(element.toString()).append("\n");
+        }
+        return sb.toString();
+    }
+    
+    private void executeRecoveryAction(RecoveryAction action) {
+        log.info("Executing recovery action: {}", action.getDescription());
+        action.getAction().accept(null);
+    }
+}
+
+// TestNG XML File Example (testng.xml)
+// This file should be placed in the project root directory
+// <?xml version="1.0" encoding="UTF-8"?>
+// <!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">
+// <suite name="CS Smart Test BDD Suite" parallel="tests" thread-count="2">
+//     <parameter name="config" value="config/test-config.yaml" />
+//     <test name="Web Tests">
+//         <parameter name="features" value="features/web" />
+//         <classes>
+//             <class name="com.cssmart.bdd.runner.TestRunner" />
+//         </classes>
+//     </test>
+//     <test name="API Tests">
+//         <parameter name="features" value="features/api" />
+//         <classes>
+//             <class name="com.cssmart.bdd.runner.TestRunner" />
+//         </classes>
+//     </test>
+// </suite>
+
+// StepDefinitions.java
+package com.cssmart.bdd.steps;
+
+import io.cucumber.java.en.*;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.WebDriver;
+import lombok.extern.slf4j.Slf4j;
+import com.cssmart.core.driver.DriverManager;
+import com.cssmart.core.driver.ElementFinder;
+import com.cssmart.core.base.TestContext;
+
+@Slf4j
+public class StepDefinitions {
+    private final WebDriver driver;
+    private final ElementFinder elementFinder;
+    private final TestContext context;
+    
+    public StepDefinitions() {
+        this.driver = DriverManager.getInstance().getDriver();
+        this.elementFinder = new ElementFinder(driver);
+        this.context = new TestContext();
+    }
+    
+    @Given("I am on {string} page")
+    public void iAmOnPage(String page) {
+        String baseUrl = System.getProperty("base.url", "https://example.com");
+        driver.get(baseUrl + "/" + page);
+        log.info("Navigated to page: {}", page);
+    }
+    
+    @When("I enter {string} in {string}")
+    public void iEnterInField(String text, String field) {
+        WebElement element = elementFinder.findElement(field);
+        element.clear();
+        element.sendKeys(text);
+        log.info("Entered text '{}' in field: {}", text, field);
+    }
+    
+    @When("I click {string}")
+    public void iClick(String element) {
+        WebElement el = elementFinder.findElement(element);
+        el.click();
+        log.info("Clicked on element: {}", element);
+    }
+    
+    @Then("I should see {string}")
+    public void iShouldSee(String text) {
+        boolean isPresent = driver.getPageSource().contains(text);
+        if (!isPresent) {
+            throw new AssertionError("Text not found: " + text);
+        }
+        log.info("Verified text is present: {}", text);
+    }
+    
+    @Then("I should see {string} in {string}")
+    public void iShouldSeeInElement(String text, String element) {
+        WebElement el = elementFinder.findElement(element);
+        boolean isPresent = el.getText().contains(text);
+        if (!isPresent) {
+            throw new AssertionError("Text not found in element: " + text);
+        }
+        log.info("Verified text '{}' is present in element: {}", text, element);
+    }
+}
+
+// Feature File Example (features/web/login.feature)
+// Feature: Login Functionality
+//
+//   Scenario: Valid Login
+//     Given I am on "login" page
+//     When I enter "testuser" in "username field"
+//     And I enter "password123" in "password field"
+//     And I click "login button"
+//     Then I should see "Welcome, Test User"
+//
+//   Scenario: Invalid Login
+//     Given I am on "login" page
+//     When I enter "invaliduser" in "username field"
+//     And I enter "wrongpassword" in "password field"
+//     And I click "login button"
+//     Then I should see "Invalid username or password"
+
+// DataManager.java
+package com.cssmart.data.provider;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.data.exceptions.DataProviderException;
+import com.cssmart.data.exceptions.UnsupportedDataSourceException;
+
+@Slf4j
+public class DataManager {
+    private static DataManager instance;
+    private final Map<String, DataProvider> providers;
+    private final AIEngine aiEngine;
+    
+    private DataManager() {
+        this.providers = new ConcurrentHashMap<>();
+        this.aiEngine = AIEngine.getInstance();
+        initializeProviders();
+    }
+    
+    public static DataManager getInstance() {
+        if (instance == null) {
+            synchronized (DataManager.class) {
+                if (instance == null) {
+                    instance = new DataManager();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    private void initializeProviders() {
+        providers.put("excel", new ExcelDataProvider());
+        providers.put("csv", new CSVDataProvider());
+        providers.put("json", new JSONDataProvider());
+    }
+    
+    public Object[][] getTestData(String source) {
+        try {
+            String extension = getFileExtension(source);
+            DataProvider provider = providers.get(extension);
+            
+            if (provider == null) {
+                throw new UnsupportedDataSourceException(
+                    "Unsupported data source: " + extension);
+            }
+            
+            Object[][] data = provider.getData(source);
+            
+            // AI-enhanced data processing - placeholder for now
+            return data;
+            
+        } catch (Exception e) {
+            log.error("Failed to get test data from: {}", source, e);
+            throw new DataProviderException("Failed to get test data", e);
+        }
+    }
+    
+    private String getFileExtension(String filePath) {
+        int lastDotIndex = filePath.lastIndexOf(".");
+        if (lastDotIndex == -1 || lastDotIndex == filePath.length() - 1) {
+            return "";
+        }
+        return filePath.substring(lastDotIndex + 1).toLowerCase();
+    }
+}
+
+// ExcelDataProvider.java
+package com.cssmart.data.provider;
+
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import java.io.FileInputStream;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.data.exceptions.DataReadException;
+
+@Slf4j
+public class ExcelDataProvider implements DataProvider {
+    
+    @Override
+    public Object[][] getData(String filePath) {
+        try (FileInputStream fis = new FileInputStream(filePath);
+             Workbook workbook = new XSSFWorkbook(fis)) {
+            
+            Sheet sheet = workbook.getSheetAt(0);
+            int rowCount = sheet.getLastRowNum();
+            Row headerRow = sheet.getRow(0);
+            int colCount = headerRow.getLastCellNum();
+            
+            Object[][] data = new Object[rowCount][colCount];
+            
+            for (int i = 1; i <= rowCount; i++) {
+                Row row = sheet.getRow(i);
+                for (int j = 0; j < colCount; j++) {
+                    Cell cell = row.getCell(j);
+                    data[i-1][j] = getCellValue(cell);
+                }
+            }
+            
+            return data;
+            
+        } catch (Exception e) {
+            log.error("Failed to read Excel file: {}", filePath, e);
+            throw new DataReadException("Failed to read Excel file", e);
+        }
+    }
+    
+    private Object getCellValue(Cell cell) {
+        if (cell == null) {
+            return "";
+        }
+        
+        return switch (cell.getCellType()) {
+            case STRING -> cell.getStringCellValue();
+            case NUMERIC -> {
+                if (DateUtil.isCellDateFormatted(cell)) {
+                    yield cell.getDateCellValue();
+                }
+                yield cell.getNumericCellValue();
+            }
+            case BOOLEAN -> cell.getBooleanCellValue();
+            default -> "";
+        };
+    }
+}
+
+// CSVDataProvider.java
+package com.cssmart.data.provider;
+
+import com.opencsv.CSVReader;
+import java.io.FileReader;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.data.exceptions.DataReadException;
+
+@Slf4j
+public class CSVDataProvider implements DataProvider {
+    
+    @Override
+    public Object[][] getData(String filePath) {
+        try (CSVReader reader = new CSVReader(new FileReader(filePath))) {
+            List<String[]> lines = reader.readAll();
+            
+            int rowCount = lines.size() - 1; // Excluding header
+            int colCount = lines.get(0).length;
+            
+            Object[][] data = new Object[rowCount][colCount];
+            
+            for (int i = 1; i <= rowCount; i++) {
+                data[i-1] = lines.get(i);
+            }
+            
+            return data;
+            
+        } catch (Exception e) {
+            log.error("Failed to read CSV file: {}", filePath, e);
+            throw new DataReadException("Failed to read CSV file", e);
+        }
+    }
+}
+
+// JSONDataProvider.java
+package com.cssmart.data.provider;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+import java.io.File;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.List;
+import java.util.ArrayList;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.data.exceptions.DataReadException;
+
+@Slf4j
+public class JSONDataProvider implements DataProvider {
+    private final ObjectMapper mapper;
+    
+    public JSONDataProvider() {
+        this.mapper = new ObjectMapper();
+    }
+    
+    @Override
+    public Object[][] getData(String filePath) {
+        try {
+            JsonNode root = mapper.readTree(new File(filePath));
+            
+            if (root.isArray()) {
+                return processArrayData(root);
+            } else {
+                return processObjectData(root);
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to read JSON file: {}", filePath, e);
+            throw new DataReadException("Failed to read JSON file", e);
+        }
+    }
+    
+    private Object[][] processArrayData(JsonNode arrayNode) {
+        int rowCount = arrayNode.size();
+        Set<String> fields = getFields(arrayNode);
+        int colCount = fields.size();
+        
+        Object[][] data = new Object[rowCount][colCount];
+        List<String> fieldList = new ArrayList<>(fields);
+        
+        for (int i = 0; i < rowCount; i++) {
+            JsonNode row = arrayNode.get(i);
+            for (int j = 0; j < colCount; j++) {
+                String field = fieldList.get(j);
+                JsonNode value = row.get(field);
+                data[i][j] = value != null ? value.asText() : "";
+            }
+        }
+        
+        return data;
+    }
+    
+    private Object[][] processObjectData(JsonNode objectNode) {
+        // Process nested data structures
+        // For simplicity, we'll just return a 1x1 array with the whole object as JSON
+        try {
+            String json = mapper.writeValueAsString(objectNode);
+            return new Object[][]{{json}};
+        } catch (Exception e) {
+            throw new DataReadException("Failed to process JSON object", e);
+        }
+    }
+    
+    private Set<String> getFields(JsonNode arrayNode) {
+        Set<String> fields = new HashSet<>();
+        arrayNode.forEach(node -> 
+            node.fieldNames().forEachRemaining(fields::add));
+        return fields;
+    }
+}
+
+// ReportManager.java
+package com.cssmart.reporting;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.time.LocalDateTime;
+import org.testng.ITestResult;
+import java.util.stream.Collectors;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.exceptions.ReportGenerationException;
+
+@Slf4j
+public class ReportManager {
+    private static ReportManager instance;
+    private final Map<String, TestReport> reports;
+    private final ReportGenerator generator;
+    private final AIEngine aiEngine;
+    
+    private ReportManager() {
+        this.reports = new ConcurrentHashMap<>();
+        this.generator = new ReportGenerator();
+        this.aiEngine = AIEngine.getInstance();
+    }
+    
+    public static ReportManager getInstance() {
+        if (instance == null) {
+            synchronized (ReportManager.class) {
+                if (instance == null) {
+                    instance = new ReportManager();
+                }
+            }
+        }
+        return instance;
+    }
+    
+    public void addTestReport(String testId, TestReport report) {
+        reports.put(testId, report);
+    }
+    
+    public void generateReport() {
+        try {
+            // Generate reports
+            List<TestReport> allReports = new ArrayList<>(reports.values());
+            generator.generateHTMLReport(allReports);
+            
+        } catch (Exception e) {
+            log.error("Failed to generate report", e);
+            throw new ReportGenerationException("Report generation failed", e);
+        }
+    }
+    
+    public void generateTestReport(ITestResult result) {
+        try {
+            // Create test report from result
+            TestReport report = createTestReport(result);
+            
+            // Add to reports collection
+            reports.put(report.getId(), report);
+            
+            // Generate individual test report
+            generator.generateTestReport(report);
+            
+        } catch (Exception e) {
+            log.error("Failed to generate test report for: {}", result.getName(), e);
+        }
+    }
+    
+    public void addScreenshot(ITestResult result, String screenshot) {
+        String testId = getTestId(result);
+        TestReport report = reports.get(testId);
+        
+        if (report != null) {
+            TestReport updatedReport = TestReport.builder()
+                .id(report.getId())
+                .name(report.getName())
+                .description(report.getDescription())
+                .status(report.getStatus())
+                .duration(report.getDuration())
+                .startTime(report.getStartTime())
+                .endTime(report.getEndTime())
+                .tags(report.getTags())
+                .browser(report.getBrowser())
+                .environment(report.getEnvironment())
+                .className(report.getClassName())
+                .methodName(report.getMethodName())
+                .exception(report.getException())
+                .stackTrace(report.getStackTrace())
+                .screenshot(screenshot)
+                .steps(report.getSteps())
+                .metadata(report.getMetadata())
+                .build();
+                
+            reports.put(testId, updatedReport);
+        }
+    }
+    
+    public ExecutionMetrics getCurrentMetrics() {
+        int total = reports.size();
+        int passed = (int) reports.values().stream()
+            .filter(report -> report.getStatus() == TestStatus.PASSED)
+            .count();
+        int failed = (int) reports.values().stream()
+            .filter(report -> report.getStatus() == TestStatus.FAILED)
+            .count();
+        int skipped = (int) reports.values().stream()
+            .filter(report -> report.getStatus() == TestStatus.SKIPPED)
+            .count();
+            
+        double successRate = total > 0 ? (passed * 100.0) / total : 0;
+        
+        long totalDuration = reports.values().stream()
+            .mapToLong(TestReport::getDuration)
+            .sum();
+            
+        return ExecutionMetrics.builder()
+            .totalTests(total)
+            .passedTests(passed)
+            .failedTests(failed)
+            .skippedTests(skipped)
+            .successRate(successRate)
+            .duration(totalDuration)
+            .build();
+    }
+    
+    public List<TestReport> getRecentReports() {
+        return reports.values().stream()
+            .sorted((r1, r2) -> r2.getEndTime().compareTo(r1.getEndTime()))
+            .limit(10)
+            .collect(Collectors.toList());
+    }
+    
+    private TestReport createTestReport(ITestResult result) {
+        String testId = getTestId(result);
+        String testName = result.getMethod().getMethodName();
+        String description = result.getMethod().getDescription();
+        
+        TestStatus status = switch (result.getStatus()) {
+            case ITestResult.SUCCESS -> TestStatus.PASSED;
+            case ITestResult.FAILURE -> TestStatus.FAILED;
+            default -> TestStatus.SKIPPED;
+        };
+        
+        long duration = result.getEndMillis() - result.getStartMillis();
+        LocalDateTime startTime = LocalDateTime.now().minusNanos(duration * 1000000);
+        LocalDateTime endTime = LocalDateTime.now();
+        
+        String className = result.getTestClass().getName();
+        String methodName = result.getMethod().getMethodName();
+        
+        String exception = null;
+        String stackTrace = null;
+        
+        if (result.getThrowable() != null) {
+            exception = result.getThrowable().getMessage();
+            stackTrace = getStackTrace(result.getThrowable());
+        }
+        
+        return TestReport.builder()
+            .id(testId)
+            .name(testName)
+            .description(description != null ? description : testName)
+            .status(status)
+            .duration(duration)
+            .startTime(startTime)
+            .endTime(endTime)
+            .tags(getTags(result))
+            .browser(getBrowser(result))
+            .environment(getEnvironment())
+            .className(className)
+            .methodName(methodName)
+            .exception(exception)
+            .stackTrace(stackTrace)
+            .build();
+    }
+    
+    private String getTestId(ITestResult result) {
+        return result.getMethod().getMethodName() + "_" + UUID.randomUUID().toString().substring(0, 8);
+    }
+    
+    private List<String> getTags(ITestResult result) {
+        // In a real implementation, this would extract tags from test annotations
+        return new ArrayList<>();
+    }
+    
+    private String getBrowser(ITestResult result) {
+        // In a real implementation, this would extract browser info from test context
+        return "chrome";
+    }
+    
+    private String getEnvironment() {
+        return System.getProperty("environment", "local");
+    }
+    
+    private String getStackTrace(Throwable throwable) {
+        StringBuilder sb = new StringBuilder();
+        for (StackTraceElement element : throwable.getStackTrace()) {
+            sb.append(element.toString()).append("\n");
+        }
+        return sb.toString();
+    }
+}
+
+// ReportGenerator.java
+package com.cssmart.reporting;
+
+import freemarker.template.Template;
+import freemarker.template.Configuration;
+import freemarker.template.TemplateExceptionHandler;
+import freemarker.template.Version;
+import lombok.extern.slf4j.Slf4j;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.Writer;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.exceptions.ReportGenerationException;
+
+@Slf4j
+public class ReportGenerator {
+    private final Configuration templateConfig;
+    private final MetricsCalculator metricsCalculator;
+    private final ChartGenerator chartGenerator;
+    
+    public ReportGenerator() {
+        this.templateConfig = initializeTemplateConfig();
+        this.metricsCalculator = new MetricsCalculator();
+        this.chartGenerator = new ChartGenerator();
+    }
+    
+    private Configuration initializeTemplateConfig() {
+        Configuration config = new Configuration(new Version(2, 3, 31));
+        try {
+            config.setClassLoaderForTemplateLoading(getClass().getClassLoader(), "templates/html");
+            config.setDefaultEncoding("UTF-8");
+            config.setTemplateExceptionHandler(TemplateExceptionHandler.RETHROW_HANDLER);
+            return config;
+        } catch (Exception e) {
+            log.error("Failed to initialize template configuration", e);
+            throw new ReportGenerationException("Template configuration failed", e);
+        }
+    }
+    
+    public void generateHTMLReport(List<TestReport> reports) {
+        try {
+            // Ensure reports directory exists
+            File reportsDir = new File("reports/html");
+            if (!reportsDir.exists()) {
+                reportsDir.mkdirs();
+            }
+            
+            // Get template
+            Template template = templateConfig.getTemplate("html-report.ftl");
+            
+            // Prepare data for template
+            Map<String, Object> data = prepareReportData(reports);
+            
+            // Write report
+            try (Writer writer = new FileWriter("reports/html/test-report.html")) {
+                template.process(data, writer);
+            }
+            
+            log.info("Generated HTML report at reports/html/test-report.html");
+            
+        } catch (Exception e) {
+            log.error("Failed to generate HTML report", e);
+            throw new ReportGenerationException("HTML report generation failed", e);
+        }
+    }
+    
+    public void generateTestReport(TestReport report) {
+        try {
+            // Ensure reports directory exists
+            File reportsDir = new File("reports/html/tests");
+            if (!reportsDir.exists()) {
+                reportsDir.mkdirs();
+            }
+            
+            // Get template
+            Template template = templateConfig.getTemplate("test-report.ftl");
+            
+            // Prepare data for template
+            Map<String, Object> data = new HashMap<>();
+            data.put("test", report);
+            data.put("generatedDate", java.time.LocalDateTime.now().toString());
+            
+            // Write report
+            try (Writer writer = new FileWriter("reports/html/tests/" + report.getId() + ".html")) {
+                template.process(data, writer);
+            }
+            
+            log.debug("Generated test report for: {}", report.getName());
+            
+        } catch (Exception e) {
+            log.error("Failed to generate test report for: {}", report.getName(), e);
+        }
+    }
+    
+    private Map<String, Object> prepareReportData(List<TestReport> reports) {
+        Map<String, Object> data = new HashMap<>();
+        
+        // Add general info
+        data.put("report", Map.of(
+            "title", "CS Smart Test Report",
+            "generatedDate", java.time.LocalDateTime.now().toString()
+        ));
+        
+        // Calculate metrics
+        ExecutionMetrics metrics = metricsCalculator.calculateMetrics(reports);
+        data.put("metrics", metrics);
+        
+        // Generate charts
+        Map<String, String> charts = chartGenerator.generateCharts(reports);
+        data.put("charts", charts);
+        
+        // Add test data
+        data.put("tests", reports);
+        
+        return data;
+    }
+}
+
+// MetricsCalculator.java (continued)
+package com.cssmart.reporting;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import com.cssmart.reporting.model.ExecutionMetrics;
+
+@Slf4j
+public class MetricsCalculator {
+    
+    public ExecutionMetrics calculateMetrics(List<TestReport> reports) {
+        int total = reports.size();
+        int passed = countByStatus(reports, TestStatus.PASSED);
+        int failed = countByStatus(reports, TestStatus.FAILED);
+        int skipped = countByStatus(reports, TestStatus.SKIPPED);
+        
+        return ExecutionMetrics.builder()
+            .totalTests(total)
+            .passedTests(passed)
+            .failedTests(failed)
+            .skippedTests(skipped)
+            .successRate(calculateSuccessRate(passed, total))
+            .duration(calculateTotalDuration(reports))
+            .avgDuration(calculateAverageDuration(reports))
+            .minDuration(calculateMinDuration(reports))
+            .maxDuration(calculateMaxDuration(reports))
+            .build();
+    }
+    
+    private int countByStatus(List<TestReport> reports, TestStatus status) {
+        return (int) reports.stream()
+            .filter(report -> report.getStatus() == status)
+            .count();
+    }
+    
+    private double calculateSuccessRate(int passed, int total) {
+        return total == 0 ? 0 : (passed * 100.0) / total;
+    }
+    
+    private long calculateTotalDuration(List<TestReport> reports) {
+        return reports.stream()
+            .mapToLong(TestReport::getDuration)
+            .sum();
+    }
+    
+    private long calculateAverageDuration(List<TestReport> reports) {
+        return reports.isEmpty() ? 0 : 
+            reports.stream()
+                .mapToLong(TestReport::getDuration)
+                .sum() / reports.size();
+    }
+    
+    private long calculateMinDuration(List<TestReport> reports) {
+        return reports.isEmpty() ? 0 : 
+            reports.stream()
+                .mapToLong(TestReport::getDuration)
+                .min()
+                .orElse(0);
+    }
+    
+    private long calculateMaxDuration(List<TestReport> reports) {
+        return reports.isEmpty() ? 0 : 
+            reports.stream()
+                .mapToLong(TestReport::getDuration)
+                .max()
+                .orElse(0);
+    }
+}
+
+// ChartGenerator.java
+package com.cssmart.reporting;
+
+import org.jfree.chart.JFreeChart;
+import org.jfree.chart.ChartFactory;
+import org.jfree.chart.ChartUtils;
+import org.jfree.data.category.DefaultCategoryDataset;
+import org.jfree.data.general.DefaultPieDataset;
+import lombok.extern.slf4j.Slf4j;
+import java.io.File;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import com.cssmart.reporting.exceptions.ChartGenerationException;
+
+@Slf4j
+public class ChartGenerator {
+    
+    public Map<String, String> generateCharts(List<TestReport> reports) {
+        Map<String, String> charts = new HashMap<>();
+        
+        try {
+            // Ensure charts directory exists
+            File chartsDir = new File("reports/charts");
+            if (!chartsDir.exists()) {
+                chartsDir.mkdirs();
+            }
+            
+            charts.put("executionTrend", generateExecutionTrendChart(reports));
+            charts.put("statusDistribution", generateStatusDistributionChart(reports));
+            charts.put("durationChart", generateDurationChart(reports));
+            
+        } catch (Exception e) {
+            log.error("Failed to generate charts", e);
+            throw new ChartGenerationException("Chart generation failed", e);
+        }
+        
+        return charts;
+    }
+    
+    private String generateExecutionTrendChart(List<TestReport> reports) {
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        
+        reports.forEach(report -> {
+            dataset.addValue(report.getDuration() / 1000.0, "Duration (s)", report.getName());
+        });
+        
+        JFreeChart chart = ChartFactory.createLineChart(
+            "Execution Trend",
+            "Test Case",
+            "Duration (seconds)",
+            dataset
+        );
+        
+        return saveChartToImage(chart, "execution-trend.png");
+    }
+    
+    private String generateStatusDistributionChart(List<TestReport> reports) {
+        DefaultPieDataset<String> dataset = new DefaultPieDataset<>();
+        
+        int passed = (int) reports.stream()
+            .filter(report -> report.getStatus() == TestStatus.PASSED)
+            .count();
+        int failed = (int) reports.stream()
+            .filter(report -> report.getStatus() == TestStatus.FAILED)
+            .count();
+        int skipped = (int) reports.stream()
+            .filter(report -> report.getStatus() == TestStatus.SKIPPED)
+            .count();
+            
+        dataset.setValue("Passed", passed);
+        dataset.setValue("Failed", failed);
+        dataset.setValue("Skipped", skipped);
+        
+        JFreeChart chart = ChartFactory.createPieChart(
+            "Status Distribution",
+            dataset,
+            true,
+            true,
+            false
+        );
+        
+        return saveChartToImage(chart, "status-distribution.png");
+    }
+    
+    private String generateDurationChart(List<TestReport> reports) {
+        DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+        
+        reports.stream()
+            .sorted((r1, r2) -> Long.compare(r2.getDuration(), r1.getDuration()))
+            .limit(10)
+            .forEach(report -> {
+                dataset.addValue(report.getDuration() / 1000.0, "Duration (s)", report.getName());
+            });
+        
+        JFreeChart chart = ChartFactory.createBarChart(
+            "Top 10 Test Durations",
+            "Test Case",
+            "Duration (seconds)",
+            dataset
+        );
+        
+        return saveChartToImage(chart, "duration-chart.png");
+    }
+    
+    private String saveChartToImage(JFreeChart chart, String filename) {
+        try {
+            File imageFile = new File("reports/charts/" + filename);
+            ChartUtils.saveChartAsPNG(imageFile, chart, 600, 400);
+            return "charts/" + filename;
+        } catch (Exception e) {
+            log.error("Failed to save chart: {}", filename, e);
+            throw new ChartGenerationException("Failed to save chart", e);
+        }
+    }
+}
+
+// ScreenshotManager.java
+package com.cssmart.reporting.util;
+
+import org.openqa.selenium.OutputType;
+import org.openqa.selenium.TakesScreenshot;
+import org.openqa.selenium.WebDriver;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class ScreenshotManager {
+    
+    public static String capture(WebDriver driver) {
+        try {
+            // Create screenshots directory if it doesn't exist
+            Path screenshotsDir = Paths.get("reports/screenshots");
+            if (!Files.exists(screenshotsDir)) {
+                Files.createDirectories(screenshotsDir);
+            }
+            
+            // Generate filename
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String filename = "screenshot_" + timestamp + ".png";
+            Path filepath = screenshotsDir.resolve(filename);
+            
+            // Take screenshot
+            File screenshot = ((TakesScreenshot) driver).getScreenshotAs(OutputType.FILE);
+            Files.copy(screenshot.toPath(), filepath);
+            
+            return "screenshots/" + filename;
+        } catch (IOException e) {
+            log.error("Failed to capture screenshot", e);
+            return null;
+        }
+    }
+}
+
+// TestGeneratorServer.java
+package com.cssmart.ui.server;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.socket.config.annotation.EnableWebSocket;
+import org.springframework.context.annotation.ComponentScan;
+
+@SpringBootApplication
+@EnableWebSocket
+@ComponentScan("com.cssmart")
+public class TestGeneratorServer {
+    
+    public static void main(String[] args) {
+        SpringApplication.run(TestGeneratorServer.class, args);
+    }
+}
+
+// WebSocketConfig.java
+package com.cssmart.ui.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.socket.config.annotation.*;
+
+import com.cssmart.ui.recorder.TestRecorderHandler;
+
+@Configuration
+@EnableWebSocket
+public class WebSocketConfig implements WebSocketConfigurer {
+    
+    @Override
+    public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
+        registry.addHandler(new TestRecorderHandler(), "/recorder")
+            .setAllowedOrigins("*");
+    }
+}
+
+// TestRecorderHandler.java
+package com.cssmart.ui.recorder;
+
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ui.recorder.model.RecorderMessage;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+@Slf4j
+public class TestRecorderHandler extends TextWebSocketHandler {
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final TestRecorder recorder = new TestRecorder();
+    private final AIEngine aiEngine = AIEngine.getInstance();
+    
+    @Override
+    public void handleTextMessage(WebSocketSession session, TextMessage message) {
+        try {
+            RecorderMessage msg = mapper.readValue(
+                message.getPayload(), RecorderMessage.class);
+                
+            switch (msg.getType()) {
+                case "START_RECORDING" -> startRecording(session);
+                case "STOP_RECORDING" -> stopRecording(session);
+                case "ACTION" -> recordAction(session, msg.getData());
+                default -> handleUnknownMessage(session, msg);
+            }
+            
+        } catch (Exception e) {
+            log.error("Failed to handle message", e);
+            sendError(session, "Failed to process message");
+        }
+    }
+    
+    private void startRecording(WebSocketSession session) {
+        recorder.startRecording();
+        sendMessage(session, new RecorderMessage("RECORDING_STARTED", null));
+    }
+    
+    private void stopRecording(WebSocketSession session) {
+        TestCase testCase = recorder.stopRecording();
+        sendMessage(session, new RecorderMessage("TEST_CASE", testCase));
+    }
+    
+    private void recordAction(WebSocketSession session, Object actionData) {
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, String> data = (Map<String, String>) actionData;
+            
+            String actionType = data.get("action");
+            String element = data.get("element");
+            String value = data.get("value");
+            
+            Action action = new Action(ActionType.valueOf(actionType));
+            action.setValue(value);
+            
+            recorder.recordAction(action, element, value);
+            sendMessage(session, new RecorderMessage("ACTION_RECORDED", null));
+            
+        } catch (Exception e) {
+            log.error("Failed to record action", e);
+            sendError(session, "Failed to record action");
+        }
+    }
+    
+    private void handleUnknownMessage(WebSocketSession session, RecorderMessage msg) {
+        log.warn("Received unknown message type: {}", msg.getType());
+        sendError(session, "Unknown message type: " + msg.getType());
+    }
+    
+    private void sendMessage(WebSocketSession session, RecorderMessage msg) {
+        try {
+            String json = mapper.writeValueAsString(msg);
+            session.sendMessage(new TextMessage(json));
+        } catch (Exception e) {
+            log.error("Failed to send message", e);
+        }
+    }
+    
+    private void sendError(WebSocketSession session, String error) {
+        sendMessage(session, new RecorderMessage("ERROR", error));
+    }
+}
+
+// TestRecorder.java
+package com.cssmart.ui.recorder;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.time.LocalDateTime;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+
+@Slf4j
+public class TestRecorder {
+    private boolean isRecording;
+    private List<RecordedStep> steps;
+    private final AIEngine aiEngine;
+    private LocalDateTime startTime;
+    private String sessionId;
+    
+    public TestRecorder() {
+        this.isRecording = false;
+        this.steps = new ArrayList<>();
+        this.aiEngine = AIEngine.getInstance();
+    }
+    
+    public void startRecording() {
+        this.isRecording = true;
+        this.steps.clear();
+        this.startTime = LocalDateTime.now();
+        this.sessionId = UUID.randomUUID().toString();
+        log.info("Recording started with session ID: {}", sessionId);
+    }
+    
+    public TestCase stopRecording() {
+        this.isRecording = false;
+        LocalDateTime endTime = LocalDateTime.now();
+        log.info("Recording stopped, captured {} steps", steps.size());
+        
+        // Create test case from recorded steps
+        TestCase testCase = createTestCase(steps, startTime, endTime);
+        
+        // Clear steps
+        this.steps.clear();
+        
+        return testCase;
+    }
+    
+    public void recordAction(Action action, String element, String value) {
+        if (!isRecording) {
+            log.warn("Attempted to record action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(action.getType().toString());
+        step.setElement(element);
+        step.setValue(value);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        step.setDescription(generateDescription(action.getType(), element, value));
+        
+        steps.add(step);
+        log.debug("Recorded step: {}", step);
+    }
+    
+    public void recordBrowserAction(String browserAction, String url) {
+        if (!isRecording) {
+            log.warn("Attempted to record browser action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(browserAction);
+        step.setValue(url);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        if ("NAVIGATE".equals(browserAction)) {
+            step.setDescription("Navigate to " + url);
+        } else if ("BACK".equals(browserAction)) {
+            step.setDescription("Navigate back");
+        } else if ("FORWARD".equals(browserAction)) {
+            step.setDescription("Navigate forward");
+        } else if ("REFRESH".equals(browserAction)) {
+            step.setDescription("Refresh page");
+        }
+        
+        steps.add(step);
+        log.debug("Recorded browser action: {}", step);
+    }
+    
+    private String generateDescription(ActionType actionType, String element, String value) {
+        switch (actionType) {
+            case CLICK:
+                return "Click on " + element;
+            case TYPE:
+                return "Enter '" + value + "' in " + element;
+            case SELECT:
+                return "Select '" + value + "' from " + element;
+            case VERIFY_PRESENCE:
+                return "Verify " + element + " is present";
+            case VERIFY_VISIBILITY:
+                return "Verify " + element + " is visible";
+            case VERIFY_STATE:
+                return "Verify " + element + " state is '" + value + "'";
+            case WAIT:
+                return "Wait for " + element;
+            case HOVER:
+                return "Hover over " + element;
+            default:
+                return actionType + " on " + element;
+        }
+    }
+    
+    private TestCase createTestCase(List<RecordedStep> steps, LocalDateTime startTime, LocalDateTime endTime) {
+        TestCase testCase = new TestCase();
+        testCase.setId(sessionId);
+        testCase.setName("Recorded Test " + startTime.toString());
+        testCase.setDescription("Automatically recorded test case");
+        testCase.setSteps(new ArrayList<>(steps));
+        testCase.setStartTime(startTime);
+        testCase.setEndTime(endTime);
+        
+        // Generate class and method names
+        testCase.setClassName("RecordedTest" + startTime.toString().replaceAll("[^a-zA-Z0-9]", ""));
+        testCase.setMethodName("test" + startTime.toString().replaceAll("[^a-zA-Z0-9]", ""));
+        
+        // Generate test code
+        testCase.setCode(generateTestCode(testCase));
+        
+        return testCase;
+    }
+    
+    private String generateTestCode(TestCase testCase) {
+        // A simple code generation implementation
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        for (RecordedStep step : testCase.getSteps()) {
+            code.append("        // ").append(step.getDescription()).append("\n");
+            
+            if ("NAVIGATE".equals(step.getAction())) {
+                code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+            } else if ("CLICK".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.click();\n");
+            } else if ("TYPE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.clear();\n");
+                code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+            } else if ("SELECT".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                    .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+            }
+            
+            code.append("\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    public boolean isRecording() {
+        return isRecording;
+    }
+    
+    public List<RecordedStep> getSteps() {
+        return new ArrayList<>(steps);  // Return a copy to prevent modification
+    }
+}
+
+// DashboardController.java
+package com.cssmart.ui.dashboard;
+
+import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+
+import com.cssmart.reporting.ReportManager;
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.model.TrendData;
+import com.cssmart.reporting.model.Insight;
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.ui.dashboard.model.DashboardMetrics;
+
+@Slf4j
+@RestController
+@RequestMapping("/api/dashboard")
+public class DashboardController {
+    private final ReportManager reportManager;
+    
+    public DashboardController() {
+        this.reportManager = ReportManager.getInstance();
+    }
+    
+    @GetMapping("/metrics")
+    public DashboardMetrics getMetrics() {
+        // Get current metrics
+        ExecutionMetrics metrics = reportManager.getCurrentMetrics();
+        
+        // Generate insights (placeholder in this implementation)
+        List<Insight> insights = generateInsights(metrics);
+        
+        return new DashboardMetrics(metrics, insights);
+    }
+    
+    @GetMapping("/trends")
+    public List<TrendData> getTrends() {
+        // Get recent reports for trend analysis
+        List<TestReport> reports = reportManager.getRecentReports();
+        
+        // Analyze trends (placeholder implementation)
+        return analyzeTrends(reports);
+    }
+    
+    @GetMapping("/reports")
+    public List<TestReport> getReports() {
+        return reportManager.getRecentReports();
+    }
+    
+    private List<Insight> generateInsights(ExecutionMetrics metrics) {
+        // This would be an AI-powered insight generation in a real implementation
+        List<Insight> insights = new ArrayList<>();
+        
+        if (metrics.getFailedTests() > 0) {
+            insights.add(Insight.builder()
+                .title("Test Failures Detected")
+                .description(metrics.getFailedTests() + " tests failed. Review error details for troubleshooting.")
+                .type(com.cssmart.reporting.model.InsightType.RELIABILITY)
+                .confidence(0.9)
+                .build());
+        }
+        
+        if (metrics.getSuccessRate() < 90) {
+            insights.add(Insight.builder()
+                .title("Low Success Rate")
+                .description("Success rate is " + metrics.getSuccessRate() + "%. Consider reviewing test stability.")
+                .type(com.cssmart.reporting.model.InsightType.STABILITY)
+                .confidence(0.8)
+                .build());
+        }
+        
+        return insights;
+    }
+    
+    private List<TrendData> analyzeTrends(List<TestReport> reports) {
+        // This would be an AI-powered trend analysis in a real implementation
+        List<TrendData> trends = new ArrayList<>();
+        
+        // Generate simple trend data for demonstration
+        int count = 0;
+        for (TestReport report : reports) {
+            if (count++ > 10) break; // Limit to 10 points
+            
+            TrendData data = TrendData.builder()
+                .date(report.getEndTime())
+                .total(1)
+                .passed(report.getStatus() == com.cssmart.reporting.model.TestStatus.PASSED ? 1 : 0)
+                .failed(report.getStatus() == com.cssmart.reporting.model.TestStatus.FAILED ? 1 : 0)
+                .skipped(report.getStatus() == com.cssmart.reporting.model.TestStatus.SKIPPED ? 1 : 0)
+                .successRate(report.getStatus() == com.cssmart.reporting.model.TestStatus.PASSED ? 100.0 : 0.0)
+                .avgDuration(report.getDuration())
+                .build();
+                
+            trends.add(data);
+        }
+        
+        return trends;
+    }
+}
+
