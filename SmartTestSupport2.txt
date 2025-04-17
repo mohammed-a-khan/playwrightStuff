@@ -2205,3 +2205,173 @@ package com.cssmart.data.provider.excel;
         </plugins>
     </build>
 </project>
+
+
+// TestStep.java (AI CodeGen model)
+package com.cssmart.ai.codegen.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class TestStep {
+    private String description;
+    private String action;
+    private String element;
+    private String value;
+    private String screenshot;
+    private long duration;
+}
+
+// ScenarioAnalysis.java
+package com.cssmart.ai.codegen.model;
+
+import lombok.Data;
+import com.cssmart.ai.patterns.model.Pattern;
+import java.util.List;
+
+@Data
+public class ScenarioAnalysis {
+    private final Scenario scenario;
+    private final List<Pattern> patterns;
+    private final double confidence;
+    
+    public ScenarioAnalysis(Scenario scenario, List<Pattern> patterns) {
+        this.scenario = scenario;
+        this.patterns = patterns;
+        this.confidence = calculateConfidence();
+    }
+    
+    private double calculateConfidence() {
+        return patterns.stream()
+            .mapToDouble(Pattern::getConfidence)
+            .average()
+            .orElse(0.0);
+    }
+}
+
+// Scenario.java
+package com.cssmart.ai.codegen.model;
+
+import lombok.Builder;
+import lombok.Data;
+import com.cssmart.ai.patterns.model.Pattern;
+import java.util.List;
+
+@Data
+@Builder
+public class Scenario {
+    private String name;
+    private String description;
+    private List<TestStep> steps;
+    private List<Pattern> patterns;
+}
+
+// TestCase.java
+package com.cssmart.ai.codegen.model;
+
+import lombok.Data;
+import com.github.javaparser.ast.CompilationUnit;
+import java.io.File;
+import java.io.IOException;
+import java.util.List;
+
+@Data
+public class TestCase {
+    private final CompilationUnit compilationUnit;
+    private final String className;
+    private final List<TestStep> steps;
+    
+    public TestCase(CompilationUnit compilationUnit) {
+        this.compilationUnit = compilationUnit;
+        this.className = compilationUnit.getPrimaryTypeName().orElse("UnknownClass");
+        this.steps = null;
+    }
+    
+    public TestCase(CompilationUnit compilationUnit, String className, List<TestStep> steps) {
+        this.compilationUnit = compilationUnit;
+        this.className = className;
+        this.steps = steps;
+    }
+    
+    public void saveToFile(String path) {
+        // Save generated test to file
+        try {
+            compilationUnit.getStorage().ifPresent(storage -> {
+                try {
+                    storage.save();
+                } catch (IOException e) {
+                    throw new com.cssmart.ai.codegen.exceptions.CodeGenerationException("Failed to save compilation unit", e);
+                }
+            });
+            
+            if (!compilationUnit.getStorage().isPresent()) {
+                compilationUnit.setStorage(new File(path));
+                compilationUnit.getStorage().get().save();
+            }
+        } catch (IOException e) {
+            throw new com.cssmart.ai.codegen.exceptions.CodeGenerationException("Failed to save test case", e);
+        }
+    }
+}
+
+// Locator.java (if not already defined)
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import org.openqa.selenium.By;
+
+@Data
+public class Locator {
+    private final LocatorType type;
+    private final String value;
+    private final double confidence;
+    
+    public Locator(LocatorType type, String value, double confidence) {
+        this.type = type;
+        this.value = value;
+        this.confidence = confidence;
+    }
+    
+    public By toBy() {
+        return switch(type) {
+            case ID -> By.id(value);
+            case NAME -> By.name(value);
+            case CLASS_NAME -> By.className(value);
+            case TAG_NAME -> By.tagName(value);
+            case LINK_TEXT -> By.linkText(value);
+            case PARTIAL_LINK_TEXT -> By.partialLinkText(value);
+            case CSS -> By.cssSelector(value);
+            case XPATH -> By.xpath(value);
+            default -> throw new IllegalArgumentException("Unsupported locator type: " + type);
+        };
+    }
+}
+
+// PageElement.java 
+package com.cssmart.ai.codegen.model;
+
+import com.cssmart.ai.engine.model.Locator;
+import lombok.Builder;
+import lombok.Data;
+import java.util.List;
+
+@Data
+@Builder
+public class PageElement {
+    private String name;
+    private String description;
+    private List<Locator> locators;
+}
+
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.cssmart.ai.codegen.model.TestCase;
+import com.cssmart.ai.codegen.model.TestStep;
+import com.cssmart.ai.codegen.model.ScenarioAnalysis;
+import com.cssmart.ai.engine.model.Locator;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
