@@ -1,60 +1,116 @@
 SmartTest Framework Project Structure
-plaintextsmart-test-framework/
+cs-smart-test-framework/
 │
-├── pom.xml                            # Maven configuration
+├── pom.xml                            # Maven configuration (using the updated CS prefix)
 │
 ├── src/
 │   ├── main/
 │   │   ├── java/
 │   │   │   └── com/
-│   │   │       └── smarttest/
+│   │   │       └── cssmart/
 │   │   │           ├── ai/            # AI components
 │   │   │           │   ├── engine/
 │   │   │           │   │   ├── AIEngine.java
 │   │   │           │   │   ├── ElementPredictor.java
-│   │   │           │   │   └── ActionGenerator.java
+│   │   │           │   │   ├── ActionGenerator.java
+│   │   │           │   │   ├── model/
+│   │   │           │   │   │   ├── ElementPrediction.java
+│   │   │           │   │   │   ├── Action.java
+│   │   │           │   │   │   └── ElementProperties.java
+│   │   │           │   │   └── exceptions/
+│   │   │           │   │       ├── AIPredictionException.java
+│   │   │           │   │       ├── AIActionException.java
+│   │   │           │   │       └── AIPatternException.java
 │   │   │           │   ├── patterns/
 │   │   │           │   │   ├── PatternRecognizer.java
-│   │   │           │   │   └── BehaviorAnalyzer.java
+│   │   │           │   │   ├── BehaviorAnalyzer.java
+│   │   │           │   │   ├── SequenceDetector.java
+│   │   │           │   │   └── model/
+│   │   │           │   │       ├── Pattern.java
+│   │   │           │   │       ├── FormPattern.java
+│   │   │           │   │       ├── NavigationPattern.java
+│   │   │           │   │       └── ValidationPattern.java
 │   │   │           │   └── codegen/
 │   │   │           │       ├── TestGenerator.java
-│   │   │           │       └── CodeBuilder.java
+│   │   │           │       ├── CodeBuilder.java
+│   │   │           │       ├── ScenarioAnalyzer.java
+│   │   │           │       ├── ElementGenerator.java
+│   │   │           │       ├── model/
+│   │   │           │       │   ├── TestCase.java
+│   │   │           │       │   └── ScenarioAnalysis.java
+│   │   │           │       └── exceptions/
+│   │   │           │           ├── CodeGenerationException.java
+│   │   │           │           └── TemplateProcessingException.java
 │   │   │           │
 │   │   │           ├── core/          # Core framework components
 │   │   │           │   ├── config/
 │   │   │           │   │   ├── ConfigurationManager.java
-│   │   │           │   │   └── EnvironmentManager.java
+│   │   │           │   │   ├── EnvironmentManager.java
+│   │   │           │   │   ├── model/
+│   │   │           │   │   │   └── TestConfiguration.java
+│   │   │           │   │   └── exceptions/
+│   │   │           │   │       ├── ConfigurationException.java
+│   │   │           │   │       └── EnvironmentException.java
 │   │   │           │   ├── driver/
 │   │   │           │   │   ├── DriverManager.java
-│   │   │           │   │   └── BrowserManager.java
+│   │   │           │   │   ├── BrowserManager.java
+│   │   │           │   │   ├── ElementFinder.java
+│   │   │           │   │   └── exceptions/
+│   │   │           │   │       ├── BrowserCreationException.java
+│   │   │           │   │       ├── UnsupportedBrowserException.java
+│   │   │           │   │       └── ElementNotFoundException.java
 │   │   │           │   └── base/
-│   │   │           │       ├── SmartTestBase.java
-│   │   │           │       └── BaseTest.java
+│   │   │           │       ├── CSSmartTestBase.java
+│   │   │           │       ├── TestContext.java
+│   │   │           │       ├── BasePage.java
+│   │   │           │       └── exceptions/
+│   │   │           │           ├── FrameworkInitializationException.java
+│   │   │           │           └── PageInitializationException.java
 │   │   │           │
 │   │   │           ├── bdd/           # BDD components
 │   │   │           │   ├── steps/
-│   │   │           │   │   ├── StepDefinitions.java
-│   │   │           │   │   └── StepHandler.java
-│   │   │           │   └── runner/
-│   │   │           │       └── TestRunner.java
+│   │   │           │   │   ├── StepHandler.java
+│   │   │           │   │   └── StepDefinitions.java
+│   │   │           │   ├── runner/
+│   │   │           │   │   └── TestRunner.java
+│   │   │           │   ├── scanner/
+│   │   │           │   │   └── StepDefinitionScanner.java
+│   │   │           │   ├── executor/
+│   │   │           │   │   └── StepExecutor.java
+│   │   │           │   └── exceptions/
+│   │   │           │       ├── StepExecutionException.java
+│   │   │           │       └── StepDefinitionException.java
 │   │   │           │
 │   │   │           ├── data/          # Data handling
 │   │   │           │   ├── provider/
+│   │   │           │   │   ├── DataManager.java
 │   │   │           │   │   ├── ExcelDataProvider.java
 │   │   │           │   │   ├── CSVDataProvider.java
-│   │   │           │   │   └── JSONDataProvider.java
-│   │   │           │   └── handler/
-│   │   │           │       └── DataHandler.java
+│   │   │           │   │   ├── JSONDataProvider.java
+│   │   │           │   │   └── DataProvider.java (interface)
+│   │   │           │   └── exceptions/
+│   │   │           │       ├── DataProviderException.java
+│   │   │           │       ├── DataReadException.java
+│   │   │           │       └── UnsupportedDataSourceException.java
 │   │   │           │
 │   │   │           ├── reporting/     # Reporting
 │   │   │           │   ├── ReportManager.java
-│   │   │           │   └── HTMLReporter.java
+│   │   │           │   ├── ReportGenerator.java
+│   │   │           │   ├── MetricsCalculator.java
+│   │   │           │   ├── ChartGenerator.java
+│   │   │           │   └── exceptions/
+│   │   │           │       ├── ReportGenerationException.java
+│   │   │           │       └── ChartGenerationException.java
 │   │   │           │
 │   │   │           └── ui/            # UI Components
-│   │   │               ├── dashboard/
-│   │   │               │   └── DashboardServer.java
-│   │   │               └── recorder/
-│   │   │                   └── TestRecorder.java
+│   │   │               ├── server/
+│   │   │               │   └── TestGeneratorServer.java
+│   │   │               ├── config/
+│   │   │               │   └── WebSocketConfig.java
+│   │   │               ├── recorder/
+│   │   │               │   └── TestRecorderHandler.java
+│   │   │               └── dashboard/
+│   │   │                   └── DashboardController.java
 │   │   │
 │   │   ├── resources/
 │   │   │   ├── config/               # Configuration files
@@ -65,21 +121,41 @@ plaintextsmart-test-framework/
 │   │   │   │
 │   │   │   ├── templates/           # Report templates
 │   │   │   │   ├── html/
+│   │   │   │   │   └── html-report.ftl
 │   │   │   │   └── pdf/
 │   │   │   │
 │   │   │   └── webdriver/           # WebDriver binaries
 │   │   │
 │   │   └── webapp/                  # UI Application
 │   │       ├── package.json
+│   │       ├── public/
+│   │       │   ├── index.html
+│   │       │   └── favicon.ico
 │   │       └── src/
-│   │           └── components/
-│   │               ├── TestBuilder.jsx
-│   │               └── Dashboard.jsx
+│   │           ├── App.jsx
+│   │           ├── index.js
+│   │           ├── styles/
+│   │           │   └── index.css
+│   │           └── components/        # React Components
+│   │               ├── common/
+│   │               │   ├── Navbar.jsx
+│   │               │   └── Sidebar.jsx
+│   │               ├── dashboard/
+│   │               │   ├── Dashboard.jsx
+│   │               │   ├── MetricsCard.jsx
+│   │               │   ├── TrendsChart.jsx
+│   │               │   └── InsightsPanel.jsx
+│   │               ├── recorder/
+│   │               │   ├── TestRecorder.jsx
+│   │               │   └── RecordedSteps.jsx
+│   │               └── generator/
+│   │                   ├── TestGenerator.jsx
+│   │                   └── TestBuilder.jsx
 │   │
 │   └── test/                        # Test examples
 │       └── java/
 │           └── com/
-│               └── smarttest/
+│               └── cssmart/
 │                   └── examples/
 │                       ├── api/
 │                       │   └── APITest.java
@@ -107,7 +183,8 @@ plaintextsmart-test-framework/
 │   └── environment-config.yaml
 │
 └── reports/                        # Test Reports
-    └── html/
+    ├── html/
+    └── charts/
 
 mkdir cs-smart-test-framework
 cd cs-smart-test-framework
