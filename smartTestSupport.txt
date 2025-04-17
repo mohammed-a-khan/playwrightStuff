@@ -1,0 +1,160 @@
+# Project Structure
+
+```
+smart-test-framework/
+├── pom.xml
+├── README.md
+├── .gitignore
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/
+│   │   │       └── smarttest/
+│   │   │           ├── core/
+│   │   │           │   ├── config/
+│   │   │           │   ├── driver/
+│   │   │           │   ├── exceptions/
+│   │   │           │   └── utils/
+│   │   │           ├── ai/
+│   │   │           │   ├── engine/
+│   │   │           │   ├── nlp/
+│   │   │           │   └── codegen/
+│   │   │           ├── reporting/
+│   │   │           │   ├── core/
+│   │   │           │   ├── templates/
+│   │   │           │   └── dashboard/
+│   │   │           └── test/
+│   │   │               ├── base/
+│   │   │               ├── listeners/
+│   │   │               └── annotations/
+│   │   └── resources/
+│   │       ├── config/
+│   │       ├── report-templates/
+│   │       └── ai-models/
+│   └── test/
+│       └── java/
+│           └── com/
+│               └── smarttest/
+│                   └── tests/
+└── azure-pipelines/
+    ├── azure-pipelines.yml
+    └── templates/
+```
+
+# Core Dependencies (pom.xml)
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.smarttest</groupId>
+    <artifactId>smart-test-framework</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <selenium.version>4.16.1</selenium.version>
+        <testng.version>7.8.0</testng.version>
+        <slf4j.version>2.0.9</slf4j.version>
+        <jackson.version>2.15.3</jackson.version>
+        <lombok.version>1.18.30</lombok.version>
+        <opennlp.version>2.3.1</opennlp.version>
+        <webdrivermanager.version>5.6.2</webdrivermanager.version>
+        <commons.io.version>2.15.1</commons.io.version>
+    </properties>
+
+    <dependencies>
+        <!-- Selenium -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-java</artifactId>
+            <version>${selenium.version}</version>
+        </dependency>
+
+        <!-- TestNG -->
+        <dependency>
+            <groupId>org.testng</groupId>
+            <artifactId>testng</artifactId>
+            <version>${testng.version}</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.4.14</version>
+        </dependency>
+
+        <!-- JSON Processing -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- NLP -->
+        <dependency>
+            <groupId>org.apache.opennlp</groupId>
+            <artifactId>opennlp-tools</artifactId>
+            <version>${opennlp.version}</version>
+        </dependency>
+
+        <!-- WebDriver Manager -->
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <version>${webdrivermanager.version}</version>
+        </dependency>
+
+        <!-- Apache Commons -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>${commons.io.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>${maven.compiler.source}</source>
+                    <target>${maven.compiler.target}</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.2</version>
+                <configuration>
+                    <suiteXmlFiles>
+                        <suiteXmlFile>testng.xml</suiteXmlFile>
+                    </suiteXmlFiles>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
