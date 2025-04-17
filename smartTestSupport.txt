@@ -1,160 +1,1974 @@
-# Project Structure
+// src/main/webapp/src/index.js
+import React from 'react';
+import ReactDOM from 'react-dom';
+import './styles/index.css';
+import App from './App';
 
-```
-smart-test-framework/
-├── pom.xml
-├── README.md
-├── .gitignore
-├── src/
-│   ├── main/
-│   │   ├── java/
-│   │   │   └── com/
-│   │   │       └── smarttest/
-│   │   │           ├── core/
-│   │   │           │   ├── config/
-│   │   │           │   ├── driver/
-│   │   │           │   ├── exceptions/
-│   │   │           │   └── utils/
-│   │   │           ├── ai/
-│   │   │           │   ├── engine/
-│   │   │           │   ├── nlp/
-│   │   │           │   └── codegen/
-│   │   │           ├── reporting/
-│   │   │           │   ├── core/
-│   │   │           │   ├── templates/
-│   │   │           │   └── dashboard/
-│   │   │           └── test/
-│   │   │               ├── base/
-│   │   │               ├── listeners/
-│   │   │               └── annotations/
-│   │   └── resources/
-│   │       ├── config/
-│   │       ├── report-templates/
-│   │       └── ai-models/
-│   └── test/
-│       └── java/
-│           └── com/
-│               └── smarttest/
-│                   └── tests/
-└── azure-pipelines/
-    ├── azure-pipelines.yml
-    └── templates/
-```
+ReactDOM.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+  document.getElementById('root')
+);
 
-# Core Dependencies (pom.xml)
+// src/main/webapp/src/App.jsx
+import React from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Navbar from './components/common/Navbar';
+import Sidebar from './components/common/Sidebar';
+import Dashboard from './components/dashboard/Dashboard';
+import TestRecorder from './components/recorder/TestRecorder';
+import TestGenerator from './components/generator/TestGenerator';
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+const App = () => {
+  return (
+    <BrowserRouter>
+      <div className="flex h-screen bg-gray-100">
+        <Sidebar />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <Navbar />
+          <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-4">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/recorder" element={<TestRecorder />} />
+              <Route path="/generator" element={<TestGenerator />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
+    </BrowserRouter>
+  );
+};
 
-    <groupId>com.smarttest</groupId>
-    <artifactId>smart-test-framework</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-    <packaging>pom</packaging>
+export default App;
 
-    <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <selenium.version>4.16.1</selenium.version>
-        <testng.version>7.8.0</testng.version>
-        <slf4j.version>2.0.9</slf4j.version>
-        <jackson.version>2.15.3</jackson.version>
-        <lombok.version>1.18.30</lombok.version>
-        <opennlp.version>2.3.1</opennlp.version>
-        <webdrivermanager.version>5.6.2</webdrivermanager.version>
-        <commons.io.version>2.15.1</commons.io.version>
-    </properties>
+// src/main/webapp/src/components/common/Navbar.jsx
+import React from 'react';
 
-    <dependencies>
-        <!-- Selenium -->
-        <dependency>
-            <groupId>org.seleniumhq.selenium</groupId>
-            <artifactId>selenium-java</artifactId>
-            <version>${selenium.version}</version>
-        </dependency>
+const Navbar = () => {
+  return (
+    <header className="bg-white shadow h-16 flex items-center justify-between px-6">
+      <div className="flex items-center">
+        <h1 className="text-xl font-semibold">CS Smart Test Framework</h1>
+      </div>
+      <div className="flex items-center space-x-4">
+        <button className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700">
+          New Test
+        </button>
+        <div className="relative">
+          <button className="p-1 rounded-full bg-gray-200 hover:bg-gray-300">
+            <svg className="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+};
 
-        <!-- TestNG -->
-        <dependency>
-            <groupId>org.testng</groupId>
-            <artifactId>testng</artifactId>
-            <version>${testng.version}</version>
-        </dependency>
+export default Navbar;
 
-        <!-- Logging -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>1.4.14</version>
-        </dependency>
+// src/main/webapp/src/components/common/Sidebar.jsx
+import React from 'react';
+import { NavLink } from 'react-router-dom';
 
-        <!-- JSON Processing -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
-        </dependency>
+const Sidebar = () => {
+  return (
+    <div className="bg-indigo-800 text-white w-64 space-y-6 py-7 px-2 absolute inset-y-0 left-0 transform -translate-x-full md:relative md:translate-x-0 transition duration-200 ease-in-out">
+      <div className="flex items-center space-x-2 px-4">
+        <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
+        </svg>
+        <span className="text-lg font-extrabold">CS Smart Test</span>
+      </div>
+      <nav>
+        <NavLink to="/" className={({ isActive }) => 
+          "block py-2.5 px-4 rounded transition duration-200 " + 
+          (isActive ? "bg-indigo-700" : "hover:bg-indigo-700")
+        } end>
+          Dashboard
+        </NavLink>
+        <NavLink to="/recorder" className={({ isActive }) => 
+          "block py-2.5 px-4 rounded transition duration-200 " + 
+          (isActive ? "bg-indigo-700" : "hover:bg-indigo-700")
+        }>
+          Test Recorder
+        </NavLink>
+        <NavLink to="/generator" className={({ isActive }) => 
+          "block py-2.5 px-4 rounded transition duration-200 " + 
+          (isActive ? "bg-indigo-700" : "hover:bg-indigo-700")
+        }>
+          Test Generator
+        </NavLink>
+        <NavLink to="/reports" className={({ isActive }) => 
+          "block py-2.5 px-4 rounded transition duration-200 " + 
+          (isActive ? "bg-indigo-700" : "hover:bg-indigo-700")
+        }>
+          Reports
+        </NavLink>
+        <NavLink to="/config" className={({ isActive }) => 
+          "block py-2.5 px-4 rounded transition duration-200 " + 
+          (isActive ? "bg-indigo-700" : "hover:bg-indigo-700")
+        }>
+          Configuration
+        </NavLink>
+      </nav>
+    </div>
+  );
+};
 
-        <!-- Lombok -->
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <version>${lombok.version}</version>
-            <scope>provided</scope>
-        </dependency>
+export default Sidebar;
 
-        <!-- NLP -->
-        <dependency>
-            <groupId>org.apache.opennlp</groupId>
-            <artifactId>opennlp-tools</artifactId>
-            <version>${opennlp.version}</version>
-        </dependency>
+// src/main/webapp/src/components/dashboard/Dashboard.jsx
+import React, { useState, useEffect } from 'react';
+import MetricsCard from './MetricsCard';
+import TrendsChart from './TrendsChart';
+import InsightsPanel from './InsightsPanel';
 
-        <!-- WebDriver Manager -->
-        <dependency>
-            <groupId>io.github.bonigarcia</groupId>
-            <artifactId>webdrivermanager</artifactId>
-            <version>${webdrivermanager.version}</version>
-        </dependency>
+const Dashboard = () => {
+  const [metrics, setMetrics] = useState(null);
+  const [trends, setTrends] = useState([]);
+  
+  useEffect(() => {
+    // Fetch metrics data
+    fetch('/api/dashboard/metrics')
+      .then(res => res.json())
+      .then(data => setMetrics(data))
+      .catch(err => console.error('Error fetching metrics:', err));
+    
+    // Fetch trends data
+    fetch('/api/dashboard/trends')
+      .then(res => res.json())
+      .then(data => setTrends(data))
+      .catch(err => console.error('Error fetching trends:', err));
+  }, []);
+  
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold">Dashboard</h1>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <MetricsCard metrics={metrics} />
+        <TrendsChart data={trends} />
+        <InsightsPanel insights={metrics?.insights || []} />
+      </div>
+      
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold mb-4">Recent Tests</h2>
+        {/* Recent tests table would go here */}
+      </div>
+    </div>
+  );
+};
 
-        <!-- Apache Commons -->
-        <dependency>
-            <groupId>commons-io</groupId>
-            <artifactId>commons-io</artifactId>
-            <version>${commons.io.version}</version>
-        </dependency>
-    </dependencies>
+export default Dashboard;
 
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <configuration>
-                    <source>${maven.compiler.source}</source>
-                    <target>${maven.compiler.target}</target>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.2.2</version>
-                <configuration>
-                    <suiteXmlFiles>
-                        <suiteXmlFile>testng.xml</suiteXmlFile>
-                    </suiteXmlFiles>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
-</project>
-```
+// src/main/webapp/src/components/dashboard/MetricsCard.jsx
+import React from 'react';
+
+const MetricsCard = ({ metrics }) => {
+  if (!metrics) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Execution Metrics</h2>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Total Tests</span>
+          <span className="text-2xl font-bold">{metrics.totalTests}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Pass Rate</span>
+          <span className="text-2xl font-bold">{metrics.successRate}%</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Passed</span>
+          <span className="text-2xl font-bold text-green-600">{metrics.passedTests}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Failed</span>
+          <span className="text-2xl font-bold text-red-600">{metrics.failedTests}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MetricsCard;
+
+// src/main/webapp/src/components/dashboard/TrendsChart.jsx
+import React from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+const TrendsChart = ({ data }) => {
+  if (!data || data.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="h-48 bg-gray-200 rounded"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Execution Trends</h2>
+      <div className="h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Line type="monotone" dataKey="passed" stroke="#4ade80" activeDot={{ r: 8 }} />
+            <Line type="monotone" dataKey="failed" stroke="#f87171" />
+            <Line type="monotone" dataKey="total" stroke="#60a5fa" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+};
+
+export default TrendsChart;
+
+// src/main/webapp/src/components/dashboard/InsightsPanel.jsx
+import React from 'react';
+
+const InsightsPanel = ({ insights }) => {
+  if (!insights || insights.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="space-y-3">
+          <div className="h-4 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded"></div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">AI Insights</h2>
+      <div className="space-y-3">
+        {insights.map((insight, index) => (
+          <div key={index} className="p-3 border rounded-lg">
+            <h3 className="font-semibold">{insight.title}</h3>
+            <p className="text-gray-600">{insight.description}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default InsightsPanel;
+
+// src/main/webapp/src/components/recorder/TestRecorder.jsx
+import React, { useState, useEffect } from 'react';
+import RecordedSteps from './RecordedSteps';
+
+const TestRecorder = () => {
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedSteps, setRecordedSteps] = useState([]);
+  const [websocket, setWebsocket] = useState(null);
+  
+  useEffect(() => {
+    // Cleanup websocket on component unmount
+    return () => {
+      if (websocket) {
+        websocket.close();
+      }
+    };
+  }, [websocket]);
+  
+  const connectWebSocket = () => {
+    const ws = new WebSocket(`ws://${window.location.host}/recorder`);
+    
+    ws.onopen = () => {
+      console.log('WebSocket connected');
+      ws.send(JSON.stringify({ type: 'START_RECORDING' }));
+    };
+    
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      
+      if (message.type === 'RECORDING_STARTED') {
+        console.log('Recording started');
+      } else if (message.type === 'STEP_RECORDED') {
+        setRecordedSteps(prev => [...prev, message.step]);
+      } else if (message.type === 'TEST_CASE') {
+        console.log('Test case generated:', message.testCase);
+      }
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+    
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+    };
+    
+    setWebsocket(ws);
+  };
+  
+  const startRecording = () => {
+    setIsRecording(true);
+    setRecordedSteps([]);
+    connectWebSocket();
+  };
+  
+  const stopRecording = () => {
+    if (websocket) {
+      websocket.send(JSON.stringify({ type: 'STOP_RECORDING' }));
+      websocket.close();
+      setWebsocket(null);
+    }
+    setIsRecording(false);
+  };
+  
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-semibold">Test Recorder</h1>
+        <button
+          className={`px-4 py-2 rounded-md ${isRecording ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'} text-white`}
+          onClick={isRecording ? stopRecording : startRecording}
+        >
+          {isRecording ? 'Stop Recording' : 'Start Recording'}
+        </button>
+      </div>
+      
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold mb-4">Recording Configuration</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-gray-700 mb-2">URL to test</label>
+              <input 
+                type="text" 
+                className="w-full px-3 py-2 border rounded-md"
+                placeholder="https://example.com"
+                disabled={isRecording}
+              />
+            </div>
+            <div>
+              <label className="block text-gray-700 mb-2">Browser</label>
+              <select 
+                className="w-full px-3 py-2 border rounded-md"
+                disabled={isRecording}
+              >
+                <option value="chrome">Chrome</option>
+                <option value="firefox">Firefox</option>
+                <option value="edge">Edge</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        
+        <RecordedSteps steps={recordedSteps} />
+      </div>
+    </div>
+  );
+};
+
+export default TestRecorder;
+
+// src/main/webapp/src/components/recorder/RecordedSteps.jsx
+import React from 'react';
+
+const RecordedSteps = ({ steps }) => {
+  if (!steps || steps.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold mb-4">Recorded Steps</h2>
+        <div className="text-gray-500 text-center py-8">
+          No steps recorded yet. Start recording to capture test steps.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Recorded Steps</h2>
+      <div className="space-y-2">
+        {steps.map((step, index) => (
+          <div key={index} className="p-3 border rounded-lg flex items-center">
+            <div className="w-8 h-8 bg-indigo-100 text-indigo-800 rounded-full flex items-center justify-center mr-3">
+              {index + 1}
+            </div>
+            <div>
+              <div className="font-medium">{step.action}</div>
+              <div className="text-sm text-gray-600">{step.description}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default RecordedSteps;
+
+// src/main/webapp/src/components/generator/TestGenerator.jsx
+import React, { useState } from 'react';
+import TestBuilder from './TestBuilder';
+
+const TestGenerator = () => {
+  const [description, setDescription] = useState('');
+  const [generatedTest, setGeneratedTest] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  
+  const generateTest = () => {
+    if (!description) return;
+    
+    setIsGenerating(true);
+    
+    // Call the API to generate the test
+    fetch('/api/generator/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ description }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        setGeneratedTest(data);
+        setIsGenerating(false);
+      })
+      .catch(err => {
+        console.error('Error generating test:', err);
+        setIsGenerating(false);
+      });
+  };
+  
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold">Test Generator</h1>
+      
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold mb-4">Describe Test Scenario</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-gray-700 mb-2">Test Description</label>
+            <textarea
+              className="w-full px-3 py-2 border rounded-md h-32"
+              placeholder="Describe what you want to test, e.g. 'Navigate to login page, enter valid credentials, and verify successful login'"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            ></textarea>
+          </div>
+          <button
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-300"
+            onClick={generateTest}
+            disabled={!description || isGenerating}
+          >
+            {isGenerating ? 'Generating...' : 'Generate Test'}
+          </button>
+        </div>
+      </div>
+      
+      {generatedTest && <TestBuilder test={generatedTest} />}
+    </div>
+  );
+};
+
+export default TestGenerator;
+
+// src/main/webapp/src/components/generator/TestBuilder.jsx
+import React, { useState } from 'react';
+
+const TestBuilder = ({ test }) => {
+  const [steps, setSteps] = useState(test.steps || []);
+  
+  const updateStep = (index, updatedStep) => {
+    const newSteps = [...steps];
+    newSteps[index] = { ...newSteps[index], ...updatedStep };
+    setSteps(newSteps);
+  };
+  
+  const addStep = () => {
+    setSteps([...steps, { action: '', description: '', element: '', value: '' }]);
+  };
+  
+  const removeStep = (index) => {
+    const newSteps = [...steps];
+    newSteps.splice(index, 1);
+    setSteps(newSteps);
+  };
+  
+  const saveTest = () => {
+    // Call API to save the test
+    fetch('/api/generator/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ...test, steps }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        console.log('Test saved:', data);
+        alert('Test saved successfully!');
+      })
+      .catch(err => {
+        console.error('Error saving test:', err);
+        alert('Failed to save test.');
+      });
+  };
+  
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold">Test Builder</h2>
+        <div className="space-x-2">
+          <button
+            className="px-3 py-1 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+            onClick={addStep}
+          >
+            Add Step
+          </button>
+          <button
+            className="px-3 py-1 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            onClick={saveTest}
+          >
+            Save Test
+          </button>
+        </div>
+      </div>
+      
+      <div className="space-y-4">
+        {steps.map((step, index) => (
+          <div key={index} className="p-4 border rounded-lg space-y-2">
+            <div className="flex justify-between items-center">
+              <div className="font-medium">Step {index + 1}</div>
+              <button
+                className="text-red-600 hover:text-red-800"
+                onClick={() => removeStep(index)}
+              >
+                Remove
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-gray-700 text-sm mb-1">Action</label>
+                <select
+                  className="w-full px-3 py-1 border rounded-md"
+                  value={step.action}
+                  onChange={(e) => updateStep(index, { action: e.target.value })}
+                >
+                  <option value="">Select Action</option>
+                  <option value="CLICK">Click</option>
+                  <option value="TYPE">Type</option>
+                  <option value="SELECT">Select</option>
+                  <option value="VERIFY_PRESENCE">Verify Presence</option>
+                  <option value="VERIFY_TEXT">Verify Text</option>
+                  <option value="NAVIGATE">Navigate</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block text-gray-700 text-sm mb-1">Element</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-1 border rounded-md"
+                  placeholder="Element Description"
+                  value={step.element}
+                  onChange={(e) => updateStep(index, { element: e.target.value })}
+                />
+              </div>
+              
+              {(step.action === 'TYPE' || step.action === 'SELECT' || step.action === 'VERIFY_TEXT') && (
+                <div className="col-span-2">
+                  <label className="block text-gray-700 text-sm mb-1">Value</label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-1 border rounded-md"
+                    placeholder="Value"
+                    value={step.value}
+                    onChange={(e) => updateStep(index, { value: e.target.value })}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default TestBuilder;
+
+// src/main/webapp/src/styles/index.css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+
+# src/main/resources/config/default.yaml
+framework:
+  name: CSSmartTest
+  version: 1.0.0-SNAPSHOT
+  mode: zero-code
+
+browser:
+  type: chrome
+  headless: false
+  timeout: 30
+  capabilities:
+    ignoreHTTPSErrors: true
+    acceptInsecureCerts: true
+
+execution:
+  parallel: true
+  threadCount: 5
+  retryCount: 1
+  timeout: 60
+
+element:
+  timeout: 15
+  polling: 500
+
+reporting:
+  format: html
+  screenshots: true
+  video: false
+  outputDir: ./reports
+
+data:
+  defaultPath: ./test-data
+  sources:
+    - type: excel
+      path: ./test-data/excel
+    - type: csv
+      path: ./test-data/csv
+    - type: json
+      path: ./test-data/json
+
+# src/main/resources/config/environments/qa.yaml
+base:
+  url: https://qa.example.com
+  api: https://api-qa.example.com
+
+database:
+  host: qa-db.example.com
+  port: 3306
+  username: ${DB_USERNAME}
+  password: ${DB_PASSWORD}
+  name: qa_testdb
+
+# src/main/resources/config/environments/staging.yaml
+base:
+  url: https://staging.example.com
+  api: https://api-staging.example.com
+
+database:
+  host: staging-db.example.com
+  port: 3306
+  username: ${DB_USERNAME}
+  password: ${DB_PASSWORD}
+  name: staging_testdb
+
+# src/main/resources/templates/html/html-report.ftl
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CS Smart Test Report</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <header class="bg-white shadow rounded-lg p-6 mb-8">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">CS Smart Test Report</h1>
+                    <p class="text-gray-500">Generate
+# src/main/resources/templates/html/html-report.ftl (continued)
+                    <p class="text-gray-500">Generated: ${report.generatedDate}</p>
+                </div>
+                <div class="text-right">
+                    <div class="text-xl font-bold">${metrics.successRate}%</div>
+                    <div class="text-sm text-gray-500">Success Rate</div>
+                </div>
+            </div>
+        </header>
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-white shadow rounded-lg p-6">
+                <div class="text-4xl font-bold text-blue-600">${metrics.totalTests}</div>
+                <div class="text-gray-500">Total Tests</div>
+            </div>
+            <div class="bg-white shadow rounded-lg p-6">
+                <div class="text-4xl font-bold text-green-600">${metrics.passedTests}</div>
+                <div class="text-gray-500">Passed</div>
+            </div>
+            <div class="bg-white shadow rounded-lg p-6">
+                <div class="text-4xl font-bold text-red-600">${metrics.failedTests}</div>
+                <div class="text-gray-500">Failed</div>
+            </div>
+        </div>
+        
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white shadow rounded-lg p-6">
+                <h2 class="text-xl font-bold mb-4">Test Execution Trend</h2>
+                <img src="${charts.executionTrend}" alt="Execution Trend" class="w-full">
+            </div>
+            <div class="bg-white shadow rounded-lg p-6">
+                <h2 class="text-xl font-bold mb-4">Status Distribution</h2>
+                <img src="${charts.statusDistribution}" alt="Status Distribution" class="w-full">
+            </div>
+        </div>
+        
+        <div class="bg-white shadow rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4">Test Results</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead>
+                        <tr>
+                            <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Test Name</th>
+                            <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                            <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <#list tests as test>
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${test.name}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                    <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                        <#if test.status == 'PASSED'>
+                                            bg-green-100 text-green-800
+                                        <#elseif test.status == 'FAILED'>
+                                            bg-red-100 text-red-800
+                                        <#else>
+                                            bg-yellow-100 text-yellow-800
+                                        </#if>
+                                    ">
+                                        ${test.status}
+                                    </span>
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${test.duration} ms</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    <a href="tests/${test.id}.html" class="text-indigo-600 hover:text-indigo-900">Details</a>
+                                    <#if test.status == 'FAILED'>
+                                        <a href="screenshots/${test.id}.png" class="ml-4 text-indigo-600 hover:text-indigo-900">Screenshot</a>
+                                    </#if>
+                                </td>
+                            </tr>
+                        </#list>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
+# config/test-config.yaml
+framework:
+  name: CSSmartTest
+  version: 1.0.0-SNAPSHOT
+  mode: zero-code
+
+browser:
+  type: chrome
+  headless: false
+  timeout: 30
+  capabilities:
+    ignoreHTTPSErrors: true
+    acceptInsecureCerts: true
+
+execution:
+  parallel: true
+  threadCount: 5
+  retryCount: 1
+  timeout: 60
+
+element:
+  timeout: 15
+  polling: 500
+
+reporting:
+  format: html
+  screenshots: true
+  video: false
+  outputDir: ./reports
+
+data:
+  defaultPath: ./test-data
+  sources:
+    - type: excel
+      path: ./test-data/excel
+    - type: csv
+      path: ./test-data/csv
+    - type: json
+      path: ./test-data/json
+
+# config/environment-config.yaml
+environments:
+  default: qa
+  
+  qa:
+    base:
+      url: https://qa.example.com
+      api: https://api-qa.example.com
+    database:
+      host: qa-db.example.com
+      port: 3306
+      username: ${DB_USERNAME}
+      password: ${DB_PASSWORD}
+      name: qa_testdb
+  
+  staging:
+    base:
+      url: https://staging.example.com
+      api: https://api-staging.example.com
+    database:
+      host: staging-db.example.com
+      port: 3306
+      username: ${DB_USERNAME}
+      password: ${DB_PASSWORD}
+      name: staging_testdb
+  
+  prod:
+    base:
+      url: https://example.com
+      api: https://api.example.com
+    database:
+      host: prod-db.example.com
+      port: 3306
+      username: ${DB_USERNAME}
+      password: ${DB_PASSWORD}
+      name: prod_testdb
+
+# features/web/web_test.feature
+Feature: Web UI Testing
+
+  Scenario: Login with valid credentials
+    Given I am on "login" page
+    When I enter "testuser" in "username field"
+    And I enter "password123" in "password field"
+    And I click "login button"
+    Then I should see "Welcome, Test User"
+
+  Scenario: Search for products
+    Given I am on "home" page
+    When I enter "smartphone" in "search box"
+    And I click "search button"
+    Then I should see "Search Results"
+    And I should see "10 products found"
+
+  Scenario: Add product to cart
+    Given I am on "product" page
+    When I click "add to cart button"
+    Then I should see "Product added to cart"
+    And I should see "1 item" in "cart icon"
+
+# features/api/api_test.feature
+Feature: API Testing
+
+  Scenario: Get user information
+    Given I have a valid API key
+    When I send GET request to "/api/users/1"
+    Then the response status code should be 200
+    And the response should contain "username"
+    And the response should contain "email"
+
+  Scenario: Create new user
+    Given I have a valid API key
+    And I have user data
+      | username | email            | password  |
+      | newuser  | newuser@test.com | Pass123!  |
+    When I send POST request to "/api/users" with user data
+    Then the response status code should be 201
+    And the response should contain "id"
+
+  Scenario: Delete user
+    Given I have a valid API key
+    When I send DELETE request to "/api/users/2"
+    Then the response status code should be 204
+
+# test-data/json/api_data.json
+{
+  "users": [
+    {
+      "id": 1,
+      "username": "testuser",
+      "email": "testuser@example.com",
+      "role": "admin"
+    },
+    {
+      "id": 2,
+      "username": "john.doe",
+      "email": "john.doe@example.com",
+      "role": "user"
+    },
+    {
+      "id": 3,
+      "username": "jane.smith",
+      "email": "jane.smith@example.com",
+      "role": "user"
+    }
+  ],
+  "products": [
+    {
+      "id": 101,
+      "name": "Smartphone X",
+      "category": "Electronics",
+      "price": 999.99,
+      "inStock": true
+    },
+    {
+      "id": 102,
+      "name": "Laptop Pro",
+      "category": "Electronics",
+      "price": 1299.99,
+      "inStock": true
+    },
+    {
+      "id": 103,
+      "name": "Wireless Headphones",
+      "category": "Electronics",
+      "price": 199.99,
+      "inStock": false
+    }
+  ],
+  "orders": [
+    {
+      "id": 1001,
+      "userId": 2,
+      "products": [101, 103],
+      "total": 1199.98,
+      "status": "shipped"
+    },
+    {
+      "id": 1002,
+      "userId": 3,
+      "products": [102],
+      "total": 1299.99,
+      "status": "processing"
+    }
+  ]
+}
+
+# src/main/webapp/package.json
+{
+  "name": "cssmart-ui",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@testing-library/jest-dom": "^5.16.5",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "axios": "^1.3.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.8.2",
+    "react-scripts": "5.0.1",
+    "recharts": "^2.4.3",
+    "tailwindcss": "^3.2.7",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "proxy": "http://localhost:8080"
+}
+
+# src/main/webapp/public/index.html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#000000" />
+    <meta
+      name="description"
+      content="CS Smart Test Framework - AI-Powered Testing Solution"
+    />
+    <title>CS Smart Test Framework</title>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
+
+// TestContext.java
+package com.cssmart.core.base;
+
+import lombok.Data;
+import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.HashMap;
+
+@Data
+public class TestContext {
+    private Method testMethod;
+    private Map<String, Object> testData;
+    private Map<String, Object> runtime;
+    
+    public TestContext() {
+        this.testData = new HashMap<>();
+        this.runtime = new HashMap<>();
+    }
+    
+    public void setTestData(Map<String, Object> data) {
+        this.testData.putAll(data);
+    }
+    
+    public <T> T getTestData(String key, Class<T> type) {
+        Object value = testData.get(key);
+        if (value == null) {
+            return null;
+        }
+        return type.cast(value);
+    }
+    
+    public void setRuntimeData(String key, Object value) {
+        runtime.put(key, value);
+    }
+    
+    public <T> T getRuntimeData(String key, Class<T> type) {
+        Object value = runtime.get(key);
+        if (value == null) {
+            return null;
+        }
+        return type.cast(value);
+    }
+}
+
+// DataProvider.java
+package com.cssmart.data.provider;
+
+public interface DataProvider {
+    Object[][] getData(String filePath);
+}
+
+// CSSmartTest.java
+package com.cssmart.core.annotations;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.METHOD, ElementType.TYPE})
+public @interface CSSmartTest {
+    String description() default "";
+    String[] tags() default {};
+    String dataProvider() default "";
+    String browser() default "";
+    boolean captureVideo() default false;
+    boolean retryOnFailure() default false;
+    int maxRetries() default 1;
+}
+
+// TestReport.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@Builder
+public class TestReport {
+    private String id;
+    private String name;
+    private String description;
+    private TestStatus status;
+    private long duration;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private List<String> tags;
+    private String browser;
+    private String environment;
+    private String className;
+    private String methodName;
+    private String exception;
+    private String stackTrace;
+    private String screenshot;
+    private List<TestStep> steps;
+    private Map<String, Object> metadata;
+}
+
+// TestStatus.java
+package com.cssmart.reporting.model;
+
+public enum TestStatus {
+    PASSED,
+    FAILED,
+    SKIPPED
+}
+
+// TestStep.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class TestStep {
+    private String description;
+    private String action;
+    private String element;
+    private String value;
+    private TestStatus status;
+    private String screenshot;
+    private String exception;
+    private long duration;
+}
+
+// ExecutionMetrics.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class ExecutionMetrics {
+    private int totalTests;
+    private int passedTests;
+    private int failedTests;
+    private int skippedTests;
+    private double successRate;
+    private long duration;
+    private long avgDuration;
+    private long minDuration;
+    private long maxDuration;
+}
+
+// Insight.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class Insight {
+    private String title;
+    private String description;
+    private InsightType type;
+    private double confidence;
+}
+
+// InsightType.java
+package com.cssmart.reporting.model;
+
+public enum InsightType {
+    PERFORMANCE,
+    RELIABILITY,
+    STABILITY,
+    COVERAGE,
+    IMPROVEMENT
+}
+
+// TrendData.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+public class TrendData {
+    private LocalDateTime date;
+    private int total;
+    private int passed;
+    private int failed;
+    private int skipped;
+    private double successRate;
+    private long avgDuration;
+}
+
+// RecorderMessage.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class RecorderMessage {
+    private String type;
+    private Object data;
+}
+
+// DashboardMetrics.java
+package com.cssmart.ui.dashboard.model;
+
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.model.Insight;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import java.util.List;
+
+@Data
+@AllArgsConstructor
+public class DashboardMetrics {
+    private ExecutionMetrics metrics;
+    private List<Insight> insights;
+}
+
+// ScreenshotManager.java
+package com.cssmart.reporting.util;
+
+import org.openqa.selenium.OutputType;
+import org.openqa.selenium.TakesScreenshot;
+import org.openqa.selenium.WebDriver;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class ScreenshotManager {
+    
+    public static String capture(WebDriver driver) {
+        try {
+            // Create screenshots directory if it doesn't exist
+            Path screenshotsDir = Paths.get("reports/screenshots");
+            if (!Files.exists(screenshotsDir)) {
+                Files.createDirectories(screenshotsDir);
+            }
+            
+            // Generate filename
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String filename = "screenshot_" + timestamp + ".png";
+            Path filepath = screenshotsDir.resolve(filename);
+            
+            // Take screenshot
+            File screenshot = ((TakesScreenshot) driver).getScreenshotAs(OutputType.FILE);
+            Files.copy(screenshot.toPath(), filepath);
+            
+            return "screenshots/" + filename;
+        } catch (IOException e) {
+            log.error("Failed to capture screenshot", e);
+            return null;
+        }
+    }
+}
+
+// StepError.java
+package com.cssmart.bdd.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.util.List;
+
+@Data
+@Builder
+public class StepError {
+    private String message;
+    private String stackTrace;
+    private boolean recoverable;
+    private List<RecoveryAction> recoveryActions;
+    
+    public boolean isRecoverable() {
+        return recoverable && recoveryActions != null && !recoveryActions.isEmpty();
+    }
+}
+
+// RecoveryAction.java
+package com.cssmart.bdd.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.util.function.Consumer;
+
+@Data
+@Builder
+public class RecoveryAction {
+    private String description;
+    private Consumer<Object> action;
+}
+
+// StepDefinitions.java
+package com.cssmart.bdd.steps;
+
+import io.cucumber.java.en.*;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.WebDriver;
+import lombok.extern.slf4j.Slf4j;
+import com.cssmart.core.driver.DriverManager;
+import com.cssmart.core.driver.ElementFinder;
+import com.cssmart.core.base.TestContext;
+
+@Slf4j
+public class StepDefinitions {
+    private final WebDriver driver;
+    private final ElementFinder elementFinder;
+    private final TestContext context;
+    
+    public StepDefinitions() {
+        this.driver = DriverManager.getInstance().getDriver();
+        this.elementFinder = new ElementFinder(driver);
+        this.context = new TestContext();
+    }
+    
+    @Given("I am on {string} page")
+    public void iAmOnPage(String page) {
+        String baseUrl = System.getProperty("base.url", "https://example.com");
+        driver.get(baseUrl + "/" + page);
+        log.info("Navigated to page: {}", page);
+    }
+    
+    @When("I enter {string} in {string}")
+    public void iEnterInField(String text, String field) {
+        WebElement element = elementFinder.findElement(field);
+        element.clear();
+        element.sendKeys(text);
+        log.info("Entered text '{}' in field: {}", text, field);
+    }
+    
+    @When("I click {string}")
+    public void iClick(String element) {
+        WebElement el = elementFinder.findElement(element);
+        el.click();
+        log.info("Clicked on element: {}", element);
+    }
+    
+    @Then("I should see {string}")
+    public void iShouldSee(String text) {
+        boolean isPresent = driver.getPageSource().contains(text);
+        if (!isPresent) {
+            throw new AssertionError("Text not found: " + text);
+        }
+        log.info("Verified text is present: {}", text);
+    }
+    
+    @Then("I should see {string} in {string}")
+    public void iShouldSeeInElement(String text, String element) {
+        WebElement el = elementFinder.findElement(element);
+        boolean isPresent = el.getText().contains(text);
+        if (!isPresent) {
+            throw new AssertionError("Text not found in element: " + text);
+        }
+        log.info("Verified text '{}' is present in element: {}", text, element);
+    }
+}
+
+// APITest.java
+package com.cssmart.examples.api;
+
+import com.cssmart.core.base.CSSmartTestBase;
+import com.cssmart.core.annotations.CSSmartTest;
+import io.restassured.response.Response;
+import io.restassured.http.ContentType;
+import org.testng.annotations.Test;
+import org.testng.Assert;
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
+import java.util.HashMap;
+
+@Slf4j
+public class APITest extends CSSmartTestBase {
+    
+    @Test
+    @CSSmartTest(
+        description = "Get user information API test",
+        tags = {"api", "user", "get"}
+    )
+    public void testGetUserInformation() {
+        log.info("Starting API test: Get User Information");
+        
+        // Setup request
+        String endpoint = "/api/users/1";
+        
+        // Execute request
+        Response response = RestAssuredHelper.get(endpoint)
+            .then()
+            .statusCode(200)
+            .extract()
+            .response();
+        
+        // Validate response
+        Assert.assertTrue(response.jsonPath().getString("username") != null);
+        Assert.assertTrue(response.jsonPath().getString("email") != null);
+        
+        log.info("User information retrieved successfully");
+    }
+    
+    @Test
+    @CSSmartTest(
+        description = "Create new user API test",
+        tags = {"api", "user", "post"}
+    )
+    public void testCreateNewUser() {
+        log.info("Starting API test: Create New User");
+        
+        // Setup request data
+        Map<String, Object> userData = new HashMap<>();
+        userData.put("username", "newuser");
+        userData.put("email", "newuser@example.com");
+        userData.put("password", "Pass123!");
+        
+        // Execute request
+        Response response = RestAssuredHelper.post("/api/users", userData)
+            .then()
+            .statusCode(201)
+            .extract()
+            .response();
+        
+        // Validate response
+        Assert.assertNotNull(response.jsonPath().getInt("id"));
+        
+        log.info("User created successfully with ID: {}", response.jsonPath().getInt("id"));
+    }
+    
+    @Test
+    @CSSmartTest(
+        description = "Delete user API test",
+        tags = {"api", "user", "delete"}
+    )
+    public void testDeleteUser() {
+        log.info("Starting API test: Delete User");
+        
+        // Execute request
+        RestAssuredHelper.delete("/api/users/2")
+            .then()
+            .statusCode(204);
+        
+        log.info("User deleted successfully");
+    }
+}
+
+// RestAssuredHelper.java
+package com.cssmart.examples.api;
+
+import io.restassured.RestAssured;
+import io.restassured.response.Response;
+import io.restassured.specification.RequestSpecification;
+import io.restassured.http.ContentType;
+import com.cssmart.core.config.ConfigurationManager;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class RestAssuredHelper {
+    
+    static {
+        // Initialize base URL from configuration
+        RestAssured.baseURI = ConfigurationManager.getInstance()
+            .getConfig("base.api", String.class);
+    }
+    
+    public static Response get(String endpoint) {
+        log.debug("Executing GET request to: {}", endpoint);
+        return createRequest()
+            .get(endpoint);
+    }
+    
+    public static Response post(String endpoint, Object body) {
+        log.debug("Executing POST request to: {} with body: {}", endpoint, body);
+        return createRequest()
+            .body(body)
+            .post(endpoint);
+    }
+    
+    public static Response put(String endpoint, Object body) {
+        log.debug("Executing PUT request to: {} with body: {}", endpoint, body);
+        return createRequest()
+            .body(body)
+            .put(endpoint);
+    }
+    
+    public static Response delete(String endpoint) {
+        log.debug("Executing DELETE request to: {}", endpoint);
+        return createRequest()
+            .delete(endpoint);
+    }
+    
+    private static RequestSpecification createRequest() {
+        return RestAssured.given()
+            .contentType(ContentType.JSON)
+            .header("Authorization", "Bearer " + getApiKey())
+            .log().ifValidationFails();
+    }
+    
+    private static String getApiKey() {
+        return ConfigurationManager.getInstance()
+            .getConfig("api.key", String.class);
+    }
+}
+
+// WebTest.java
+package com.cssmart.examples.web;
+
+import com.cssmart.core.base.CSSmartTestBase;
+import com.cssmart.core.annotations.CSSmartTest;
+import org.openqa.selenium.WebElement;
+import org.testng.annotations.Test;
+import org.testng.Assert;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class WebTest extends CSSmartTestBase {
+    
+    @Test
+    @CSSmartTest(
+        description = "Login with valid credentials test",
+        tags = {"web", "login"},
+        browser = "chrome"
+    )
+    public void testLoginWithValidCredentials() {
+        log.info("Starting web test: Login with valid credentials");
+        
+        // Navigate to login page
+        driver.get(context.getTestData("baseUrl", String.class) + "/login");
+        
+        // Enter username
+        WebElement usernameField = elementFinder.findElement("username field");
+        usernameField.clear();
+        usernameField.sendKeys("testuser");
+        
+        // Enter password
+        WebElement passwordField = elementFinder.findElement("password field");
+        passwordField.clear();
+        passwordField.sendKeys("password123");
+        
+        // Click login button
+        WebElement loginButton = elementFinder.findElement("login button");
+        loginButton.click();
+        
+        // Verify successful login
+        WebElement welcomeMessage = elementFinder.findElement("welcome message");
+        Assert.assertTrue(welcomeMessage.getText().contains("Welcome, Test User"));
+        
+        log.info("Login successful");
+    }
+    
+    @Test
+    @CSSmartTest(
+        description = "Search for products test",
+        tags = {"web", "search"},
+        browser = "chrome"
+    )
+    public void testSearchForProducts() {
+        log.info("Starting web test: Search for products");
+        
+        // Navigate to home page
+        driver.get(context.getTestData("baseUrl", String.class) + "/home");
+        
+        // Enter search term
+        WebElement searchBox = elementFinder.findElement("search box");
+        searchBox.clear();
+        searchBox.sendKeys("smartphone");
+        
+        // Click search button
+        WebElement searchButton = elementFinder.findElement("search button");
+        searchButton.click();
+        
+        // Verify search results
+        WebElement searchResults = elementFinder.findElement("search results");
+        Assert.assertTrue(searchResults.getText().contains("Search Results"));
+        
+        WebElement productCount = elementFinder.findElement("product count");
+        Assert.assertTrue(productCount.getText().contains("10 products found"));
+        
+        log.info("Search successful");
+    }
+    
+    @Test
+    @CSSmartTest(
+        description = "Add product to cart test",
+        tags = {"web", "cart"},
+        browser = "chrome"
+    )
+    public void testAddProductToCart() {
+        log.info("Starting web test: Add product to cart");
+        
+        // Navigate to product page
+        driver.get(context.getTestData("baseUrl", String.class)
+
+// WebTest.java (continued)
+package com.cssmart.examples.web;
+
+import com.cssmart.core.base.CSSmartTestBase;
+import com.cssmart.core.annotations.CSSmartTest;
+import org.openqa.selenium.WebElement;
+import org.testng.annotations.Test;
+import org.testng.Assert;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class WebTest extends CSSmartTestBase {
+    
+    // Previous test methods...
+    
+    @Test
+    @CSSmartTest(
+        description = "Add product to cart test",
+        tags = {"web", "cart"},
+        browser = "chrome"
+    )
+    public void testAddProductToCart() {
+        log.info("Starting web test: Add product to cart");
+        
+        // Navigate to product page
+        driver.get(context.getTestData("baseUrl", String.class) + "/product/123");
+        
+        // Click add to cart button
+        WebElement addToCartButton = elementFinder.findElement("add to cart button");
+        addToCartButton.click();
+        
+        // Verify product added message
+        WebElement confirmationMessage = elementFinder.findElement("confirmation message");
+        Assert.assertTrue(confirmationMessage.getText().contains("Product added to cart"));
+        
+        // Verify cart count
+        WebElement cartIcon = elementFinder.findElement("cart icon");
+        Assert.assertTrue(cartIcon.getText().contains("1 item"));
+        
+        log.info("Product added to cart successfully");
+    }
+}
+
+// MobileTest.java
+package com.cssmart.examples.mobile;
+
+import com.cssmart.core.base.CSSmartTestBase;
+import com.cssmart.core.annotations.CSSmartTest;
+import org.openqa.selenium.WebElement;
+import org.testng.annotations.Test;
+import org.testng.Assert;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class MobileTest extends CSSmartTestBase {
+    
+    @Test
+    @CSSmartTest(
+        description = "Mobile login test",
+        tags = {"mobile", "login"},
+        browser = "android"
+    )
+    public void testMobileLogin() {
+        log.info("Starting mobile test: Login");
+        
+        // Click on login button
+        WebElement loginButton = elementFinder.findElement("login button");
+        loginButton.click();
+        
+        // Enter username
+        WebElement usernameField = elementFinder.findElement("username field");
+        usernameField.sendKeys("mobileuser");
+        
+        // Enter password
+        WebElement passwordField = elementFinder.findElement("password field");
+        passwordField.sendKeys("mobilepass");
+        
+        // Click submit
+        WebElement submitButton = elementFinder.findElement("submit button");
+        submitButton.click();
+        
+        // Verify login success
+        WebElement dashboardTitle = elementFinder.findElement("dashboard title");
+        Assert.assertEquals(dashboardTitle.getText(), "Mobile Dashboard");
+        
+        log.info("Mobile login successful");
+    }
+    
+    @Test
+    @CSSmartTest(
+        description = "Mobile notification test",
+        tags = {"mobile", "notification"},
+        browser = "android"
+    )
+    public void testMobileNotifications() {
+        log.info("Starting mobile test: Notifications");
+        
+        // Navigate to notifications screen
+        WebElement menuButton = elementFinder.findElement("menu button");
+        menuButton.click();
+        
+        WebElement notificationsOption = elementFinder.findElement("notifications option");
+        notificationsOption.click();
+        
+        // Verify notifications screen
+        WebElement notificationsTitle = elementFinder.findElement("notifications title");
+        Assert.assertEquals(notificationsTitle.getText(), "Notifications");
+        
+        // Enable notifications
+        WebElement enableToggle = elementFinder.findElement("enable notifications toggle");
+        enableToggle.click();
+        
+        // Verify success message
+        WebElement successMessage = elementFinder.findElement("success message");
+        Assert.assertTrue(successMessage.getText().contains("Notifications enabled"));
+        
+        log.info("Mobile notifications test successful");
+    }
+}
+
+// BDD Tests - Example Runner and Steps
+
+// LoginTest.java (BDD Style)
+package com.cssmart.examples.bdd;
+
+import io.cucumber.testng.AbstractTestNGCucumberTests;
+import io.cucumber.testng.CucumberOptions;
+import org.testng.annotations.DataProvider;
+
+@CucumberOptions(
+    features = "features/web/login.feature",
+    glue = "com.cssmart.bdd.steps",
+    plugin = {
+        "pretty",
+        "html:reports/cucumber-reports/login",
+        "json:reports/cucumber-json/login.json"
+    },
+    monochrome = true
+)
+public class LoginTest extends AbstractTestNGCucumberTests {
+    
+    @Override
+    @DataProvider(parallel = true)
+    public Object[][] scenarios() {
+        return super.scenarios();
+    }
+}
+
+// SearchTest.java (BDD Style)
+package com.cssmart.examples.bdd;
+
+import io.cucumber.testng.AbstractTestNGCucumberTests;
+import io.cucumber.testng.CucumberOptions;
+import org.testng.annotations.DataProvider;
+
+@CucumberOptions(
+    features = "features/web/search.feature",
+    glue = "com.cssmart.bdd.steps",
+    plugin = {
+        "pretty",
+        "html:reports/cucumber-reports/search",
+        "json:reports/cucumber-json/search.json"
+    },
+    monochrome = true
+)
+public class SearchTest extends AbstractTestNGCucumberTests {
+    
+    @Override
+    @DataProvider(parallel = true)
+    public Object[][] scenarios() {
+        return super.scenarios();
+    }
+}
+
+// ApiTest.java (BDD Style)
+package com.cssmart.examples.bdd;
+
+import io.cucumber.testng.AbstractTestNGCucumberTests;
+import io.cucumber.testng.CucumberOptions;
+import org.testng.annotations.DataProvider;
+
+@CucumberOptions(
+    features = "features/api/api_test.feature",
+    glue = {
+        "com.cssmart.bdd.steps",
+        "com.cssmart.examples.bdd.steps"
+    },
+    plugin = {
+        "pretty",
+        "html:reports/cucumber-reports/api",
+        "json:reports/cucumber-json/api.json"
+    },
+    monochrome = true
+)
+public class ApiTest extends AbstractTestNGCucumberTests {
+    
+    @Override
+    @DataProvider(parallel = true)
+    public Object[][] scenarios() {
+        return super.scenarios();
+    }
+}
+
+// Custom Step Definitions for API tests
+package com.cssmart.examples.bdd.steps;
+
+import io.cucumber.java.en.*;
+import io.restassured.response.Response;
+import com.cssmart.examples.api.RestAssuredHelper;
+import org.testng.Assert;
+import lombok.extern.slf4j.Slf4j;
+import java.util.Map;
+import java.util.HashMap;
+import io.cucumber.datatable.DataTable;
+
+@Slf4j
+public class ApiStepDefinitions {
+    
+    private String apiKey;
+    private Response response;
+    private Map<String, Object> userData = new HashMap<>();
+    
+    @Given("I have a valid API key")
+    public void iHaveAValidApiKey() {
+        apiKey = System.getProperty("api.key", "test-api-key");
+        log.info("Using API key: {}", apiKey);
+    }
+    
+    @When("I send GET request to {string}")
+    public void iSendGetRequestTo(String endpoint) {
+        log.info("Sending GET request to: {}", endpoint);
+        response = RestAssuredHelper.get(endpoint);
+    }
+    
+    @When("I send POST request to {string} with user data")
+    public void iSendPostRequestWithUserData(String endpoint) {
+        log.info("Sending POST request to: {} with data: {}", endpoint, userData);
+        response = RestAssuredHelper.post(endpoint, userData);
+    }
+    
+    @When("I send DELETE request to {string}")
+    public void iSendDeleteRequestTo(String endpoint) {
+        log.info("Sending DELETE request to: {}", endpoint);
+        response = RestAssuredHelper.delete(endpoint);
+    }
+    
+    @Then("the response status code should be {int}")
+    public void theResponseStatusCodeShouldBe(int expectedStatusCode) {
+        int actualStatusCode = response.getStatusCode();
+        log.info("Response status code: {}", actualStatusCode);
+        Assert.assertEquals(actualStatusCode, expectedStatusCode, 
+            "Expected status code " + expectedStatusCode + " but got " + actualStatusCode);
+    }
+    
+    @Then("the response should contain {string}")
+    public void theResponseShouldContain(String field) {
+        Assert.assertNotNull(response.jsonPath().get(field), 
+            "Response does not contain field: " + field);
+        log.info("Response contains field: {}", field);
+    }
+    
+    @Given("I have user data")
+    public void iHaveUserData(DataTable dataTable) {
+        // Get the first row (excluding header)
+        Map<String, String> data = dataTable.asMaps().get(0);
+        
+        // Convert to user data
+        userData.put("username", data.get("username"));
+        userData.put("email", data.get("email"));
+        userData.put("password", data.get("password"));
+        
+        log.info("User data prepared: {}", userData);
+    }
+}
+
+// Example BDD Feature file
+// features/web/login.feature
+/*
+Feature: Login Functionality
+
+  Scenario: Login with valid credentials
+    Given I am on "login" page
+    When I enter "testuser" in "username field"
+    And I enter "password123" in "password field"
+    And I click "login button"
+    Then I should see "Welcome, Test User"
+
+  Scenario: Login with invalid credentials
+    Given I am on "login" page
+    When I enter "invaliduser" in "username field"
+    And I enter "wrongpassword" in "password field"
+    And I click "login button"
+    Then I should see "Invalid credentials"
+*/
+
+// Example BDD Feature file
+// features/web/search.feature
+/*
+Feature: Product Search
+
+  Scenario: Search for existing products
+    Given I am on "home" page
+    When I enter "smartphone" in "search box"
+    And I click "search button"
+    Then I should see "Search Results"
+    And I should see "10 products found"
+
+  Scenario: Search for non-existing products
+    Given I am on "home" page
+    When I enter "nonexistentproduct" in "search box"
+    And I click "search button"
+    Then I should see "No products found"
+*/
+
