@@ -1,0 +1,1484 @@
+# SmartTest Framework Project Structure
+
+```plaintext
+smart-test-framework/
+│
+├── pom.xml                            # Maven configuration
+│
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/
+│   │   │       └── smarttest/
+│   │   │           ├── ai/            # AI components
+│   │   │           │   ├── engine/
+│   │   │           │   │   ├── AIEngine.java
+│   │   │           │   │   ├── ElementPredictor.java
+│   │   │           │   │   └── ActionGenerator.java
+│   │   │           │   ├── patterns/
+│   │   │           │   │   ├── PatternRecognizer.java
+│   │   │           │   │   └── BehaviorAnalyzer.java
+│   │   │           │   └── codegen/
+│   │   │           │       ├── TestGenerator.java
+│   │   │           │       └── CodeBuilder.java
+│   │   │           │
+│   │   │           ├── core/          # Core framework components
+│   │   │           │   ├── config/
+│   │   │           │   │   ├── ConfigurationManager.java
+│   │   │           │   │   └── EnvironmentManager.java
+│   │   │           │   ├── driver/
+│   │   │           │   │   ├── DriverManager.java
+│   │   │           │   │   └── BrowserManager.java
+│   │   │           │   └── base/
+│   │   │           │       ├── SmartTestBase.java
+│   │   │           │       └── BaseTest.java
+│   │   │           │
+│   │   │           ├── bdd/           # BDD components
+│   │   │           │   ├── steps/
+│   │   │           │   │   ├── StepDefinitions.java
+│   │   │           │   │   └── StepHandler.java
+│   │   │           │   └── runner/
+│   │   │           │       └── TestRunner.java
+│   │   │           │
+│   │   │           ├── data/          # Data handling
+│   │   │           │   ├── provider/
+│   │   │           │   │   ├── ExcelDataProvider.java
+│   │   │           │   │   ├── CSVDataProvider.java
+│   │   │           │   │   └── JSONDataProvider.java
+│   │   │           │   └── handler/
+│   │   │           │       └── DataHandler.java
+│   │   │           │
+│   │   │           ├── reporting/     # Reporting
+│   │   │           │   ├── ReportManager.java
+│   │   │           │   └── HTMLReporter.java
+│   │   │           │
+│   │   │           └── ui/            # UI Components
+│   │   │               ├── dashboard/
+│   │   │               │   └── DashboardServer.java
+│   │   │               └── recorder/
+│   │   │                   └── TestRecorder.java
+│   │   │
+│   │   ├── resources/
+│   │   │   ├── config/               # Configuration files
+│   │   │   │   ├── default.yaml
+│   │   │   │   └── environments/
+│   │   │   │       ├── qa.yaml
+│   │   │   │       └── staging.yaml
+│   │   │   │
+│   │   │   ├── templates/           # Report templates
+│   │   │   │   ├── html/
+│   │   │   │   └── pdf/
+│   │   │   │
+│   │   │   └── webdriver/           # WebDriver binaries
+│   │   │
+│   │   └── webapp/                  # UI Application
+│   │       ├── package.json
+│   │       └── src/
+│   │           └── components/
+│   │               ├── TestBuilder.jsx
+│   │               └── Dashboard.jsx
+│   │
+│   └── test/                        # Test examples
+│       └── java/
+│           └── com/
+│               └── smarttest/
+│                   └── examples/
+│                       ├── api/
+│                       │   └── APITest.java
+│                       ├── web/
+│                       │   └── WebTest.java
+│                       └── mobile/
+│                           └── MobileTest.java
+│
+├── features/                        # BDD Feature files
+│   ├── api/
+│   │   └── api_test.feature
+│   └── web/
+│       └── web_test.feature
+│
+├── test-data/                      # Test Data
+│   ├── excel/
+│   │   └── test_data.xlsx
+│   ├── csv/
+│   │   └── users.csv
+│   └── json/
+│       └── api_data.json
+│
+├── config/                         # Configuration
+│   ├── test-config.yaml
+│   └── environment-config.yaml
+│
+└── reports/                        # Test Reports
+    └── html/
+```
+
+## Setup Instructions
+
+1. **Create Base Project Structure**
+```bash
+mkdir smart-test-framework
+cd smart-test-framework
+mkdir -p src/main/java/com/smarttest
+mkdir -p src/main/resources
+mkdir -p src/test/java/com/smarttest/examples
+mkdir -p features/{api,web}
+mkdir -p test-data/{excel,csv,json}
+mkdir -p config
+mkdir -p reports/html
+```
+
+2. **Configure Maven (pom.xml)**
+```xml
+<project>
+    <groupId>com.smarttest</groupId>
+    <artifactId>smart-test-framework</artifactId>
+    <version>1.0.0</version>
+    <!-- Add dependencies -->
+</project>
+```
+
+3. **Create Base Configuration (config/test-config.yaml)**
+```yaml
+framework:
+  name: SmartTest
+  mode: zero-code
+  
+execution:
+  parallel: true
+  threads: 5
+```
+
+4. **Create First Feature File (features/web/login.feature)**
+```gherkin
+Feature: Login Functionality
+  Scenario: Valid Login
+    Given I am on login page
+    When I enter credentials
+    Then I should be logged in
+```
+
+5. **File Organization**
+
+Core Framework Files:
+- Put all AI components in `src/main/java/com/smarttest/ai/`
+- Core framework files go in `src/main/java/com/smarttest/core/`
+- BDD components go in `src/main/java/com/smarttest/bdd/`
+- Data handlers go in `src/main/java/com/smarttest/data/`
+
+Test Files:
+- Feature files go in `features/` directory
+- Test data files go in `test-data/` directory
+- Configuration files go in `config/` directory
+
+UI Components:
+- React components go in `src/main/webapp/src/components/`
+- UI configurations go in `src/main/webapp/config/`
+
+## Usage
+
+1. **Clone Repository**
+```bash
+git clone <your-repo>
+cd smart-test-framework
+```
+
+2. **Install Dependencies**
+```bash
+mvn install
+cd src/main/webapp
+npm install
+```
+
+3. **Run Framework**
+```bash
+# Start framework
+mvn spring-boot:run
+
+# Start UI
+cd src/main/webapp
+npm start
+```
+
+4. **Write Tests**
+- Add feature files in `features/` directory
+- Add test data in `test-data/` directory
+- Configure environments in `config/` directory
+
+5. **Run Tests**
+```bash
+mvn test
+```
+
+Test Generator UI
+-------------------
+------------------
+
+Test Generator UI for recording tests:
+
+Starting the Test Generator
+
+bash# Start the framework UI
+smarttest ui start
+
+# Open in browser
+http://localhost:3000
+
+Recording Process
+
+a. Select Test Type:
+
+Choose between Web UI, API, or Mobile testing
+For API testing, you'll see the API Request Builder
+For Web UI, you'll see the element inspector
+
+b. Start Recording:
+
+Click "Start Recording" button
+For Web UI: The framework will start capturing all interactions
+For API: All API requests will be captured
+For Mobile: Device interactions will be recorded
+
+c. Recording Features:
+
+Smart element detection
+Automatic wait handling
+Suggested validations
+Data parameter detection
+Step optimization
+
+
+Using API Test Builder
+
+The UI provides:
+
+Method selection (GET, POST, PUT, DELETE)
+URL builder with environment variables
+Header management
+Request body editor with JSON validation
+Response validation builder
+Schema generator
+
+Example workflow:
+yaml1. Select POST method
+2. Enter endpoint: /api/users
+3. Add headers:
+   - Content-Type: application/json
+4. Enter request body:
+   {
+     "name": "Test User",
+     "email": "test@example.com"
+   }
+5. Add validations:
+   - Status code: 201
+   - Response contains: id
+6. Generate test scenario
+
+Generating Test Cases
+
+The framework will generate BDD scenarios like:
+gherkinFeature: API Testing
+
+  @api @generated
+  Scenario: Create new user
+    Given I set POST request to "/api/users"
+    And I set request headers:
+      | Content-Type | application/json |
+    And I set request body:
+    """json
+    {
+      "name": "Test User",
+      "email": "test@example.com"
+    }
+    """
+    When I send the request
+    Then response status should be 201
+    And response should contain "id"
+
+
+# API Automation Examples
+
+## 1. API Test Configuration (config/api-config.yaml)
+```yaml
+api:
+  base-url: https://api.example.com
+  version: v1
+  timeout: 30
+  authentication:
+    type: Bearer
+    token: ${env.API_TOKEN}
+  headers:
+    Content-Type: application/json
+    Accept: application/json
+
+environments:
+  qa:
+    base-url: https://api-qa.example.com
+    auth-url: https://auth-qa.example.com
+  staging:
+    base-url: https://api-staging.example.com
+    auth-url: https://auth-staging.example.com
+```
+
+## 2. API Test Scenarios
+
+### Basic CRUD Operations
+```gherkin
+Feature: User API Tests
+
+  Background: 
+    Given I have base url "https://api.example.com"
+    And I set bearer token from "${env.API_TOKEN}"
+
+  @api @create
+  Scenario: Create new user
+    When I send POST request to "/api/users":
+    """json
+    {
+      "name": "${data.user.name}",
+      "email": "${data.user.email}",
+      "role": "user"
+    }
+    """
+    Then response status should be 201
+    And response should have fields:
+      | Field  | Type    | Mandatory |
+      | id     | string  | yes       |
+      | name   | string  | yes       |
+      | email  | string  | yes       |
+    And response time should be less than 1000ms
+
+  @api @get
+  Scenario: Get user details
+    Given a user exists with id "${data.user.id}"
+    When I send GET request to "/api/users/${data.user.id}"
+    Then response status should be 200
+    And response should match schema "schemas/user.json"
+```
+
+### Complex API Scenarios
+```gherkin
+Feature: Order Processing API
+
+  @api @order
+  Scenario: Complete order flow
+    # Create customer
+    Given I create a customer with data:
+    """json
+    {
+      "name": "Test Customer",
+      "email": "test@example.com"
+    }
+    """
+    
+    # Create order
+    When I send POST request to "/api/orders":
+    """json
+    {
+      "customerId": "${response.id}",
+      "items": ${data.order.items},
+      "shipping": {
+        "address": "${data.shipping.address}",
+        "method": "express"
+      }
+    }
+    """
+    Then response status should be 201
+    And I store order id as "orderId"
+    
+    # Process payment
+    When I send POST request to "/api/payments":
+    """json
+    {
+      "orderId": "${orderId}",
+      "method": "credit_card",
+      "details": ${data.payment.card}
+    }
+    """
+    Then response status should be 200
+    And response should contain "payment_status" as "success"
+    
+    # Verify order status
+    When I send GET request to "/api/orders/${orderId}"
+    Then response status should be 200
+    And response should contain "status" as "paid"
+```
+
+### API Authentication
+```gherkin
+Feature: API Authentication
+
+  @api @auth
+  Scenario: OAuth2 authentication flow
+    # Get auth token
+    When I send POST request to "${auth.url}/oauth/token":
+    """json
+    {
+      "grant_type": "client_credentials",
+      "client_id": "${auth.client_id}",
+      "client_secret": "${auth.client_secret}"
+    }
+    """
+    Then response status should be 200
+    And I store "access_token" from response
+    
+    # Use token in subsequent requests
+    When I set bearer token from stored "access_token"
+    And I send GET request to "/api/secure-endpoint"
+    Then response status should be 200
+```
+
+### API Data Validation
+```gherkin
+Feature: API Data Validation
+
+  @api @validation
+  Scenario: Validate response data types
+    When I send GET request to "/api/products"
+    Then response status should be 200
+    And response should validate:
+      | Field         | Type    | Validation          |
+      | id           | string  | not empty           |
+      | price        | number  | greater than 0      |
+      | created_date | date    | valid ISO format    |
+      | categories   | array   | not empty           |
+      | active       | boolean | should be true      |
+
+  @api @schema
+  Scenario: Schema validation
+    When I send GET request to "/api/users"
+    Then response should match schema:
+    """json
+    {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "email"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "email": { "type": "string", "format": "email" }
+        }
+      }
+    }
+    """
+```
+
+### Performance Testing
+```gherkin
+Feature: API Performance
+
+  @api @performance
+  Scenario: API response time validation
+    Given I set concurrent users to 10
+    When I send GET request to "/api/products" for 1 minute
+    Then all responses should:
+      | Metric           | Threshold |
+      | response_time    | < 500ms   |
+      | success_rate     | > 99%     |
+      | error_rate       | < 1%      |
+```
+
+## 3. Using Test Generator UI
+
+1. **Launch Test Generator**
+```bash
+smarttest ui start
+```
+
+2. **Record API Tests**
+```gherkin
+# The UI will show:
+- API Request Builder
+- Response Validator
+- Schema Generator
+- Test Scenario Generator
+```
+
+3. **Steps to Record API Test:**
+   - Open Test Generator UI (http://localhost:3000)
+   - Click "New API Test"
+   - Select HTTP Method (GET, POST, etc.)
+   - Enter endpoint URL
+   - Add headers and parameters
+   - Add request body (if needed)
+   - Click "Send Request"
+   - Verify response
+   - Click "Generate Test"
+   - Save generated test to feature file
+
+4. **Using Test Generator UI**
+```yaml
+# Available Features:
+- Request Builder
+  - Method selection
+  - URL builder
+  - Header management
+  - Query parameter builder
+  - Request body editor
+  - Authentication setup
+
+- Response Validator
+  - Status code validation
+  - Header validation
+  - Body validation
+  - Schema validation
+  - Response time validation
+
+- Test Generator
+  - Scenario generation
+  - Step generation
+  - Data extraction
+  - Validation generation
+  - Schema generation
+```
+
+5. **Example UI Flow**
+```
+1. Start Recording:
+   - Click "Start Recording"
+   - All API calls will be captured
+
+2. Make API Requests:
+   - Use built-in request builder
+   - Or capture from browser/postman
+
+3. Add Validations:
+   - Select elements to validate
+   - Add custom validations
+   - Generate schema validations
+
+4. Generate Test:
+   - Click "Generate Test"
+   - Review generated scenario
+   - Modify if needed
+   - Save to feature file
+```
+
+
+# BDD Test Examples
+
+## 1. Login Feature
+```gherkin
+Feature: User Authentication
+
+  @smoke
+  Scenario: Login with valid credentials
+    Given I am on the login page
+    When I enter username as "${data.users.admin.username}"
+    And I enter password as "${data.users.admin.password}"
+    And I click the login button
+    Then I should be logged in successfully
+    And I should see "Welcome back" message
+
+  @regression
+  Scenario Outline: Login with invalid credentials
+    Given I am on the login page
+    When I enter username as "<username>"
+    And I enter password as "<password>"
+    Then I should see error message "<message>"
+
+    Examples: ${data.users.invalid}
+```
+
+## 2. Shopping Cart Feature
+```gherkin
+Feature: Shopping Cart
+
+  Background:
+    Given I am logged in as "${data.users.customer}"
+    And I am on the products page
+
+  @smoke
+  Scenario: Add product to cart
+    When I search for "${data.products.laptop.name}"
+    And I add the product to cart
+    Then cart count should be "1"
+    And cart total should be "${data.products.laptop.price}"
+
+  @regression
+  Scenario: Update cart quantity
+    Given I have "${data.products.laptop.name}" in cart
+    When I update quantity to "2"
+    Then cart total should be updated
+    And I should see the correct subtotal
+```
+
+## 3. Product Search Feature
+```gherkin
+Feature: Product Search and Filters
+
+  @regression
+  Scenario: Search with filters
+    Given I am on the search page
+    When I search for "laptop"
+    And I filter by:
+      | Category | Electronics |
+      | Price    | 500-1000   |
+      | Brand    | ${data.brands.premium} |
+    Then I should see filtered results
+    And results should match selected filters
+
+  @datadriven
+  Scenario: Bulk product search
+    Given I am on the search page
+    When I search products from "${data.products.search_terms}"
+    Then all searches should return results
+```
+
+## 4. Checkout Feature
+```gherkin
+Feature: Checkout Process
+
+  Background:
+    Given I am logged in as "${data.users.customer}"
+    And I have items in cart
+
+  @smoke
+  Scenario: Complete checkout with saved address
+    When I proceed to checkout
+    And I select saved address
+    And I select payment method as "Credit Card"
+    And I confirm order
+    Then order should be placed successfully
+    And I should receive order confirmation email
+
+  @api
+  Scenario: Verify order in system
+    When I place order through API
+    Then order should be created in system
+    And inventory should be updated
+    And customer should be notified
+```
+
+## 5. API Testing Feature
+```gherkin
+Feature: API Endpoints
+
+  @api
+  Scenario: Create new user
+    When I send POST request to "/api/users":
+      """
+      {
+        "username": "${data.users.new.username}",
+        "email": "${data.users.new.email}"
+      }
+      """
+    Then response status should be 201
+    And response should contain user ID
+    And user should be created in database
+```
+
+## Configuration Files
+
+### 1. Test Data (test-data/regression.json)
+```json
+{
+  "users": {
+    "admin": {
+      "username": "admin",
+      "password": "admin123"
+    },
+    "customer": {
+      "username": "customer",
+      "password": "cust123"
+    },
+    "invalid": [
+      {
+        "username": "invalid",
+        "password": "wrong",
+        "message": "Invalid credentials"
+      },
+      {
+        "username": "locked",
+        "password": "pass123",
+        "message": "Account is locked"
+      }
+    ]
+  },
+  "products": {
+    "laptop": {
+      "name": "ThinkPad X1",
+      "price": "999.99",
+      "category": "Electronics"
+    },
+    "search_terms": "test-data/search-terms.csv"
+  }
+}
+```
+
+### 2. Environment Configuration (config/env.yaml)
+```yaml
+environments:
+  qa:
+    base-url: https://qa.example.com
+    api-url: https://api.qa.example.com
+    database:
+      host: qa-db.example.com
+      name: qa_db
+
+  staging:
+    base-url: https://staging.example.com
+    api-url: https://api.staging.example.com
+    database:
+      host: staging-db.example.com
+      name: staging_db
+
+execution:
+  default-timeout: 30
+  retry-count: 3
+  screenshot-on-failure: true
+  video-recording: false
+
+reporting:
+  format: html
+  include-screenshots: true
+  include-logs: true
+```
+
+## Running Tests
+
+1. **Run All Features**
+```bash
+smarttest run features/
+```
+
+2. **Run Specific Feature**
+```bash
+smarttest run features/login/login.feature
+```
+
+3. **Run with Tags**
+```bash
+smarttest run --tags @smoke,@regression
+```
+
+4. **Run with Environment**
+```bash
+smarttest run --env staging features/
+```
+
+5. **Run with Data Set**
+```bash
+smarttest run --data-set regression features/
+```
+
+## Key Points
+
+1. No code needed - just write scenarios in Gherkin
+2. AI handles element detection and actions
+3. Smart data substitution from configured sources
+4. Automatic validation generation
+5. Self-healing element detection
+6. Comprehensive reporting
+7. Environment-specific configuration
+8. Data-driven testing support
+9. API testing integration
+10. Database validation support
+
+# Complete BDD Testing Guide
+
+## 1. Project Setup
+
+### Directory Structure
+```
+my-test-project/
+├── features/                   # Feature files
+├── test-data/                 # Test data files
+│   ├── excel/
+│   ├── csv/
+│   └── json/
+├── config/                    # Configuration files
+└── reports/                   # Test reports
+```
+
+### Initial Configuration (config/test-config.yaml)
+```yaml
+framework:
+  name: "MyTestProject"
+  environment: "qa"
+  browser: "chrome"
+
+execution:
+  parallel: true
+  threads: 5
+  retry:
+    enabled: true
+    max-attempts: 3
+
+reporting:
+  format: "html"
+  screenshots: true
+  video: false
+
+data:
+  sources:
+    - name: "users"
+      type: "excel"
+      path: "test-data/excel/users.xlsx"
+      sheet: "TestUsers"
+    - name: "products"
+      type: "csv"
+      path: "test-data/csv/products.csv"
+    - name: "api-data"
+      type: "json"
+      path: "test-data/json/api-test-data.json"
+```
+
+## 2. Data-Driven Testing Examples
+
+### Example 1: Using Excel Data
+```gherkin
+Feature: User Management
+
+  # Excel file: test-data/excel/users.xlsx
+  # Sheet: TestUsers
+  # Columns: username, password, role, expected_message
+  
+  @excel-data
+  Scenario Outline: Verify user login for different roles
+    Given I am on the login page
+    When I enter username as "${username}"
+    And I enter password as "${password}"
+    And I click login button
+    Then I should be logged in as "${role}"
+    And I should see "${expected_message}"
+
+    Examples: ${excel.TestUsers}
+```
+
+### Example 2: Using CSV Data
+```gherkin
+Feature: Product Search
+
+  # CSV file: test-data/csv/products.csv
+  # Columns: product_name,category,price,stock_status
+  
+  @csv-data
+  Scenario: Verify product details
+    Given I am on the products page
+    When I search for products from data:
+      | data-source | products.csv |
+      | filter      | category=Electronics |
+    Then each product should display:
+      | Name   | ${product_name}   |
+      | Price  | ${price}          |
+      | Status | ${stock_status}   |
+```
+
+### Example 3: Using JSON Data
+```gherkin
+Feature: API Testing
+
+  # JSON file: test-data/json/api-test-data.json
+  @json-data
+  Scenario: Create new orders
+    Given I have the API endpoint
+    When I create orders using data "${json.orders}"
+    Then each order should be created successfully
+    And order details should match input data
+```
+
+## 3. Different Types of Tests
+
+### Web UI Testing
+```gherkin
+Feature: Shopping Cart
+
+  @ui
+  Scenario: Add multiple items to cart
+    Given I am logged in as customer
+    When I add following items to cart:
+      | Product      | Quantity |
+      | Laptop X1    | 2        |
+      | Mouse Pro    | 1        |
+    Then cart should show 3 items
+    And total price should be calculated correctly
+```
+
+### API Testing
+```gherkin
+Feature: REST API Tests
+
+  @api
+  Scenario: CRUD Operations
+    Given I have the following API endpoints:
+      | Operation | Endpoint     |
+      | CREATE    | /api/users   |
+      | READ      | /api/users/  |
+      | UPDATE    | /api/users/  |
+      | DELETE    | /api/users/  |
+    
+    When I create user with data:
+      """json
+      {
+        "name": "Test User",
+        "email": "test@example.com"
+      }
+      """
+    Then response status should be 201
+    And user should be created in database
+```
+
+### Database Testing
+```gherkin
+Feature: Database Verification
+
+  @db
+  Scenario: Verify database records
+    Given I connect to "customer_db"
+    When I execute query:
+      """sql
+      SELECT * FROM orders 
+      WHERE customer_id = '${data.customer.id}'
+      """
+    Then result should have "${data.expected_orders}" rows
+    And "order_total" column should match calculated total
+```
+
+### Mobile Testing
+```gherkin
+Feature: Mobile App Testing
+
+  @mobile
+  Scenario: Mobile login verification
+    Given I launch the mobile app
+    When I tap on "Login" button
+    And I enter following details:
+      | Username | ${data.mobile.user} |
+      | Password | ${data.mobile.pass} |
+    Then I should see the dashboard
+```
+
+## 4. Advanced Features
+
+### Visual Testing
+```gherkin
+Feature: Visual Regression
+
+  @visual
+  Scenario: Check page layout
+    Given I am on the homepage
+    When I capture page screenshot
+    Then it should match baseline with tolerance "2%"
+    And following elements should match baseline:
+      | Header    |
+      | Menu      |
+      | Footer    |
+```
+
+### Performance Testing
+```gherkin
+Feature: Performance Checks
+
+  @performance
+  Scenario: Page load performance
+    Given I clear browser cache
+    When I load the homepage
+    Then page should load within 3 seconds
+    And API response time should be less than 1 second
+```
+
+### Accessibility Testing
+```gherkin
+Feature: Accessibility
+
+  @a11y
+  Scenario: WCAG compliance check
+    Given I am on the homepage
+    When I run accessibility scan
+    Then there should be no violations
+    And page should meet "WCAG2.1 AA" standards
+```
+
+## 5. First Test Setup Guide
+
+1. **Create Project Structure**
+```bash
+mkdir my-test-project
+cd my-test-project
+mkdir -p features test-data/excel test-data/csv test-data/json config reports
+```
+
+2. **Create Configuration (config/test-config.yaml)**
+```yaml
+framework:
+  name: "FirstTest"
+  browser: "chrome"
+  base-url: "https://example.com"
+
+execution:
+  parallel: false
+  retry:
+    enabled: true
+    max-attempts: 2
+
+reporting:
+  format: "html"
+  screenshots: true
+```
+
+3. **Create Test Data (test-data/excel/users.xlsx)**
+Create an Excel file with test users:
+| username | password | role    | expected_message |
+|----------|----------|---------|------------------|
+| admin    | pass123  | Admin   | Welcome Admin    |
+| user     | pass123  | User    | Welcome User     |
+
+4. **Create First Feature (features/login.feature)**
+```gherkin
+Feature: Login Functionality
+
+  @first-test
+  Scenario Outline: Verify login for different users
+    Given I am on the login page
+    When I enter username as "${username}"
+    And I enter password as "${password}"
+    And I click login button
+    Then I should be logged in as "${role}"
+    And I should see message "${expected_message}"
+
+    Examples: ${excel.users}
+```
+
+5. **Run the Test**
+```bash
+# Run single feature
+smarttest run features/login.feature
+
+# Run with specific configuration
+smarttest run --config config/test-config.yaml features/login.feature
+
+# Run with environment
+smarttest run --env qa features/login.feature
+```
+
+## 6. Advanced Configuration Examples
+
+### Multi-Environment Setup
+```yaml
+environments:
+  qa:
+    base-url: "https://qa.example.com"
+    db:
+      host: "qa-db.example.com"
+      name: "qa_db"
+    api:
+      url: "https://api.qa.example.com"
+      timeout: 30
+
+  staging:
+    base-url: "https://staging.example.com"
+    db:
+      host: "staging-db.example.com"
+      name: "staging_db"
+    api:
+      url: "https://api.staging.example.com"
+      timeout: 45
+```
+
+### Custom Retry Configuration
+```yaml
+retry:
+  strategies:
+    element-not-found:
+      max-attempts: 3
+      interval: 1000
+    stale-element:
+      max-attempts: 2
+      interval: 500
+    api-error:
+      max-attempts: 4
+      interval: 2000
+```
+
+### Advanced Reporting
+```yaml
+reporting:
+  html:
+    enabled: true
+    screenshots: true
+    video: true
+    theme: "dark"
+  json:
+    enabled: true
+    path: "reports/json"
+  metrics:
+    enabled: true
+    include:
+      - response-times
+      - error-rates
+      - step-duration
+```
+
+The framework will automatically:
+1. Read and process test data
+2. Handle different environments
+3. Manage test execution
+4. Generate reports
+5. Provide smart validations
+6. Handle errors and retries
+
+
+# Data Handling Examples
+
+## 1. Excel Data Handling
+
+### Excel File (test-data/excel/test-data.xlsx)
+Sheet: UserData
+| TestCase | Username | Password | Role  | Expected    |
+|----------|----------|----------|-------|-------------|
+| TC001    | admin    | admin123 | Admin | Dashboard   |
+| TC002    | user     | user123  | User  | Homepage    |
+| TC003    | guest    | guest123 | Guest | GuestPortal |
+
+```gherkin
+Feature: User Access Control
+
+  @excel
+  Scenario Outline: Role-based access verification
+    Given I load test data from:
+      | Source | test-data.xlsx |
+      | Sheet  | UserData       |
+      | Filter | TestCase=${data.testCase} |
+    
+    When I login as "${data.Username}"
+    Then I should have "${data.Role}" permissions
+    And I should be redirected to "${data.Expected}"
+
+    Examples: ${excel.UserData.allRows}
+```
+
+## 2. CSV Data Handling
+
+### CSV File (test-data/csv/products.csv)
+```csv
+product_id,name,price,category,stock
+P001,Laptop,999.99,Electronics,100
+P002,Mouse,29.99,Accessories,500
+P003,Keyboard,59.99,Accessories,250
+```
+
+```gherkin
+Feature: Product Management
+
+  @csv
+  Scenario: Verify product inventory
+    Given I connect to inventory system
+    When I load product data from "products.csv"
+    Then each product should:
+      | Field    | Validation         |
+      | price    | should be positive |
+      | stock    | should be > 0      |
+      | category | should exist       |
+```
+
+## 3. JSON Data Handling
+
+### JSON File (test-data/json/api-tests.json)
+```json
+{
+  "api_tests": {
+    "endpoints": {
+      "users": "/api/users",
+      "products": "/api/products",
+      "orders": "/api/orders"
+    },
+    "test_data": {
+      "new_user": {
+        "username": "test_user",
+        "email": "test@example.com",
+        "role": "customer"
+      },
+      "test_order": {
+        "products": ["P001", "P002"],
+        "quantity": [2, 1],
+        "shipping": "express"
+      }
+    }
+  }
+}
+```
+
+```gherkin
+Feature: API Testing
+
+  @json
+  Scenario: Create new user and order
+    Given I load API config from "api-tests.json"
+    When I send POST request to "${json.api_tests.endpoints.users}":
+      """json
+      ${json.api_tests.test_data.new_user}
+      """
+    Then response status should be 201
+    
+    When I create order with data:
+      """json
+      ${json.api_tests.test_data.test_order}
+      """
+    Then order should be created successfully
+```
+
+## 4. Combined Data Sources
+
+```gherkin
+Feature: E-commerce Flow
+
+  @multiple-data-sources
+  Scenario: Complete purchase flow
+    # Use Excel data for user
+    Given I login with credentials from:
+      | Source | users.xlsx    |
+      | Sheet  | ValidUsers    |
+      | Row    | TestCase=Buy  |
+    
+    # Use CSV data for products
+    When I search products from "products.csv":
+      | Filter  | category=Electronics |
+      | Sort    | price DESC          |
+    
+    # Use JSON data for payment
+    And I process payment using:
+      """json
+      ${json.payment_methods.credit_card}
+      """
+    
+    Then order should be completed successfully
+```
+
+## 5. Dynamic Data Handling
+
+```gherkin
+Feature: Dynamic Data Tests
+
+  @dynamic-data
+  Scenario: Create user with dynamic data
+    Given I generate test data:
+      | Field    | Type    | Pattern           |
+      | username | random  | user_{timestamp}  |
+      | email    | email   | test@{random}.com |
+      | phone    | phone   | US                |
+    
+    When I create user with generated data
+    Then user should be created successfully
+```
+
+## 6. Database Data Handling
+
+```gherkin
+Feature: Database Integration
+
+  @db-data
+  Scenario: Verify database records
+    Given I execute query:
+      """sql
+      SELECT * FROM orders 
+      WHERE date = '${today}' 
+      AND status = 'completed'
+      """
+    Then result should have "${expected_count}" rows
+    And total order value should match summary table
+```
+
+## 7. Environment-specific Data
+
+```gherkin
+Feature: Environment Data
+
+  @env-specific
+  Scenario: Environment validation
+    Given I load test data for "${env}" environment
+    When I verify system configuration
+    Then following should match environment settings:
+      | Setting    | Expected               |
+      | API URL    | ${env.api.url}        |
+      | DB Host    | ${env.database.host}  |
+      | Mail Server| ${env.mail.server}    |
+```
+
+## Data Configuration (config/data-config.yaml)
+```yaml
+data-sources:
+  excel:
+    enabled: true
+    default-path: "test-data/excel"
+    date-format: "yyyy-MM-dd"
+    
+  csv:
+    enabled: true
+    default-path: "test-data/csv"
+    delimiter: ","
+    encoding: "UTF-8"
+    
+  json:
+    enabled: true
+    default-path: "test-data/json"
+    
+  database:
+    enabled: true
+    connections:
+      default:
+        url: "jdbc:postgresql://localhost:5432/testdb"
+        username: "${db.user}"
+        password: "${db.password}"
+
+data-generation:
+  enabled: true
+  locale: "en-US"
+  seed: "random"
+  patterns:
+    phone: "+1-###-###-####"
+    email: "test.{random}@example.com"
+    username: "user_{timestamp}"
+```
+
+## Running Tests with Data
+
+```bash
+# Run with specific data file
+smarttest run --data-file users.xlsx features/login.feature
+
+# Run with data filters
+smarttest run --data-filter "role=Admin" features/access.feature
+
+# Run with multiple data sources
+smarttest run --data-config config/data-config.yaml features/
+
+# Run with environment-specific data
+smarttest run --env staging --data-env staging features/
+```
+
+The framework will:
+1. Automatically load and parse data files
+2. Handle data substitution in scenarios
+3. Support dynamic data generation
+4. Manage environment-specific data
+5. Provide data transformation capabilities
+6. Support data validation and verification
+
+// Example Usage of Code Generation
+public class CodeGenerationExample {
+    public static void main(String[] args) {
+        // Initialize framework
+        SmartTestFramework framework = SmartTestFramework.initialize();
+        
+        // 1. Generate test from description
+        TestCase loginTest = framework.generateTest("""
+            Test: Login Functionality
+            Description: Verify user can login with valid credentials
+            Steps:
+            1. Navigate to login page
+            2. Enter username "admin"
+            3. Enter password "admin123"
+            4. Click login button
+            5. Verify successful login
+            """);
+            
+        // Save generated test
+        loginTest.saveToFile("src/test/java/examples/LoginTest.java");
+        
+        // 2. Record test actions
+        TestRecorder recorder = framework.getRecorder();
+        recorder.start();
+        
+        // Perform actions in browser...
+        // Framework will record all actions
+        
+        TestCase recordedTest = recorder.stop();
+        recordedTest.saveToFile("src/test/java/examples/RecordedTest.java");
+        
+        // 3. Generate test suite
+        TestSuite suite = framework.generateSuite("""
+            Suite: E-commerce Tests
+            
+            Test: Product Search
+            Steps:
+            1. Search for product "laptop"
+            2. Filter by price range "$500-$1000"
+            3. Sort by rating
+            4. Verify search results
+            
+            Test: Shopping Cart
+            Steps:
+            1. Add product to cart
+            2. Update quantity
+            3. Verify cart total
+            4. Proceed to checkout
+            """);
+            
+        // Save suite
+        suite.saveToDirectory("src/test/java/examples/ecommerce");
+        
+        // 4. Use visual builder
+        VisualBuilder builder = framework.getVisualBuilder();
+        builder.show();  // Opens visual builder in browser
+        
+        // 5. Execute generated tests
+        framework.execute(loginTest, options -> {
+            options.withRetries(3)
+                  .withHealing(true)
+                  .withSmartWaits(true);
+        });
+    }
+}
+
+// Generated Test Example
+@SmartTest
+public class GeneratedLoginTest extends SmartTestBase {
+    
+    @Test
+    public void testLogin() {
+        // Framework generates optimized locators
+        SmartElement usernameField = find("username field");
+        SmartElement passwordField = find("password field");
+        SmartElement loginButton = find("login button");
+        
+        // Framework adds smart waits automatically
+        usernameField.type("admin");
+        passwordField.type("admin123");
+        loginButton.click();
+        
+        // Framework generates smart validations
+        verify("login success")
+            .withTimeout(Duration.ofSeconds(10))
+            .assertThat(page -> {
+                // Multiple validation points
+                assertThat(page.getTitle()).contains("Dashboard");
+                assertThat(page.getText()).contains("Welcome");
+                assertThat(page.getUrl()).contains("/dashboard");
+            });
+    }
+}
+
+// Generated Page Object Example
+@SmartPage
+public class GeneratedLoginPage extends SmartBasePage {
+    
+    // Framework generates smart locators
+    @SmartElement("username field")
+    private SmartElement usernameField;
+    
+    @SmartElement("password field")
+    private SmartElement passwordField;
+    
+    @SmartElement("login button")
+    private SmartElement loginButton;
+    
+    public void login(String username, String password) {
+        // Framework adds smart waits and validations
+        usernameField.type(username);
+        passwordField.type(password);
+        loginButton.click();
+        
+        // Wait for navigation
+        waitForNavigation();
+    }
+    
+    public void verifyLoginSuccess() {
+        // Framework generates comprehensive validations
+        verify("login success")
+            .element(welcomeMessage).isVisible()
+            .element(dashboardTitle).hasText("Dashboard")
+            .url().contains("/dashboard")
+            .cookie("auth").exists();
+    }
+}
