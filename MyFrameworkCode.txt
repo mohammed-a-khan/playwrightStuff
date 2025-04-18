@@ -11976,3 +11976,1542 @@ public class ConfigurationService {
     }
 }
 
+package com.cssmart.ui.controller;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.ui.service.ConfigurationService;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.core.io.Resource;
+import org.springframework.web.multipart.MultipartFile;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.HashMap;
+
+/**
+ * REST controller for framework configuration
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/config")
+public class ConfigController {
+    
+    private final ConfigurationService configService;
+    
+    @Autowired
+    public ConfigController(ConfigurationService configService) {
+        this.configService = configService;
+    }
+    
+    /**
+     * Get all configuration
+     * @return Complete configuration
+     */
+    @GetMapping
+    public ResponseEntity<Map<String, Object>> getConfig() {
+        log.info("Fetching all configuration");
+        
+        try {
+            Map<String, Object> config = configService.getAllConfig();
+            return ResponseEntity.ok(config);
+        } catch (Exception e) {
+            log.error("Error fetching configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Save general configuration
+     * @param config General configuration
+     * @return Updated configuration
+     */
+    @PostMapping("/general")
+    public ResponseEntity<Map<String, Object>> saveGeneralConfig(@RequestBody Map<String, Object> config) {
+        log.info("Saving general configuration");
+        
+        try {
+            Map<String, Object> savedConfig = configService.saveConfig("general", config);
+            return ResponseEntity.ok(savedConfig);
+        } catch (Exception e) {
+            log.error("Error saving general configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Save browser configuration
+     * @param config Browser configuration
+     * @return Updated configuration
+     */
+    @PostMapping("/browser")
+    public ResponseEntity<Map<String, Object>> saveBrowserConfig(@RequestBody Map<String, Object> config) {
+        log.info("Saving browser configuration");
+        
+        try {
+            Map<String, Object> savedConfig = configService.saveConfig("browser", config);
+            return ResponseEntity.ok(savedConfig);
+        } catch (Exception e) {
+            log.error("Error saving browser configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Save environment configuration
+     * @param config Environment configuration
+     * @return Updated configuration
+     */
+    @PostMapping("/environment")
+    public ResponseEntity<Map<String, Object>> saveEnvironmentConfig(@RequestBody Map<String, Object> config) {
+        log.info("Saving environment configuration");
+        
+        try {
+            Map<String, Object> savedConfig = configService.saveConfig("environment", config);
+            return ResponseEntity.ok(savedConfig);
+        } catch (Exception e) {
+            log.error("Error saving environment configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Reset configuration to defaults
+     * @return Default configuration
+     */
+    @PostMapping("/reset")
+    public ResponseEntity<Map<String, Object>> resetConfig() {
+        log.info("Resetting configuration to defaults");
+        
+        try {
+            Map<String, Object> defaultConfig = configService.resetToDefaults();
+            return ResponseEntity.ok(defaultConfig);
+        } catch (Exception e) {
+            log.error("Error resetting configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Export configuration to file
+     * @param format Export format (yaml or json)
+     * @return Configuration file
+     */
+    @GetMapping("/export")
+    public ResponseEntity<Resource> exportConfig(@RequestParam(defaultValue = "yaml") String format) {
+        log.info("Exporting configuration in format: {}", format);
+        
+        try {
+            Resource resource = configService.exportConfig(format);
+            
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=config." + format)
+                    .body(resource);
+        } catch (Exception e) {
+            log.error("Error exporting configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Import configuration from file
+     * @param file Configuration file
+     * @return Imported configuration
+     */
+    @PostMapping("/import")
+    public ResponseEntity<Map<String, Object>> importConfig(@RequestParam("file") MultipartFile file) {
+        log.info("Importing configuration from file: {}", file.getOriginalFilename());
+        
+        try {
+            Map<String, Object> importedConfig = configService.importConfig(file);
+            return ResponseEntity.ok(importedConfig);
+        } catch (Exception e) {
+            log.error("Error importing configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+}
+
+package com.cssmart.ui.controller;
+
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.model.Insight;
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import com.cssmart.reporting.model.TrendData;
+import com.cssmart.ui.dashboard.model.DashboardMetrics;
+import com.cssmart.ui.service.ReportService;
+import com.cssmart.ai.engine.AIEngine;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Comparator;
+import java.util.stream.Collectors;
+
+/**
+ * REST controller for dashboard-related operations
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/dashboard")
+public class DashboardController {
+    
+    private final ReportService reportService;
+    private final AIEngine aiEngine;
+    
+    @Autowired
+    public DashboardController(ReportService reportService, AIEngine aiEngine) {
+        this.reportService = reportService;
+        this.aiEngine = aiEngine;
+    }
+    
+    /**
+     * Get dashboard metrics and AI-generated insights
+     */
+    @GetMapping("/metrics")
+    public DashboardMetrics getMetrics() {
+        log.info("Fetching dashboard metrics");
+        
+        // Get current metrics
+        ExecutionMetrics metrics = getExecutionMetrics();
+        
+        // Generate AI-powered insights
+        List<Insight> insights = generateInsights(metrics);
+        
+        return new DashboardMetrics(metrics, insights);
+    }
+    
+    /**
+     * Get test execution trends data
+     */
+    @GetMapping("/trends")
+    public List<TrendData> getTrends() {
+        log.info("Fetching execution trends");
+        
+        // Get recent reports for trend analysis
+        List<TestReport> reports = reportService.getRecentReports(50);
+        
+        // Analyze trends
+        return analyzeTrends(reports);
+    }
+    
+    /**
+     * Get recent test reports
+     */
+    @GetMapping("/reports")
+    public List<TestReport> getReports() {
+        log.info("Fetching recent reports");
+        return reportService.getRecentReports(10);
+    }
+    
+    /**
+     * Get execution metrics
+     */
+    private ExecutionMetrics getExecutionMetrics() {
+        // In a real implementation, this would come from the ReportManager
+        // For now, create sample metrics
+        return ExecutionMetrics.builder()
+            .totalTests(120)
+            .passedTests(95)
+            .failedTests(15)
+            .skippedTests(10)
+            .successRate(79.2)
+            .duration(3540000)
+            .avgDuration(29500)
+            .minDuration(5000)
+            .maxDuration(120000)
+            .build();
+    }
+    
+    /**
+     * Generate AI-powered insights based on execution metrics
+     */
+    private List<Insight> generateInsights(ExecutionMetrics metrics) {
+        List<Insight> insights = new ArrayList<>();
+        
+        try {
+            if (metrics.getFailedTests() > 0) {
+                insights.add(Insight.builder()
+                    .title("Test Failures Detected")
+                    .description(metrics.getFailedTests() + " tests failed. Review error details for troubleshooting.")
+                    .type(com.cssmart.reporting.model.InsightType.RELIABILITY)
+                    .confidence(0.9)
+                    .build());
+            }
+            
+            if (metrics.getSuccessRate() < 90) {
+                insights.add(Insight.builder()
+                    .title("Low Success Rate")
+                    .description("Success rate is " + metrics.getSuccessRate() + "%. Consider reviewing test stability.")
+                    .type(com.cssmart.reporting.model.InsightType.STABILITY)
+                    .confidence(0.8)
+                    .build());
+            }
+            
+            if (metrics.getAvgDuration() > 30000) { // 30 seconds
+                insights.add(Insight.builder()
+                    .title("Performance Concern")
+                    .description("Average test duration is high. Consider optimizing slow tests.")
+                    .type(com.cssmart.reporting.model.InsightType.PERFORMANCE)
+                    .confidence(0.75)
+                    .build());
+            }
+            
+        } catch (Exception e) {
+            log.error("Error generating insights", e);
+        }
+        
+        return insights;
+    }
+    
+    /**
+     * Analyze trends from recent test reports
+     */
+    private List<TrendData> analyzeTrends(List<TestReport> reports) {
+        List<TrendData> trends = new ArrayList<>();
+        
+        try {
+            // For now, create sample trend data
+            // In a real implementation, this would analyze actual reports
+            
+            LocalDateTime now = LocalDateTime.now();
+            
+            for (int i = 6; i >= 0; i--) {
+                LocalDateTime date = now.minusDays(i);
+                
+                // Simulate metrics for this date
+                int total = 15 + (int)(Math.random() * 10);
+                int passed = (int)(total * (0.7 + Math.random() * 0.2));
+                int failed = (int)(total * (0.05 + Math.random() * 0.1));
+                int skipped = total - passed - failed;
+                
+                double successRate = (double)passed / total * 100;
+                long avgDuration = 20000 + (long)(Math.random() * 15000);
+                
+                trends.add(TrendData.builder()
+                    .date(date)
+                    .total(total)
+                    .passed(passed)
+                    .failed(failed)
+                    .skipped(skipped)
+                    .successRate(successRate)
+                    .avgDuration(avgDuration)
+                    .build());
+            }
+            
+        } catch (Exception e) {
+            log.error("Error analyzing trends", e);
+        }
+        
+        return trends;
+    }
+}
+
+package com.cssmart.ui.config;
+
+import com.cssmart.reporting.ReportManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * Configuration for ReportManager bean
+ */
+@Configuration
+public class ReportManagerConfig {
+    
+    /**
+     * Create ReportManager bean
+     */
+    @Bean
+    public ReportManager reportManager() {
+        // ReportManager is a singleton, so use getInstance() method
+        return ReportManager.getInstance();
+    }
+}
+
+package com.cssmart.ui.controller;
+
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import com.cssmart.ui.service.ReportService;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpStatus;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.Optional;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * REST controller for test report operations
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/reports")
+public class ReportController {
+    
+    private final ReportService reportService;
+    
+    @Autowired
+    public ReportController(ReportService reportService) {
+        this.reportService = reportService;
+    }
+    
+    /**
+     * Get test reports with optional filtering
+     * @param status Filter by test status
+     * @param dateRange Filter by date range (today, yesterday, last7days, etc.)
+     * @param search Search by test name or class
+     * @return List of filtered test reports
+     */
+    @GetMapping
+    public List<TestReport> getReports(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false, defaultValue = "last7days") String dateRange,
+            @RequestParam(required = false) String search) {
+        
+        log.info("Fetching test reports with filters - status: {}, dateRange: {}, search: {}", 
+                status, dateRange, search);
+        
+        TestStatus statusFilter = status != null ? TestStatus.valueOf(status) : null;
+        
+        // Calculate date range based on the dateRange parameter
+        LocalDateTime startDate = null;
+        LocalDateTime endDate = LocalDateTime.now();
+        
+        switch (dateRange) {
+            case "today":
+                startDate = LocalDate.now().atStartOfDay();
+                break;
+            case "yesterday":
+                startDate = LocalDate.now().minusDays(1).atStartOfDay();
+                endDate = LocalDate.now().atStartOfDay().minusNanos(1);
+                break;
+            case "last7days":
+                startDate = LocalDate.now().minusDays(7).atStartOfDay();
+                break;
+            case "last30days":
+                startDate = LocalDate.now().minusDays(30).atStartOfDay();
+                break;
+            case "thisMonth":
+                startDate = LocalDate.now().withDayOfMonth(1).atStartOfDay();
+                break;
+            case "lastMonth":
+                LocalDate lastMonth = LocalDate.now().minusMonths(1);
+                startDate = lastMonth.withDayOfMonth(1).atStartOfDay();
+                endDate = LocalDate.now().withDayOfMonth(1).atStartOfDay().minusNanos(1);
+                break;
+            default:
+                startDate = LocalDate.now().minusDays(7).atStartOfDay();
+        }
+        
+        return reportService.getReports(statusFilter, startDate, endDate, search);
+    }
+    
+    /**
+     * Get a specific test report by ID
+     * @param id Report ID
+     * @return Test report details
+     */
+    @GetMapping("/{id}")
+    public TestReport getReportById(@PathVariable String id) {
+        log.info("Fetching test report with ID: {}", id);
+        
+        Optional<TestReport> report = reportService.getReportById(id);
+        
+        if (!report.isPresent()) {
+            log.warn("Test report not found with ID: {}", id);
+            throw new ResourceNotFoundException("Test report not found with ID: " + id);
+        }
+        
+        return report.get();
+    }
+    
+    /**
+     * Delete a test report
+     * @param id Report ID
+     * @return Success message
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<String> deleteReport(@PathVariable String id) {
+        log.info("Deleting test report with ID: {}", id);
+        
+        boolean deleted = reportService.deleteReport(id);
+        
+        if (!deleted) {
+            log.warn("Test report not found for deletion with ID: {}", id);
+            throw new ResourceNotFoundException("Test report not found with ID: " + id);
+        }
+        
+        return ResponseEntity.ok("Report deleted successfully");
+    }
+    
+    /**
+     * Export reports to a specific format
+     * @param format Export format (pdf, excel, etc.)
+     * @return File download response
+     */
+    @GetMapping("/export")
+    public ResponseEntity<Resource> exportReports(@RequestParam String format) {
+        log.info("Exporting reports in format: {}", format);
+        
+        Resource resource = reportService.exportReports(format);
+        
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=test-reports." + format)
+                .body(resource);
+    }
+}
+
+/**
+ * Exception for resource not found
+ */
+@ResponseStatus(HttpStatus.NOT_FOUND)
+class ResourceNotFoundException extends RuntimeException {
+    public ResourceNotFoundException(String message) {
+        super(message);
+    }
+}
+
+package com.cssmart.ui.config;
+
+import com.cssmart.core.config.ConfigurationManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * Configuration for ConfigurationManager bean
+ */
+@Configuration
+public class ConfigurationManagerConfig {
+    
+    /**
+     * Create ConfigurationManager bean
+     */
+    @Bean
+    public ConfigurationManager configurationManager() {
+        // ConfigurationManager is a singleton, so use getInstance() method
+        return ConfigurationManager.getInstance();
+    }
+}
+
+package com.cssmart.ui.service;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+
+/**
+ * Service for managing framework configuration
+ */
+@Slf4j
+@Service
+public class ConfigurationService {
+    
+    private final ConfigurationManager configManager;
+    private final ObjectMapper jsonMapper;
+    private final ObjectMapper yamlMapper;
+    
+    @Autowired
+    public ConfigurationService(ConfigurationManager configManager) {
+        this.configManager = configManager;
+        this.jsonMapper = new ObjectMapper();
+        
+        // Configure YAML mapper
+        YAMLFactory yamlFactory = new YAMLFactory()
+            .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER)
+            .enable(YAMLGenerator.Feature.MINIMIZE_QUOTES);
+        this.yamlMapper = new ObjectMapper(yamlFactory);
+    }
+    
+    /**
+     * Get all configuration
+     * @return Complete configuration
+     */
+    public Map<String, Object> getAllConfig() {
+        log.info("Fetching all configuration");
+        
+        Map<String, Object> config = new HashMap<>();
+        
+        try {
+            // Get configuration for each section
+            // Since updateConfig isn't available, we'll get configs for common sections
+            config.put("general", configManager.getConfig("general", Map.class));
+            config.put("browser", configManager.getConfig("browser", Map.class));
+            config.put("environment", configManager.getConfig("environment", Map.class));
+            
+            return config;
+        } catch (Exception e) {
+            log.error("Error fetching configuration", e);
+            throw new RuntimeException("Failed to fetch configuration: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Save configuration for a specific section
+     * @param section Configuration section (general, browser, environment)
+     * @param config Configuration to save
+     * @return Updated configuration
+     */
+    public Map<String, Object> saveConfig(String section, Map<String, Object> config) {
+        log.info("Saving {} configuration", section);
+        
+        try {
+            // Since updateConfig isn't available, we'll implement custom logic
+            // to save the configuration to appropriate files
+            String configPath = "config/" + section + "-config.yaml";
+            File configFile = new File(configPath);
+            
+            // Ensure directory exists
+            configFile.getParentFile().mkdirs();
+            
+            // Save to file
+            yamlMapper.writeValue(configFile, config);
+            
+            // Force reload configuration
+            configManager.loadConfig(configPath);
+            
+            return config;
+        } catch (Exception e) {
+            log.error("Error saving {} configuration", section, e);
+            throw new RuntimeException("Failed to save configuration: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Reset configuration to defaults
+     * @return Default configuration
+     */
+    public Map<String, Object> resetToDefaults() {
+        log.info("Resetting configuration to defaults");
+        
+        try {
+            // Since resetToDefaults isn't available, we'll implement a simple version
+            Map<String, Object> defaultConfig = loadDefaultConfig();
+            
+            // Save each section
+            for (Map.Entry<String, Object> entry : defaultConfig.entrySet()) {
+                if (entry.getValue() instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> sectionConfig = (Map<String, Object>) entry.getValue();
+                    saveConfig(entry.getKey(), sectionConfig);
+                }
+            }
+            
+            return getAllConfig();
+        } catch (Exception e) {
+            log.error("Error resetting configuration", e);
+            throw new RuntimeException("Failed to reset configuration: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Load default configuration
+     */
+    private Map<String, Object> loadDefaultConfig() {
+        // Create default configuration
+        Map<String, Object> defaultConfig = new HashMap<>();
+        
+        // General configuration
+        Map<String, Object> generalConfig = new HashMap<>();
+        generalConfig.put("framework", Map.of(
+            "name", "CSSmartTest",
+            "version", "1.0.0-SNAPSHOT",
+            "mode", "zero-code"
+        ));
+        generalConfig.put("execution", Map.of(
+            "parallel", true,
+            "threadCount", 5,
+            "retryCount", 1,
+            "timeout", 60
+        ));
+        generalConfig.put("element", Map.of(
+            "timeout", 15,
+            "polling", 500
+        ));
+        generalConfig.put("reporting", Map.of(
+            "format", "html",
+            "screenshots", true,
+            "video", false,
+            "outputDir", "./reports"
+        ));
+        defaultConfig.put("general", generalConfig);
+        
+        // Browser configuration
+        Map<String, Object> browserConfig = new HashMap<>();
+        browserConfig.put("default", "chrome");
+        browserConfig.put("browsers", Map.of(
+            "chrome", Map.of(
+                "driver", "webdriver.chrome.driver",
+                "headless", false,
+                "arguments", List.of("--start-maximized", "--disable-notifications", "--disable-infobars"),
+                "capabilities", Map.of("acceptInsecureCerts", true, "pageLoadStrategy", "normal")
+            ),
+            "firefox", Map.of(
+                "driver", "webdriver.gecko.driver",
+                "headless", false,
+                "arguments", List.of("--start-maximized", "--disable-notifications"),
+                "capabilities", Map.of("acceptInsecureCerts", true, "pageLoadStrategy", "normal")
+            )
+        ));
+        defaultConfig.put("browser", browserConfig);
+        
+        // Environment configuration
+        Map<String, Object> environmentConfig = new HashMap<>();
+        environmentConfig.put("default", "qa");
+        environmentConfig.put("environments", Map.of(
+            "qa", Map.of(
+                "base", Map.of("url", "https://qa.example.com", "api", "https://api-qa.example.com"),
+                "database", Map.of("host", "qa-db.example.com", "port", 3306, "username", "${DB_USERNAME}", "password", "${DB_PASSWORD}", "name", "qa_testdb")
+            ),
+            "staging", Map.of(
+                "base", Map.of("url", "https://staging.example.com", "api", "https://api-staging.example.com"),
+                "database", Map.of("host", "staging-db.example.com", "port", 3306, "username", "${DB_USERNAME}", "password", "${DB_PASSWORD}", "name", "staging_testdb")
+            )
+        ));
+        defaultConfig.put("environment", environmentConfig);
+        
+        return defaultConfig;
+    }
+    
+    /**
+     * Export configuration to file
+     * @param format Export format (yaml or json)
+     * @return File resource
+     */
+    public Resource exportConfig(String format) throws IOException {
+        log.info("Exporting configuration in format: {}", format);
+        
+        // Get all configuration
+        Map<String, Object> config = getAllConfig();
+        
+        // Create temp file
+        File tempFile = File.createTempFile("config-", "." + format);
+        
+        // Write configuration to file
+        if ("yaml".equalsIgnoreCase(format)) {
+            yamlMapper.writeValue(tempFile, config);
+        } else if ("json".equalsIgnoreCase(format)) {
+            jsonMapper.writerWithDefaultPrettyPrinter().writeValue(tempFile, config);
+        } else {
+            throw new IllegalArgumentException("Unsupported format: " + format);
+        }
+        
+        return new FileSystemResource(tempFile);
+    }
+    
+    /**
+     * Import configuration from file
+     * @param file Configuration file
+     * @return Imported configuration
+     */
+    public Map<String, Object> importConfig(MultipartFile file) throws IOException {
+        log.info("Importing configuration from file: {}", file.getOriginalFilename());
+        
+        Map<String, Object> config;
+        
+        // Determine format from filename
+        String filename = file.getOriginalFilename();
+        if (filename.endsWith(".yaml") || filename.endsWith(".yml")) {
+            config = yamlMapper.readValue(file.getInputStream(), Map.class);
+        } else if (filename.endsWith(".json")) {
+            config = jsonMapper.readValue(file.getInputStream(), Map.class);
+        } else {
+            throw new IllegalArgumentException("Unsupported file format: " + filename);
+        }
+        
+        // Update each section
+        for (Map.Entry<String, Object> entry : config.entrySet()) {
+            if (entry.getValue() instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> sectionConfig = (Map<String, Object>) entry.getValue();
+                saveConfig(entry.getKey(), sectionConfig);
+            }
+        }
+        
+        return getAllConfig();
+    }
+    
+    /**
+     * Update configuration from environmental variables
+     */
+    public void updateFromEnvironment() {
+        log.info("Updating configuration from environment variables");
+        
+        try {
+            // Load configurations
+            Map<String, Object> config = getAllConfig();
+            
+            // Process environment variables - this is a simplified approach
+            // In a real implementation, this would scan all configuration values
+            // and replace any that match the pattern ${ENV_VAR} with the actual
+            // environment variable value
+            
+            // For now, we'll just log that this operation is not fully implemented
+            log.warn("Environment variable substitution is not fully implemented");
+            
+        } catch (Exception e) {
+            log.error("Error updating configuration from environment", e);
+            throw new RuntimeException("Failed to update configuration from environment: " + e.getMessage(), e);
+        }
+    }
+}
+
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecorderMessage;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * WebSocket handler for the test recorder
+ * Manages real-time communication between the browser and server
+ * for recording test actions
+ */
+@Slf4j
+@Component
+public class TestRecorderHandler extends TextWebSocketHandler {
+    
+    private final ObjectMapper objectMapper;
+    private final Map<String, TestRecorder> recorders;
+    private final AIEngine aiEngine;
+    
+    @Autowired
+    public TestRecorderHandler(ObjectMapper objectMapper, AIEngine aiEngine) {
+        this.objectMapper = objectMapper;
+        this.recorders = new ConcurrentHashMap<>();
+        this.aiEngine = aiEngine;
+    }
+    
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        log.info("WebSocket connection established: {}", session.getId());
+    }
+    
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        String sessionId = session.getId();
+        RecorderMessage msg = objectMapper.readValue(message.getPayload(), RecorderMessage.class);
+        
+        log.debug("Received recorder message: {}", msg.getType());
+        
+        switch (msg.getType()) {
+            case "START_RECORDING":
+                startRecording(session, sessionId);
+                break;
+            case "STOP_RECORDING":
+                stopRecording(session, sessionId);
+                break;
+            case "ACTION":
+                recordAction(session, sessionId, msg.getData());
+                break;
+            default:
+                log.warn("Unknown message type: {}", msg.getType());
+                sendError(session, "Unknown message type: " + msg.getType());
+                break;
+        }
+    }
+    
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        String sessionId = session.getId();
+        if (recorders.containsKey(sessionId)) {
+            recorders.remove(sessionId);
+        }
+        log.info("WebSocket connection closed: {}", sessionId);
+    }
+    
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) {
+        log.error("WebSocket transport error for session {}: {}", 
+                session.getId(), exception.getMessage(), exception);
+    }
+    
+    /**
+     * Start a new recording session
+     */
+    private void startRecording(WebSocketSession session, String sessionId) throws Exception {
+        log.info("Starting recording session for: {}", sessionId);
+        
+        TestRecorder recorder = new TestRecorder();
+        recorder.startRecording();
+        recorders.put(sessionId, recorder);
+        
+        sendMessage(session, new RecorderMessage("RECORDING_STARTED", null));
+    }
+    
+    /**
+     * Stop recording and return test case
+     */
+    private void stopRecording(WebSocketSession session, String sessionId) throws Exception {
+        log.info("Stopping recording session for: {}", sessionId);
+        
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            TestCase testCase = recorder.stopRecording();
+            
+            // Enhance test case with AI
+            testCase = aiEngine.enhanceTestCase(testCase);
+            
+            sendMessage(session, new RecorderMessage("TEST_CASE", testCase));
+        } else {
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Record an action in the current session
+     */
+    @SuppressWarnings("unchecked")
+    private void recordAction(WebSocketSession session, String sessionId, Object actionData) throws Exception {
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            try {
+                Map<String, String> data = (Map<String, String>) actionData;
+                
+                String actionType = data.get("action");
+                String element = data.get("element");
+                String value = data.get("value");
+                
+                Action action = new Action(ActionType.valueOf(actionType));
+                action.setValue(value);
+                
+                RecordedStep step = new RecordedStep();
+                step.setAction(actionType);
+                step.setElement(element);
+                step.setValue(value);
+                step.setTimestamp(LocalDateTime.now());
+                // Generate description for the step
+                step.setDescription(generateActionDescription(actionType, element, value));
+                
+                recorder.recordAction(action, element, value);
+                
+                // Send the recorded step back to client for display
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+                
+            } catch (Exception e) {
+                log.error("Error recording action", e);
+                sendError(session, "Failed to record action: " + e.getMessage());
+            }
+        } else {
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Send a message to the WebSocket client
+     */
+    private void sendMessage(WebSocketSession session, RecorderMessage msg) {
+        try {
+            String json = objectMapper.writeValueAsString(msg);
+            session.sendMessage(new TextMessage(json));
+        } catch (IOException e) {
+            log.error("Error sending message to WebSocket client", e);
+        }
+    }
+    
+    /**
+     * Send an error message to the WebSocket client
+     */
+    private void sendError(WebSocketSession session, String errorMessage) {
+        log.warn("Sending error to client: {}", errorMessage);
+        sendMessage(session, new RecorderMessage("ERROR", errorMessage));
+    }
+    
+    /**
+     * Generate a description for an action
+     */
+    private String generateActionDescription(String actionType, String element, String value) {
+        switch (actionType) {
+            case "CLICK":
+                return "Click on " + element;
+            case "TYPE":
+                return "Enter '" + value + "' in " + element;
+            case "SELECT":
+                return "Select '" + value + "' from " + element;
+            case "VERIFY_PRESENCE":
+                return "Verify " + element + " is present";
+            case "VERIFY_VISIBILITY":
+                return "Verify " + element + " is visible";
+            case "VERIFY_STATE":
+                return "Verify " + element + " state is '" + value + "'";
+            case "WAIT":
+                return "Wait for " + element;
+            case "HOVER":
+                return "Hover over " + element;
+            case "NAVIGATE":
+                return "Navigate to " + value;
+            default:
+                return actionType + " on " + element;
+        }
+    }
+}
+
+package com.cssmart.ui.service;
+
+import com.cssmart.reporting.ReportManager;
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * Service for managing test reports
+ */
+@Slf4j
+@Service
+public class ReportService {
+    
+    private final ReportManager reportManager;
+    // In-memory storage until we have actual persistence
+    private final List<TestReport> reports = new ArrayList<>();
+    
+    @Autowired
+    public ReportService(ReportManager reportManager) {
+        this.reportManager = reportManager;
+        
+        // Add some sample reports for development/testing
+        initSampleReports();
+    }
+    
+    /**
+     * Get test reports with filtering
+     * @param status Filter by test status
+     * @param startDate Filter by start date
+     * @param endDate Filter by end date
+     * @param search Search by name or class
+     * @return Filtered list of test reports
+     */
+    public List<TestReport> getReports(TestStatus status, LocalDateTime startDate, 
+                                      LocalDateTime endDate, String search) {
+        // Since getAllReports() is not available, we'll use our in-memory list
+        // In a real implementation, this would get reports from a database or service
+        
+        return reports.stream()
+            .filter(report -> status == null || report.getStatus() == status)
+            .filter(report -> startDate == null || 
+                   !report.getStartTime().isBefore(startDate))
+            .filter(report -> endDate == null || 
+                   !report.getEndTime().isAfter(endDate))
+            .filter(report -> search == null || search.isEmpty() ||
+                   report.getName().toLowerCase().contains(search.toLowerCase()) ||
+                   report.getClassName().toLowerCase().contains(search.toLowerCase()))
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Get a specific test report by ID
+     * @param id Report ID
+     * @return Optional containing the report if found
+     */
+    public Optional<TestReport> getReportById(String id) {
+        // Since we don't have getAllReports(), search in our in-memory list
+        return reports.stream()
+            .filter(report -> report.getId().equals(id))
+            .findFirst();
+    }
+    
+    /**
+     * Delete a test report
+     * @param id Report ID
+     * @return True if deleted successfully
+     */
+    public boolean deleteReport(String id) {
+        // Since deleteReport is not available, implement with in-memory list
+        int initialSize = reports.size();
+        reports.removeIf(report -> report.getId().equals(id));
+        return reports.size() < initialSize;
+    }
+    
+    /**
+     * Export reports to a file
+     * @param format Export format (pdf, html, excel)
+     * @return Resource for downloading the file
+     */
+    public Resource exportReports(String format) {
+        try {
+            // Since export methods are not available, create simple exports
+            File tempFile = File.createTempFile("test-reports-", "." + format);
+            
+            // Simple text content with report details
+            StringBuilder content = new StringBuilder();
+            content.append("# Test Reports\n\n");
+            
+            for (TestReport report : reports) {
+                content.append("## ").append(report.getName()).append("\n\n");
+                content.append("Status: ").append(report.getStatus()).append("\n");
+                content.append("Duration: ").append(report.getDuration()).append(" ms\n");
+                content.append("Start Time: ").append(report.getStartTime()).append("\n");
+                content.append("End Time: ").append(report.getEndTime()).append("\n");
+                content.append("Class: ").append(report.getClassName()).append("\n");
+                content.append("Method: ").append(report.getMethodName()).append("\n\n");
+            }
+            
+            Files.writeString(tempFile.toPath(), content.toString());
+            
+            return new FileSystemResource(tempFile);
+        } catch (IOException e) {
+            log.error("Error exporting reports", e);
+            throw new RuntimeException("Failed to export reports: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get recent test reports
+     * @param limit Maximum number of reports to return
+     * @return List of recent test reports
+     */
+    public List<TestReport> getRecentReports(int limit) {
+        // Since getRecentReports() is not available, use in-memory list
+        return reports.stream()
+            .sorted((a, b) -> b.getEndTime().compareTo(a.getEndTime()))
+            .limit(limit)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Initialize sample report data for development/testing
+     */
+    private void initSampleReports() {
+        // Create sample reports
+        reports.add(createSampleReport(
+            "Login Test", 
+            "Verify user can login with valid credentials",
+            TestStatus.PASSED, 
+            12400, 
+            LocalDateTime.now().minusHours(2),
+            "com.cssmart.tests.web.LoginTest",
+            "testLoginWithValidCredentials",
+            "chrome"
+        ));
+        
+        reports.add(createSampleReport(
+            "Product Search", 
+            "Verify product search functionality",
+            TestStatus.PASSED, 
+            9800, 
+            LocalDateTime.now().minusHours(1).minusMinutes(30),
+            "com.cssmart.tests.web.SearchTest",
+            "testSearchForProducts",
+            "chrome"
+        ));
+        
+        reports.add(createSampleReport(
+            "Checkout Process", 
+            "Verify full checkout process",
+            TestStatus.FAILED, 
+            15600, 
+            LocalDateTime.now().minusHours(1),
+            "com.cssmart.tests.web.CheckoutTest",
+            "testCompleteCheckout",
+            "firefox",
+            "Element not found: payment button"
+        ));
+        
+        reports.add(createSampleReport(
+            "Account Creation", 
+            "Verify new account registration",
+            TestStatus.PASSED, 
+            11200, 
+            LocalDateTime.now().minusMinutes(40),
+            "com.cssmart.tests.web.RegistrationTest",
+            "testCreateNewAccount",
+            "edge"
+        ));
+        
+        reports.add(createSampleReport(
+            "Payment Processing", 
+            "Verify payment processing",
+            TestStatus.SKIPPED, 
+            0, 
+            LocalDateTime.now().minusMinutes(20),
+            "com.cssmart.tests.web.PaymentTest",
+            "testProcessPayment",
+            "chrome"
+        ));
+    }
+    
+    /**
+     * Create a sample test report
+     */
+    private TestReport createSampleReport(
+            String name, 
+            String description,
+            TestStatus status, 
+            long duration, 
+            LocalDateTime startTime,
+            String className,
+            String methodName,
+            String browser) {
+        
+        return createSampleReport(
+            name, description, status, duration, startTime, 
+            className, methodName, browser, null);
+    }
+    
+    /**
+     * Create a sample test report with exception
+     */
+    private TestReport createSampleReport(
+            String name, 
+            String description,
+            TestStatus status, 
+            long duration, 
+            LocalDateTime startTime,
+            String className,
+            String methodName,
+            String browser,
+            String exception) {
+        
+        LocalDateTime endTime = startTime.plusNanos(duration * 1000000);
+        
+        TestReport.TestReportBuilder builder = TestReport.builder()
+            .id(UUID.randomUUID().toString())
+            .name(name)
+            .description(description)
+            .status(status)
+            .duration(duration)
+            .startTime(startTime)
+            .endTime(endTime)
+            .className(className)
+            .methodName(methodName)
+            .browser(browser)
+            .environment("qa");
+            
+        if (exception != null) {
+            builder.exception(exception);
+            builder.stackTrace("Sample stack trace for exception: " + exception);
+        }
+        
+        return builder.build();
+    }
+}
+
+package com.cssmart.ui.service;
+
+import com.cssmart.core.base.CSSmartTestBase;
+import com.cssmart.core.driver.DriverManager;
+import com.cssmart.reporting.ReportManager;
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.ui.controller.BatchExecutionStatus;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+
+/**
+ * Service for executing tests
+ */
+@Slf4j
+@Service
+public class TestExecutionService {
+    
+    private final ReportManager reportManager;
+    private final ExecutorService executorService;
+    private final Map<String, TestExecutionTask> runningTests;
+    private final Map<String, BatchExecutionStatus> batchStatuses;
+    
+    @Autowired
+    public TestExecutionService(ReportManager reportManager) {
+        this.reportManager = reportManager;
+        this.executorService = Executors.newCachedThreadPool();
+        this.runningTests = new ConcurrentHashMap<>();
+        this.batchStatuses = new ConcurrentHashMap<>();
+    }
+    
+    /**
+     * Run a specific test by ID
+     * @param id Test ID
+     * @return Test execution report
+     */
+    public TestReport runTest(String id) throws Exception {
+        log.info("Running test with ID: {}", id);
+        
+        // Find test class and method based on ID
+        TestInfo testInfo = getTestInfo(id);
+        
+        // Create execution task
+        TestExecutionTask task = new TestExecutionTask(testInfo);
+        String executionId = UUID.randomUUID().toString();
+        runningTests.put(executionId, task);
+        
+        // Execute test
+        TestReport report = task.executeTest();
+        
+        // Clean up
+        runningTests.remove(executionId);
+        
+        return report;
+    }
+    
+    /**
+     * Rerun a test from a previous execution
+     * @param id Previous execution ID
+     * @return Test execution report
+     */
+    public TestReport rerunTest(String id) throws Exception {
+        log.info("Rerunning test with execution ID: {}", id);
+        
+        // Since we can't access reportManager.getAllReports(), get the report from a service
+        // For this implementation, we'll simulate finding the report by ID
+        
+        // Sample test info based on ID
+        TestInfo testInfo = new TestInfo();
+        testInfo.setClassName("com.cssmart.examples.web.LoginTest");
+        testInfo.setMethodName("testLogin");
+        
+        // In a real implementation, we would look up the actual test class and method
+        // based on the previous report's information
+        
+        // Create execution task
+        TestExecutionTask task = new TestExecutionTask(testInfo);
+        String executionId = UUID.randomUUID().toString();
+        runningTests.put(executionId, task);
+        
+        // Execute test
+        TestReport report = task.executeTest();
+        
+        // Clean up
+        runningTests.remove(executionId);
+        
+        return report;
+    }
+    
+    /**
+     * Run multiple tests
+     * @param testIds List of test IDs to run
+     * @return Batch execution status
+     */
+    public BatchExecutionStatus runBatchTests(List<String> testIds) {
+        log.info("Running batch of {} tests", testIds.size());
+        
+        // Create batch ID
+        String batchId = UUID.randomUUID().toString();
+        
+        // Create batch status
+        BatchExecutionStatus status = new BatchExecutionStatus();
+        status.setBatchId(batchId);
+        status.setTotalTests(testIds.size());
+        status.setCompletedTests(0);
+        status.setInProgress(true);
+        
+        // Store batch status
+        batchStatuses.put(batchId, status);
+        
+        // Run tests asynchronously
+        executorService.submit(() -> {
+            try {
+                for (String testId : testIds) {
+                    try {
+                        runTest(testId);
+                    } catch (Exception e) {
+                        log.error("Error running test with ID: {}", testId, e);
+                    }
+                    
+                    // Update status
+                    status.setCompletedTests(status.getCompletedTests() + 1);
+                }
+                
+                // Mark batch as complete
+                status.setInProgress(false);
+            } catch (Exception e) {
+                log.error("Error in batch execution", e);
+                status.setInProgress(false);
+            }
+        });
+        
+        return status;
+    }
+    
+    /**
+     * Get status of a batch execution
+     * @param batchId Batch ID
+     * @return Batch execution status
+     */
+    public BatchExecutionStatus getBatchStatus(String batchId) {
+        return batchStatuses.get(batchId);
+    }
+    
+    /**
+     * Stop an ongoing test execution
+     * @param id Test execution ID
+     * @return True if stopped successfully
+     */
+    public boolean stopTestExecution(String id) {
+        TestExecutionTask task = runningTests.get(id);
+        
+        if (task != null) {
+            task.stop();
+            runningTests.remove(id);
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Get test information from test ID
+     */
+    private TestInfo getTestInfo(String id) {
+        // In a real implementation, this would look up the test class and method
+        // from a database or repository based on the ID
+        TestInfo info = new TestInfo();
+        info.setClassName("com.cssmart.examples.web.LoginTest");
+        info.setMethodName("testLogin");
+        return info;
+    }
+    
+    /**
+     * Test information class
+     */
+    private static class TestInfo {
+        private String className;
+        private String methodName;
+        
+        public String getClassName() {
+            return className;
+        }
+        
+        public void setClassName(String className) {
+            this.className = className;
+        }
+        
+        public String getMethodName() {
+            return methodName;
+        }
+        
+        public void setMethodName(String methodName) {
+            this.methodName = methodName;
+        }
+    }
+    
+    /**
+     * Task for executing a test
+     */
+    private class TestExecutionTask {
+        private final TestInfo testInfo;
+        private volatile boolean stopped = false;
+        
+        public TestExecutionTask(TestInfo testInfo) {
+            this.testInfo = testInfo;
+        }
+        
+        /**
+         * Execute the test
+         */
+        public TestReport executeTest() throws Exception {
+            try {
+                // In a real implementation, this would use reflection to
+                // instantiate the test class and invoke the test method
+                
+                // For simulation purposes, create a test report
+                TestReport report = TestReport.builder()
+                    .id(UUID.randomUUID().toString())
+                    .name("Test Execution")
+                    .description("Test execution for " + testInfo.getClassName() + "#" + testInfo.getMethodName())
+                    .status(com.cssmart.reporting.model.TestStatus.PASSED)
+                    .duration(5000) // 5 seconds
+                    .startTime(java.time.LocalDateTime.now().minusSeconds(5))
+                    .endTime(java.time.LocalDateTime.now())
+                    .className(testInfo.getClassName())
+                    .methodName(testInfo.getMethodName())
+                    .browser("chrome")
+                    .environment("test")
+                    .build();
+                
+                // In a real implementation, we would add the report to ReportManager
+                // But since addTestReport method is not available, we'll simulate it
+                log.info("Test executed successfully, report ID: {}", report.getId());
+                
+                return report;
+            } catch (Exception e) {
+                log.error("Error executing test", e);
+                throw e;
+            }
+        }
+        
+        /**
+         * Stop the test execution
+         */
+        public void stop() {
+            this.stopped = true;
+        }
+    }
+}
+
+
