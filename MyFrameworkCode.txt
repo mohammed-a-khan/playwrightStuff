@@ -11798,3 +11798,181 @@ public class AppConfig {
     }
 }
 
+
+package com.cssmart.ui.service;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.util.Map;
+import java.util.HashMap;
+
+/**
+ * Service for managing framework configuration
+ */
+@Slf4j
+@Service
+public class ConfigurationService {
+    
+    private final ConfigurationManager configManager;
+    private final ObjectMapper jsonMapper;
+    private final ObjectMapper yamlMapper;
+    
+    @Autowired
+    public ConfigurationService(ConfigurationManager configManager) {
+        this.configManager = configManager;
+        this.jsonMapper = new ObjectMapper();
+        
+        // Configure YAML mapper
+        YAMLFactory yamlFactory = new YAMLFactory()
+            .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER)
+            .enable(YAMLGenerator.Feature.MINIMIZE_QUOTES);
+        this.yamlMapper = new ObjectMapper(yamlFactory);
+    }
+    
+    /**
+     * Get all configuration
+     * @return Complete configuration
+     */
+    public Map<String, Object> getAllConfig() {
+        log.info("Fetching all configuration");
+        
+        Map<String, Object> config = new HashMap<>();
+        
+        try {
+            // Get configuration for each section
+            config.put("general", configManager.getConfig("general", Map.class));
+            config.put("browser", configManager.getConfig("browser", Map.class));
+            config.put("environment", configManager.getConfig("environment", Map.class));
+            
+            return config;
+        } catch (Exception e) {
+            log.error("Error fetching configuration", e);
+            throw new RuntimeException("Failed to fetch configuration: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Save configuration for a specific section
+     * @param section Configuration section (general, browser, environment)
+     * @param config Configuration to save
+     * @return Updated configuration
+     */
+    public Map<String, Object> saveConfig(String section, Map<String, Object> config) {
+        log.info("Saving {} configuration", section);
+        
+        try {
+            // Update configuration
+            configManager.updateConfig(section, config);
+            
+            // Return updated configuration
+            return config;
+        } catch (Exception e) {
+            log.error("Error saving {} configuration", section, e);
+            throw new RuntimeException("Failed to save configuration: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Reset configuration to defaults
+     * @return Default configuration
+     */
+    public Map<String, Object> resetToDefaults() {
+        log.info("Resetting configuration to defaults");
+        
+        try {
+            configManager.resetToDefaults();
+            return getAllConfig();
+        } catch (Exception e) {
+            log.error("Error resetting configuration", e);
+            throw new RuntimeException("Failed to reset configuration: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Export configuration to file
+     * @param format Export format (yaml or json)
+     * @return File resource
+     */
+    public Resource exportConfig(String format) throws IOException {
+        log.info("Exporting configuration in format: {}", format);
+        
+        // Get all configuration
+        Map<String, Object> config = getAllConfig();
+        
+        // Create temp file
+        File tempFile = File.createTempFile("config-", "." + format);
+        
+        // Write configuration to file
+        if ("yaml".equalsIgnoreCase(format)) {
+            yamlMapper.writeValue(tempFile, config);
+        } else if ("json".equalsIgnoreCase(format)) {
+            jsonMapper.writerWithDefaultPrettyPrinter().writeValue(tempFile, config);
+        } else {
+            throw new IllegalArgumentException("Unsupported format: " + format);
+        }
+        
+        return new FileSystemResource(tempFile);
+    }
+    
+    /**
+     * Import configuration from file
+     * @param file Configuration file
+     * @return Imported configuration
+     */
+    public Map<String, Object> importConfig(MultipartFile file) throws IOException {
+        log.info("Importing configuration from file: {}", file.getOriginalFilename());
+        
+        Map<String, Object> config;
+        
+        // Determine format from filename
+        String filename = file.getOriginalFilename();
+        if (filename.endsWith(".yaml") || filename.endsWith(".yml")) {
+            config = yamlMapper.readValue(file.getInputStream(), Map.class);
+        } else if (filename.endsWith(".json")) {
+            config = jsonMapper.readValue(file.getInputStream(), Map.class);
+        } else {
+            throw new IllegalArgumentException("Unsupported file format: " + filename);
+        }
+        
+        // Update each section
+        for (Map.Entry<String, Object> entry : config.entrySet()) {
+            if (entry.getValue() instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> sectionConfig = (Map<String, Object>) entry.getValue();
+                saveConfig(entry.getKey(), sectionConfig);
+            }
+        }
+        
+        return getAllConfig();
+    }
+    
+    /**
+     * Update configuration from environmental variables
+     */
+    public void updateFromEnvironment() {
+        log.info("Updating configuration from environment variables");
+        
+        try {
+            configManager.updateFromEnvironment();
+        } catch (Exception e) {
+            log.error("Error updating configuration from environment", e);
+            throw new RuntimeException("Failed to update configuration from environment: " + e.getMessage(), e);
+        }
+    }
+}
+
