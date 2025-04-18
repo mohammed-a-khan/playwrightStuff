@@ -24,7 +24,6 @@
         <javaparser.version>3.25.5</javaparser.version>
         <freemarker.version>2.3.32</freemarker.version>
         <appium.version>8.6.0</appium.version>
-        <skip.npm.install>true</skip.npm.install>
     </properties>
 
     <dependencies>
@@ -213,7 +212,7 @@
                     </suiteXmlFiles>
                 </configuration>
             </plugin>
-            <!-- Keep only this Maven resources plugin to copy the already built files -->
+            <!-- Keep only the Maven resources plugin to copy the already built files -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
@@ -237,65 +236,7 @@
                     </execution>
                 </executions>
             </plugin>
-            <!-- Use Apache Ant to just run the npm build command (not npm install) -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-antrun-plugin</artifactId>
-                <version>3.1.0</version>
-                <executions>
-                    <execution>
-                        <id>npm-build-only</id>
-                        <phase>generate-resources</phase>
-                        <goals>
-                            <goal>run</goal>
-                        </goals>
-                        <configuration>
-                            <target>
-                                <!-- Check if we're on Windows or Unix -->
-                                <condition property="npm.executable" value="npm.cmd" else="npm">
-                                    <os family="windows"/>
-                                </condition>
-                                
-                                <!-- Run npm build only (skip install) -->
-                                <echo message="Running npm build..."/>
-                                <exec executable="${npm.executable}" dir="${project.basedir}/src/main/webapp" failonerror="true">
-                                    <arg value="run"/>
-                                    <arg value="build"/>
-                                </exec>
-                            </target>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-            <!-- Remove the frontend-maven-plugin completely -->
+            <!-- Remove all the other plugins for frontend building -->
         </plugins>
     </build>
-    
-    <!-- Add a profile to skip even the npm build step if needed -->
-    <profiles>
-        <profile>
-            <id>skip-npm-build</id>
-            <activation>
-                <property>
-                    <name>skip.npm.build</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-antrun-plugin</artifactId>
-                        <version>3.1.0</version>
-                        <executions>
-                            <execution>
-                                <id>npm-build-only</id>
-                                <phase>none</phase>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 </project>
