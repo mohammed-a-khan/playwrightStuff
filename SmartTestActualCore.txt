@@ -1,0 +1,1068 @@
+package com.cssmart.ui.recorder;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.time.LocalDateTime;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.core.driver.DriverManager;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.safari.SafariDriver;
+import io.github.bonigarcia.wdm.WebDriverManager;
+
+@Slf4j
+public class TestRecorder {
+    private boolean isRecording;
+    private List<RecordedStep> steps;
+    private final AIEngine aiEngine;
+    private LocalDateTime startTime;
+    private String sessionId;
+    private WebDriver driver;
+    private String baseUrl;
+    
+    public TestRecorder() {
+        this.isRecording = false;
+        this.steps = new ArrayList<>();
+        this.aiEngine = AIEngine.getInstance();
+    }
+    
+    public void startRecording(String browserType, String url) {
+        this.isRecording = true;
+        this.steps.clear();
+        this.baseUrl = url;
+        this.startTime = LocalDateTime.now();
+        this.sessionId = UUID.randomUUID().toString();
+        
+        // Initialize and launch browser
+        initializeBrowser(browserType);
+        
+        // Navigate to the base URL
+        if (driver != null && baseUrl != null && !baseUrl.isEmpty()) {
+            driver.get(baseUrl);
+            
+            // Record navigation as a step
+            RecordedStep step = new RecordedStep();
+            step.setAction("NAVIGATE");
+            step.setValue(baseUrl);
+            step.setTimestamp(LocalDateTime.now());
+            step.setDescription("Navigate to " + baseUrl);
+            steps.add(step);
+        }
+        
+        log.info("Recording started with session ID: {}", sessionId);
+    }
+    
+    private void initializeBrowser(String browserType) {
+        try {
+            // Set up the WebDriver based on browser type
+            switch (browserType.toLowerCase()) {
+                case "chrome":
+                    WebDriverManager.chromedriver().setup();
+                    driver = new ChromeDriver();
+                    break;
+                case "firefox":
+                    WebDriverManager.firefoxdriver().setup();
+                    driver = new FirefoxDriver();
+                    break;
+                case "edge":
+                    WebDriverManager.edgedriver().setup();
+                    driver = new EdgeDriver();
+                    break;
+                case "safari":
+                    driver = new SafariDriver();
+                    break;
+                default:
+                    log.warn("Unsupported browser type: {}. Defaulting to Chrome.", browserType);
+                    WebDriverManager.chromedriver().setup();
+                    driver = new ChromeDriver();
+            }
+            
+            // Maximize browser window
+            driver.manage().window().maximize();
+            
+            log.info("Browser initialized: {}", browserType);
+        } catch (Exception e) {
+            log.error("Failed to initialize browser: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize browser: " + e.getMessage(), e);
+        }
+    }
+    
+    public TestCase stopRecording() {
+        this.isRecording = false;
+        LocalDateTime endTime = LocalDateTime.now();
+        log.info("Recording stopped, captured {} steps", steps.size());
+        
+        // Close the browser
+        if (driver != null) {
+            try {
+                driver.quit();
+                log.info("Browser closed");
+            } catch (Exception e) {
+                log.error("Error closing browser: {}", e.getMessage(), e);
+            } finally {
+                driver = null;
+            }
+        }
+        
+        // Create test case from recorded steps
+        TestCase testCase = createTestCase(steps, startTime, endTime);
+        
+        // Clear steps
+        this.steps.clear();
+        
+        return testCase;
+    }
+    
+    public void recordAction(Action action, String element, String value) {
+        if (!isRecording) {
+            log.warn("Attempted to record action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(action.getType().toString());
+        step.setElement(element);
+        step.setValue(value);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        step.setDescription(generateDescription(action.getType(), element, value));
+        
+        steps.add(step);
+        log.debug("Recorded step: {}", step);
+    }
+    
+    public void recordBrowserAction(String browserAction, String url) {
+        if (!isRecording) {
+            log.warn("Attempted to record browser action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(browserAction);
+        step.setValue(url);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        if ("NAVIGATE".equals(browserAction)) {
+            step.setDescription("Navigate to " + url);
+        } else if ("BACK".equals(browserAction)) {
+            step.setDescription("Navigate back");
+        } else if ("FORWARD".equals(browserAction)) {
+            step.setDescription("Navigate forward");
+        } else if ("REFRESH".equals(browserAction)) {
+            step.setDescription("Refresh page");
+        }
+        
+        steps.add(step);
+        log.debug("Recorded browser action: {}", step);
+    }
+    
+    private String generateDescription(ActionType actionType, String element, String value) {
+        switch (actionType) {
+            case CLICK:
+                return "Click on " + element;
+            case TYPE:
+                return "Enter '" + value + "' in " + element;
+            case SELECT:
+                return "Select '" + value + "' from " + element;
+            case VERIFY_PRESENCE:
+                return "Verify " + element + " is present";
+            case VERIFY_VISIBILITY:
+                return "Verify " + element + " is visible";
+            case VERIFY_STATE:
+                return "Verify " + element + " state is '" + value + "'";
+            case WAIT:
+                return "Wait for " + element;
+            case HOVER:
+                return "Hover over " + element;
+            default:
+                return actionType + " on " + element;
+        }
+    }
+    
+    private TestCase createTestCase(List<RecordedStep> steps, LocalDateTime startTime, LocalDateTime endTime) {
+        TestCase testCase = new TestCase();
+        testCase.setId(sessionId);
+        testCase.setName("Recorded Test " + startTime.toString());
+        testCase.setDescription("Automatically recorded test case");
+        testCase.setSteps(new ArrayList<>(steps));
+        testCase.setStartTime(startTime);
+        testCase.setEndTime(endTime);
+        
+        // Generate class and method names
+        testCase.setClassName("RecordedTest" + startTime.toString().replaceAll("[^a-zA-Z0-9]", ""));
+        testCase.setMethodName("test" + startTime.toString().replaceAll("[^a-zA-Z0-9]", ""));
+        
+        // Use AI to enhance test case
+        enhanceTestCase(testCase);
+        
+        // Generate test code
+        testCase.setCode(generateTestCode(testCase));
+        
+        return testCase;
+    }
+    
+    private void enhanceTestCase(TestCase testCase) {
+        // Extract pattern from steps
+        List<Action> actions = new ArrayList<>();
+        for (RecordedStep step : testCase.getSteps()) {
+            try {
+                ActionType actionType = ActionType.valueOf(step.getAction());
+                Action action = new Action(actionType);
+                action.setValue(step.getValue());
+                actions.add(action);
+            } catch (IllegalArgumentException e) {
+                log.warn("Unknown action type: {}", step.getAction());
+            }
+        }
+        
+        if (!actions.isEmpty()) {
+            try {
+                // Detect patterns
+                List<com.cssmart.ai.patterns.model.Pattern> patterns = 
+                    aiEngine.recognizePatterns(actions);
+                
+                // Generate better name and description based on patterns
+                if (!patterns.isEmpty()) {
+                    // Use the highest confidence pattern for naming
+                    com.cssmart.ai.patterns.model.Pattern topPattern = 
+                        patterns.stream()
+                            .sorted((p1, p2) -> Double.compare(p2.getConfidence(), p1.getConfidence()))
+                            .findFirst()
+                            .orElse(null);
+                    
+                    if (topPattern != null) {
+                        testCase.setName(topPattern.getName() + " Test");
+                        testCase.setDescription(topPattern.getDescription());
+                        
+                        // Update class and method names
+                        testCase.setClassName(
+                            topPattern.getName().replaceAll("[^a-zA-Z0-9]", "") + "Test");
+                        testCase.setMethodName(
+                            "test" + topPattern.getName().replaceAll("[^a-zA-Z0-9]", ""));
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Error enhancing test case: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    private String generateTestCode(TestCase testCase) {
+        // A simple code generation implementation
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        for (RecordedStep step : testCase.getSteps()) {
+            code.append("        // ").append(step.getDescription()).append("\n");
+            
+            if ("NAVIGATE".equals(step.getAction())) {
+                code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+            } else if ("CLICK".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.click();\n");
+            } else if ("TYPE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.clear();\n");
+                code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+            } else if ("SELECT".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                    .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+            } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                    .append(step.getElement()).append(" should be present\");\n");
+            }
+            
+            code.append("\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    public boolean isRecording() {
+        return isRecording;
+    }
+    
+    public List<RecordedStep> getSteps() {
+        return new ArrayList<>(steps);  // Return a copy to prevent modification
+    }
+    
+    public RecordedStep getLastRecordedStep() {
+        if (steps.isEmpty()) {
+            return null;
+        }
+        return steps.get(steps.size() - 1);
+    }
+    
+    public WebDriver getDriver() {
+        return driver;
+    }
+}
+
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecorderMessage;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * WebSocket handler for the test recorder
+ * Manages real-time communication between the browser and server
+ * for recording test actions
+ */
+@Slf4j
+@Component
+public class TestRecorderHandler extends TextWebSocketHandler {
+    
+    private final ObjectMapper objectMapper;
+    private final Map<String, TestRecorder> recorders;
+    private final AIEngine aiEngine;
+    
+    @Autowired
+    public TestRecorderHandler(ObjectMapper objectMapper, AIEngine aiEngine) {
+        this.objectMapper = objectMapper;
+        this.recorders = new ConcurrentHashMap<>();
+        this.aiEngine = aiEngine;
+    }
+    
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        log.info("WebSocket connection established: {}", session.getId());
+    }
+    
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        String sessionId = session.getId();
+        RecorderMessage msg = objectMapper.readValue(message.getPayload(), RecorderMessage.class);
+        
+        log.debug("Received recorder message: {}", msg.getType());
+        
+        switch (msg.getType()) {
+            case "START_RECORDING":
+                startRecording(session, sessionId, msg.getData());
+                break;
+            case "STOP_RECORDING":
+                stopRecording(session, sessionId);
+                break;
+            case "ACTION":
+                recordAction(session, sessionId, msg.getData());
+                break;
+            default:
+                log.warn("Unknown message type: {}", msg.getType());
+                sendError(session, "Unknown message type: " + msg.getType());
+                break;
+        }
+    }
+    
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        String sessionId = session.getId();
+        TestRecorder recorder = recorders.get(sessionId);
+        
+        // Make sure to stop recording and clean up resources
+        if (recorder != null && recorder.isRecording()) {
+            try {
+                recorder.stopRecording();
+            } catch (Exception e) {
+                log.error("Error stopping recording on connection close: {}", e.getMessage(), e);
+            }
+            recorders.remove(sessionId);
+        }
+        
+        log.info("WebSocket connection closed: {}", sessionId);
+    }
+    
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) {
+        log.error("WebSocket transport error for session {}: {}", 
+                session.getId(), exception.getMessage(), exception);
+    }
+    
+    /**
+     * Start a new recording session
+     */
+    @SuppressWarnings("unchecked")
+    private void startRecording(WebSocketSession session, String sessionId, Object configData) throws Exception {
+        log.info("Starting recording session for: {}", sessionId);
+        
+        // Get recording configuration
+        String browserType = "chrome"; // Default
+        String url = "https://example.com"; // Default
+        
+        if (configData != null) {
+            try {
+                Map<String, Object> config = (Map<String, Object>) configData;
+                if (config.containsKey("browser")) {
+                    browserType = (String) config.get("browser");
+                }
+                if (config.containsKey("url")) {
+                    url = (String) config.get("url");
+                }
+                
+                log.info("Recording configuration - browser: {}, url: {}", browserType, url);
+            } catch (Exception e) {
+                log.error("Error parsing recording configuration: {}", e.getMessage(), e);
+            }
+        }
+        
+        // Initialize recorder
+        TestRecorder recorder = new TestRecorder();
+        
+        try {
+            // Start recording with the provided configuration
+            recorder.startRecording(browserType, url);
+            recorders.put(sessionId, recorder);
+            
+            sendMessage(session, new RecorderMessage("RECORDING_STARTED", null));
+        } catch (Exception e) {
+            log.error("Failed to start recording: {}", e.getMessage(), e);
+            sendError(session, "Failed to start recording: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Stop recording and return test case
+     */
+    private void stopRecording(WebSocketSession session, String sessionId) throws Exception {
+        log.info("Stopping recording session for: {}", sessionId);
+        
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            TestCase testCase = recorder.stopRecording();
+            
+            // Enhance test case with AI
+            testCase = aiEngine.enhanceTestCase(testCase);
+            
+            sendMessage(session, new RecorderMessage("TEST_CASE", testCase));
+            
+            // Cleanup
+            recorders.remove(sessionId);
+        } else {
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Record an action in the current session
+     */
+    @SuppressWarnings("unchecked")
+    private void recordAction(WebSocketSession session, String sessionId, Object actionData) throws Exception {
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            try {
+                Map<String, String> data = (Map<String, String>) actionData;
+                
+                String actionType = data.get("action");
+                String element = data.get("element");
+                String value = data.get("value");
+                
+                Action action = new Action(ActionType.valueOf(actionType));
+                action.setValue(value);
+                
+                recorder.recordAction(action, element, value);
+                
+                // Send the recorded step back to client for display
+                RecordedStep step = recorder.getLastRecordedStep();
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+                
+            } catch (Exception e) {
+                log.error("Error recording action", e);
+                sendError(session, "Failed to record action: " + e.getMessage());
+            }
+        } else {
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Send a message to the WebSocket client
+     */
+    private void sendMessage(WebSocketSession session, RecorderMessage msg) {
+        try {
+            String json = objectMapper.writeValueAsString(msg);
+            session.sendMessage(new TextMessage(json));
+        } catch (IOException e) {
+            log.error("Error sending message to WebSocket client", e);
+        }
+    }
+    
+    /**
+     * Send an error message to the WebSocket client
+     */
+    private void sendError(WebSocketSession session, String errorMessage) {
+        log.warn("Sending error to client: {}", errorMessage);
+        sendMessage(session, new RecorderMessage("ERROR", errorMessage));
+    }
+}
+
+// src/main/webapp/src/services/recorderService.js
+/**
+ * Recorder Service - Handles WebSocket communication for test recording
+ */
+class RecorderService {
+  constructor() {
+    this.socket = null;
+    this.callbacks = {
+      onConnect: null,
+      onDisconnect: null,
+      onRecordingStarted: null,
+      onStepRecorded: null,
+      onTestCase: null,
+      onError: null
+    };
+    this.config = {
+      url: 'https://example.com',
+      browser: 'chrome',
+      headless: false
+    };
+  }
+  
+  /**
+   * Set recording configuration
+   * @param {Object} config - Configuration object
+   */
+  setConfig(config) {
+    this.config = { ...this.config, ...config };
+  }
+  
+  /**
+   * Connect to the recorder WebSocket
+   * @returns {boolean} Connection status
+   */
+  connect() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      return true;
+    }
+    
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/recorder`;
+    
+    try {
+      this.socket = new WebSocket(wsUrl);
+      
+      this.socket.onopen = () => {
+        console.log('Recorder WebSocket connected');
+        if (this.callbacks.onConnect) {
+          this.callbacks.onConnect();
+        }
+      };
+      
+      this.socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          this.handleMessage(message);
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
+        }
+      };
+      
+      this.socket.onerror = (error) => {
+        console.error('Recorder WebSocket error:', error);
+        if (this.callbacks.onError) {
+          this.callbacks.onError(error);
+        }
+      };
+      
+      this.socket.onclose = () => {
+        console.log('Recorder WebSocket disconnected');
+        if (this.callbacks.onDisconnect) {
+          this.callbacks.onDisconnect();
+        }
+      };
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to connect to Recorder WebSocket:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Disconnect from the recorder WebSocket
+   */
+  disconnect() {
+    if (this.socket) {
+      this.socket.close();
+      this.socket = null;
+    }
+  }
+  
+  /**
+   * Start recording a test
+   * @returns {boolean} Success status
+   */
+  startRecording() {
+    return this.sendMessage({ 
+      type: 'START_RECORDING',
+      data: this.config 
+    });
+  }
+  
+  /**
+   * Stop recording
+   * @returns {boolean} Success status
+   */
+  stopRecording() {
+    return this.sendMessage({ type: 'STOP_RECORDING' });
+  }
+  
+  /**
+   * Record an action
+   * @param {Object} action - Action data
+   * @returns {boolean} Success status
+   */
+  recordAction(action) {
+    return this.sendMessage({ type: 'ACTION', data: action });
+  }
+  
+  /**
+   * Send a message through the WebSocket
+   * @param {Object} message - Message to send
+   * @returns {boolean} Success status
+   */
+  sendMessage(message) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected');
+      return false;
+    }
+    
+    try {
+      this.socket.send(JSON.stringify(message));
+      return true;
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Handle incoming WebSocket messages
+   * @param {Object} message - Received message
+   */
+  handleMessage(message) {
+    switch (message.type) {
+      case 'RECORDING_STARTED':
+        if (this.callbacks.onRecordingStarted) {
+          this.callbacks.onRecordingStarted();
+        }
+        break;
+      case 'STEP_RECORDED':
+        if (this.callbacks.onStepRecorded) {
+          this.callbacks.onStepRecorded(message.data);
+        }
+        break;
+      case 'TEST_CASE':
+        if (this.callbacks.onTestCase) {
+          this.callbacks.onTestCase(message.data);
+        }
+        break;
+      case 'ERROR':
+        if (this.callbacks.onError) {
+          this.callbacks.onError(message.data);
+        }
+        break;
+      default:
+        console.warn('Unknown message type:', message.type);
+    }
+  }
+  
+  /**
+   * Set event callbacks
+   * @param {Object} callbacks - Callback functions
+   */
+  setCallbacks(callbacks) {
+    this.callbacks = { ...this.callbacks, ...callbacks };
+  }
+}
+
+const recorderService = new RecorderService();
+export default recorderService;
+
+// src/main/webapp/src/components/recorder/TestRecorder.jsx
+import React, { useState, useEffect, useRef } from 'react';
+import RecordedSteps from './RecordedSteps';
+import RecorderConfig from './RecorderConfig';
+import TestCodeViewer from './TestCodeViewer';
+import recorderService from '../../services/recorderService';
+import { useNotification } from '../../context/NotificationContext';
+
+const TestRecorder = () => {
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedSteps, setRecordedSteps] = useState([]);
+  const [testCase, setTestCase] = useState(null);
+  const [config, setConfig] = useState({
+    url: 'https://example.com',
+    browser: 'chrome',
+    headless: false
+  });
+  const { addNotification } = useNotification();
+  
+  // Connect to WebSocket when component mounts
+  useEffect(() => {
+    // Set up callbacks for the recorder service
+    recorderService.setCallbacks({
+      onConnect: () => {
+        addNotification('Connected to recording service', 'success');
+      },
+      onDisconnect: () => {
+        // If we disconnect while recording, update the UI state
+        if (isRecording) {
+          setIsRecording(false);
+          addNotification('Recording service disconnected', 'error');
+        }
+      },
+      onRecordingStarted: () => {
+        addNotification('Recording started', 'success');
+      },
+      onStepRecorded: (step) => {
+        setRecordedSteps(prev => [...prev, step]);
+      },
+      onTestCase: (data) => {
+        setTestCase(data);
+        addNotification('Test case generated successfully', 'success');
+      },
+      onError: (error) => {
+        addNotification(`Error: ${error}`, 'error');
+      }
+    });
+    
+    // Connect to the WebSocket
+    recorderService.connect();
+    
+    // Cleanup WebSocket on component unmount
+    return () => {
+      recorderService.disconnect();
+    };
+  }, [addNotification, isRecording]);
+  
+  // Start recording
+  const startRecording = () => {
+    setRecordedSteps([]);
+    setTestCase(null);
+    
+    // Update the recorder service configuration
+    recorderService.setConfig(config);
+    
+    // Connect if not already connected
+    if (!recorderService.connect()) {
+      addNotification('Failed to connect to recording service', 'error');
+      return;
+    }
+    
+    // Start recording
+    if (recorderService.startRecording()) {
+      setIsRecording(true);
+    } else {
+      addNotification('Failed to start recording', 'error');
+    }
+  };
+  
+  // Stop recording
+  const stopRecording = () => {
+    if (recorderService.stopRecording()) {
+      setIsRecording(false);
+    } else {
+      addNotification('Failed to stop recording', 'error');
+    }
+  };
+  
+  // Update configuration
+  const updateConfig = (newConfig) => {
+    setConfig(newConfig);
+  };
+  
+  // Save test case
+  const saveTestCase = () => {
+    if (!testCase) return;
+    
+    fetch('/api/recorder/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(testCase),
+    })
+      .then(response => response.json())
+      .then(data => {
+        addNotification('Test case saved successfully!', 'success');
+      })
+      .catch(error => {
+        console.error('Error saving test case:', error);
+        addNotification('Failed to save test case.', 'error');
+      });
+  };
+  
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-semibold">Test Recorder</h1>
+        <button
+          className={`px-4 py-2 rounded-md ${isRecording ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'} text-white`}
+          onClick={isRecording ? stopRecording : startRecording}
+        >
+          {isRecording ? 'Stop Recording' : 'Start Recording'}
+        </button>
+      </div>
+      
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <RecorderConfig 
+          config={config} 
+          updateConfig={updateConfig} 
+          disabled={isRecording} 
+        />
+        
+        <RecordedSteps steps={recordedSteps} />
+      </div>
+      
+      {testCase && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold">Generated Test</h2>
+            <button
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+              onClick={saveTestCase}
+            >
+              Save Test
+            </button>
+          </div>
+          <TestCodeViewer code={testCase.code} />
+        </div>
+      )}
+      
+      {isRecording && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded-md shadow-lg animate-pulse">
+          Recording in progress... Actions performed in the browser are being captured.
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TestRecorder;
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+    <!-- Add these dependencies to your pom.xml -->
+    <dependencies>
+        <!-- WebDriverManager for easy driver management -->
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <version>5.5.3</version>
+        </dependency>
+        
+        <!-- Selenium WebDriver -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-java</artifactId>
+            <version>4.16.1</version>
+        </dependency>
+        
+        <!-- Additional dependencies you might need -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-chrome-driver</artifactId>
+            <version>4.16.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-firefox-driver</artifactId>
+            <version>4.16.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-edge-driver</artifactId>
+            <version>4.16.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-safari-driver</artifactId>
+            <version>4.16.1</version>
+        </dependency>
+    </dependencies>
+</project>
+
+package com.cssmart.ui.controller;
+
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.service.TestGeneratorService;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.UUID;
+
+/**
+ * REST controller for test recorder operations
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/recorder")
+public class RecorderController {
+    
+    private final TestGeneratorService testGeneratorService;
+    
+    @Autowired
+    public RecorderController(TestGeneratorService testGeneratorService) {
+        this.testGeneratorService = testGeneratorService;
+    }
+    
+    /**
+     * Save a recorded test case
+     * @param testCase Recorded test case
+     * @return Saved test case
+     */
+    @PostMapping("/save")
+    public ResponseEntity<TestCase> saveTestCase(@RequestBody TestCase testCase) {
+        log.info("Saving recorded test case: {}", testCase.getName());
+        
+        try {
+            // Ensure the test case has an ID
+            if (testCase.getId() == null || testCase.getId().isEmpty()) {
+                testCase.setId(UUID.randomUUID().toString());
+            }
+            
+            // Convert to generated test format and save
+            com.cssmart.ui.controller.GeneratedTest generatedTest = new com.cssmart.ui.controller.GeneratedTest();
+            generatedTest.setId(testCase.getId());
+            generatedTest.setName(testCase.getName());
+            generatedTest.setDescription(testCase.getDescription());
+            generatedTest.setClassName(testCase.getClassName());
+            generatedTest.setMethodName(testCase.getMethodName());
+            generatedTest.setCode(testCase.getCode());
+            
+            // Convert steps to test steps
+            // This would be more complex in a real implementation
+            
+            // Save the test
+            testGeneratorService.saveTest(generatedTest);
+            
+            return ResponseEntity.ok(testCase);
+        } catch (Exception e) {
+            log.error("Error saving test case", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Get browser configuration options
+     * @return Browser configuration
+     */
+    @GetMapping("/browser-config")
+    public ResponseEntity<BrowserConfig> getBrowserConfig() {
+        log.info("Fetching browser configuration options");
+        
+        try {
+            BrowserConfig config = new BrowserConfig();
+            config.addBrowserOption("chrome", "Chrome");
+            config.addBrowserOption("firefox", "Firefox");
+            config.addBrowserOption("edge", "Edge");
+            config.addBrowserOption("safari", "Safari");
+            
+            return ResponseEntity.ok(config);
+        } catch (Exception e) {
+            log.error("Error fetching browser configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+}
+
+/**
+ * Browser configuration options
+ */
+class BrowserConfig {
+    private List<BrowserOption> browsers = new ArrayList<>();
+    
+    public void addBrowserOption(String value, String label) {
+        browsers.add(new BrowserOption(value, label));
+    }
+    
+    public List<BrowserOption> getBrowsers() {
+        return browsers;
+    }
+    
+    public void setBrowsers(List<BrowserOption> browsers) {
+        this.browsers = browsers;
+    }
+    
+    static class BrowserOption {
+        private String value;
+        private String label;
+        
+        public BrowserOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+        
+        public String getValue() {
+            return value;
+        }
+        
+        public void setValue(String value) {
+            this.value = value;
+        }
+        
+        public String getLabel() {
+            return label;
+        }
+        
+        public void setLabel(String label) {
+            this.label = label;
+        }
+    }
+}
