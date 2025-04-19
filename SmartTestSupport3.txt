@@ -8052,38 +8052,66 @@ import java.util.Map;
 @RequestMapping("/api/recorder")
 public class RecorderEventController {
     
-    private final TestRecorderHandler testRecorderHandler;
+    private static final Logger log = LoggerFactory.getLogger(RecorderEventController.class);
+    private final TestRecorderHandler recorderHandler;
     
     @Autowired
-    public RecorderEventController(TestRecorderHandler testRecorderHandler) {
-        this.testRecorderHandler = testRecorderHandler;
+    public RecorderEventController(TestRecorderHandler recorderHandler) {
+        this.recorderHandler = recorderHandler;
     }
     
-    /**
-     * Endpoint to receive events from the browser
-     * @param payload Event data
-     * @return Response entity
-     */
     @PostMapping("/event")
-    public ResponseEntity<String> recordEvent(@RequestBody Map<String, String> payload) {
+    public ResponseEntity<String> handleEvent(@RequestBody RecorderEvent event) {
+        log.info("Received recorder event: {}", event);
+        
         try {
-            log.info("Received event from browser: {}", payload);
-            
-            String actionType = payload.get("action");
-            String element = payload.get("element");
-            String value = payload.get("value");
-            
-            if (actionType == null || element == null) {
-                return ResponseEntity.badRequest().body("Missing required parameters");
+            // Skip INIT events as they are just for testing the connection
+            if ("INIT".equals(event.getActionType())) {
+                return ResponseEntity.ok("Initialization event received");
             }
             
-            // Forward the event to the appropriate recorder
-            testRecorderHandler.handleBrowserEvent(actionType, element, value);
+            ActionType actionType = ActionType.valueOf(event.getActionType());
+            Action action = new Action(actionType);
+            
+            if (event.getValue() != null) {
+                action.setValue(event.getValue());
+            }
+            
+            recorderHandler.recordAction(event.getSessionId(), action, event.getElement(), event.getValue());
             
             return ResponseEntity.ok("Event recorded");
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown action type: {}", event.getActionType());
+            return ResponseEntity.badRequest().body("Unknown action type: " + event.getActionType());
         } catch (Exception e) {
-            log.error("Error processing browser event", e);
+            log.error("Error processing recorder event", e);
             return ResponseEntity.status(500).body("Error processing event: " + e.getMessage());
+        }
+    }
+    
+    public static class RecorderEvent {
+        private String sessionId;
+        private String actionType;
+        private String element;
+        private String value;
+        
+        // Getters and setters
+        public String getSessionId() { return sessionId; }
+        public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+        
+        public String getActionType() { return actionType; }
+        public void setActionType(String actionType) { this.actionType = actionType; }
+        
+        public String getElement() { return element; }
+        public void setElement(String element) { this.element = element; }
+        
+        public String getValue() { return value; }
+        public void setValue(String value) { this.value = value; }
+        
+        @Override
+        public String toString() {
+            return "RecorderEvent{sessionId='" + sessionId + "', actionType='" + actionType + 
+                   "', element='" + element + "', value='" + value + "'}";
         }
     }
 }
