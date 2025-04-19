@@ -7656,7 +7656,7 @@ public class TestRecorder {
         log.info("Recording started with session ID: {}", sessionId);
     }
     
-     /**
+    /**
      * Inject JavaScript code to capture user actions in the browser
      */
     private void injectRecorderScript() {
@@ -7664,7 +7664,10 @@ public class TestRecorder {
             try {
                 JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
                 
-                // Much simpler script version
+                // Get the contextPath to ensure proper endpoint URLs
+                String contextPath = "";  // Replace with actual context path if needed
+                
+                // Enhance script for more comprehensive event capturing
                 String recorderScript = 
                     "console.log('Injecting CS Smart recorder...');" +
                     "window.csSmartRecorderSessionId = '" + sessionId + "';" +
@@ -7672,28 +7675,55 @@ public class TestRecorder {
                     // Setup a simple function to send events
                     "function sendRecorderEvent(eventType, selector, value) {" +
                     "  try {" +
+                    "    console.log('Sending event:', eventType, selector, value);" +
                     "    var xhr = new XMLHttpRequest();" +
-                    "    xhr.open('POST', '/api/recorder/event', true);" +
+                    "    xhr.open('POST', '" + contextPath + "/api/recorder/event', true);" +
                     "    xhr.setRequestHeader('Content-Type', 'application/json');" +
+                    "    xhr.onreadystatechange = function() {" +
+                    "      if (xhr.readyState === 4) {" +
+                    "        if (xhr.status === 200) {" +
+                    "          console.log('Event recorded successfully');" +
+                    "        } else {" +
+                    "          console.error('Failed to record event, status:', xhr.status);" +
+                    "        }" +
+                    "      }" +
+                    "    };" +
                     "    var data = JSON.stringify({" +
                     "      action: eventType," +
                     "      element: selector," +
                     "      value: value" +
                     "    });" +
                     "    xhr.send(data);" +
-                    "    console.log('Sent event:', eventType, selector, value);" +
                     "  } catch(e) {" +
-                    "    console.error('Error sending event:', e);" +
+                    "    console.error('Error sending event:', e.message);" +
                     "  }" +
                     "}" +
                     
-                    // Function to get a selector for an element
+                    // Function to get a better selector for an element
                     "function getElementSelector(element) {" +
                     "  if (!element) return '';" +
                     "  if (element.id) return '#' + element.id;" +
                     "  if (element.name) return '[name=\"' + element.name + '\"]';" +
+                    "  " +
+                    "  // Try to build a better selector with tagName and attributes" +
                     "  var tagName = element.tagName.toLowerCase();" +
-                    "  return tagName;" +
+                    "  var selector = tagName;" +
+                    "  " +
+                    "  // Add class information if available" +
+                    "  if (element.className && typeof element.className === 'string' && element.className.trim() !== '') {" +
+                    "    var cleanClass = element.className.trim().replace(/\\s+/g, '.');" +
+                    "    selector += '.' + cleanClass;" +
+                    "  }" +
+                    "  " +
+                    "  // Add text content for links and buttons" +
+                    "  if ((tagName === 'a' || tagName === 'button') && element.textContent) {" +
+                    "    var text = element.textContent.trim();" +
+                    "    if (text) {" +
+                    "      selector += '[contains(text(),\"' + text + '\")]';" +
+                    "    }" +
+                    "  }" +
+                    "  " +
+                    "  return selector;" +
                     "}" +
                     
                     // Click handler
@@ -7703,26 +7733,55 @@ public class TestRecorder {
                     "  sendRecorderEvent('CLICK', selector, '');" +
                     "}, true);" +
                     
-                    // Input handler
-                    "document.addEventListener('change', function(e) {" +
+                    // Input handler for text input
+                    "document.addEventListener('input', function(e) {" +
                     "  var element = e.target;" +
-                    "  var selector = getElementSelector(element);" +
-                    "  var value = element.value || '';" +
-                    "  if (element.tagName.toLowerCase() === 'select') {" +
-                    "    var selectedIndex = element.selectedIndex;" +
-                    "    if (selectedIndex >= 0) {" +
-                    "      value = element.options[selectedIndex].text;" +
-                    "      sendRecorderEvent('SELECT', selector, value);" +
-                    "    }" +
-                    "  } else {" +
+                    "  if (element.tagName && element.tagName.toLowerCase() === 'input') {" +
+                    "    var selector = getElementSelector(element);" +
+                    "    var value = element.value || '';" +
                     "    sendRecorderEvent('TYPE', selector, value);" +
                     "  }" +
                     "}, true);" +
                     
-                    "console.log('CS Smart recorder activated');";
+                    // Change handler for select, checkbox, radio
+                    "document.addEventListener('change', function(e) {" +
+                    "  var element = e.target;" +
+                    "  var selector = getElementSelector(element);" +
+                    "  var tagName = element.tagName ? element.tagName.toLowerCase() : '';" +
+                    "  " +
+                    "  if (tagName === 'select') {" +
+                    "    var selectedIndex = element.selectedIndex;" +
+                    "    if (selectedIndex >= 0) {" +
+                    "      var value = element.options[selectedIndex].text;" +
+                    "      sendRecorderEvent('SELECT', selector, value);" +
+                    "    }" +
+                    "  } else if (tagName === 'input') {" +
+                    "    var type = element.type ? element.type.toLowerCase() : '';" +
+                    "    if (type === 'checkbox' || type === 'radio') {" +
+                    "      var value = element.checked ? 'checked' : 'unchecked';" +
+                    "      sendRecorderEvent('CLICK', selector, value);" +
+                    "    }" +
+                    "  }" +
+                    "}, true);" +
+                    
+                    // Submit handler for forms
+                    "document.addEventListener('submit', function(e) {" +
+                    "  var element = e.target;" +
+                    "  var selector = getElementSelector(element);" +
+                    "  sendRecorderEvent('SUBMIT', selector, '');" +
+                    "}, true);" +
+                    
+                    "console.log('CS Smart recorder activated, watching for user actions');" +
+                    "sendRecorderEvent('INITIALIZE', 'window', 'Recording started');";  // Test event
                 
                 jsExecutor.executeScript(recorderScript);
                 log.info("Recorder script injected successfully");
+                
+                // Add an additional execution to check if the recorder is working
+                String testScript = "return 'Recorder Status: ' + (window.csSmartRecorderSessionId ? 'Active' : 'Inactive');";
+                String status = (String) jsExecutor.executeScript(testScript);
+                log.info(status);
+                
             } catch (Exception e) {
                 log.error("Failed to inject recorder script: {}", e.getMessage(), e);
             }
@@ -8007,6 +8066,7 @@ public class TestRecorder {
     }
 }
 
+
 package com.cssmart.ui.controller;
 
 import com.cssmart.ai.engine.model.Action;
@@ -8048,7 +8108,7 @@ public class RecorderEventController {
     @PostMapping("/event")
     public ResponseEntity<String> recordEvent(@RequestBody Map<String, String> payload) {
         try {
-            log.debug("Received event from browser: {}", payload);
+            log.info("Received event from browser: {}", payload);
             
             String actionType = payload.get("action");
             String element = payload.get("element");
@@ -8068,6 +8128,7 @@ public class RecorderEventController {
         }
     }
 }
+
 
 package com.cssmart.ui.recorder;
 
@@ -8175,7 +8236,7 @@ public class TestRecorderHandler extends TextWebSocketHandler {
      * @param value The value (for inputs, etc.)
      */
     public void handleBrowserEvent(String actionType, String element, String value) {
-        log.debug("Handling browser event: {} on {} with value {}", actionType, element, value);
+        log.info("Handling browser event: {} on {} with value {}", actionType, element, value);
         
         // Since this is coming from HTTP, we need to find the active recorder
         if (recorders.isEmpty()) {
@@ -8191,8 +8252,22 @@ public class TestRecorderHandler extends TextWebSocketHandler {
             
             if (recorder.isRecording()) {
                 try {
+                    // If the action is INITIALIZE, we can ignore it (it's just a test event)
+                    if ("INITIALIZE".equals(actionType)) {
+                        log.info("Received initialization event from browser");
+                        continue;
+                    }
+                    
                     // Convert the action type string to ActionType enum
-                    ActionType type = ActionType.valueOf(actionType);
+                    ActionType type;
+                    try {
+                        type = ActionType.valueOf(actionType);
+                    } catch (IllegalArgumentException e) {
+                        // If actionType is not in the enum, default to CLICK
+                        log.warn("Unknown action type: {}. Defaulting to CLICK.", actionType);
+                        type = ActionType.CLICK;
+                    }
+                    
                     Action action = new Action(type);
                     action.setValue(value);
                     
@@ -8207,8 +8282,6 @@ public class TestRecorderHandler extends TextWebSocketHandler {
                     }
                     
                     break; // Only record in one session
-                } catch (IllegalArgumentException e) {
-                    log.warn("Invalid action type from browser: {}", actionType);
                 } catch (Exception e) {
                     log.error("Error processing browser event", e);
                 }
