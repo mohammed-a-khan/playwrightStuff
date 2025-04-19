@@ -7656,7 +7656,7 @@ public class TestRecorder {
         log.info("Recording started with session ID: {}", sessionId);
     }
     
-    /**
+     /**
      * Inject JavaScript code to capture user actions in the browser
      */
     private void injectRecorderScript() {
@@ -7664,75 +7664,62 @@ public class TestRecorder {
             try {
                 JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
                 
-                // Script to capture user actions
+                // Much simpler script version
                 String recorderScript = 
+                    "console.log('Injecting CS Smart recorder...');" +
                     "window.csSmartRecorderSessionId = '" + sessionId + "';" +
-                    "window.csSmartRecorder = {" +
-                    "  sendEvent: function(eventType, selector, value) {" +
-                    "    try {" +
-                    "      const payload = {" +
-                    "        action: eventType," +
-                    "        element: selector," +
-                    "        value: value" +
-                    "      };" +
-                    "      // Send to our backend via fetch API" +
-                    "      fetch('/api/recorder/event', {" +
-                    "        method: 'POST'," +
-                    "        headers: { 'Content-Type': 'application/json' }," +
-                    "        body: JSON.stringify(payload)" +
-                    "      })" +
-                    "      .then(function(response) {" +
-                    "        if (!response.ok) console.error('Failed to send event:', response.status);" +
-                    "      })" +
-                    "      .catch(function(err) { console.error('Error sending event:', err); });" +
-                    "      console.log('CS Smart Recorder:', eventType, selector, value);" +
-                    "    } catch(e) {" +
-                    "      console.error('Error in recorder:', e);" +
-                    "    }" +
-                    "  }," +
-                    "  getSelector: function(element) {" +
-                    "    if (!element) return '';" +
-                    "    if (element.id) return '#' + element.id;" +
-                    "    if (element.name) return '[name=\"' + element.name + '\"]';" +
-                    "    if (element.className && typeof element.className === 'string') {" +
-                    "      return '.' + element.className.trim().replace(/\\s+/g, '.');" +
-                    "    }" +
-                    "    // Get a path with tag and position" +
-                    "    let path = element.tagName.toLowerCase();" +
-                    "    let parent = element.parentNode;" +
-                    "    if (parent && parent.children.length > 1) {" +
-                    "      let index = Array.prototype.indexOf.call(parent.children, element) + 1;" +
-                    "      path += ':nth-child(' + index + ')';" +
-                    "    }" +
-                    "    return path;" +
-                    "  }" +
-                    "};" +
                     
-                    // Handle click events
+                    // Setup a simple function to send events
+                    "function sendRecorderEvent(eventType, selector, value) {" +
+                    "  try {" +
+                    "    var xhr = new XMLHttpRequest();" +
+                    "    xhr.open('POST', '/api/recorder/event', true);" +
+                    "    xhr.setRequestHeader('Content-Type', 'application/json');" +
+                    "    var data = JSON.stringify({" +
+                    "      action: eventType," +
+                    "      element: selector," +
+                    "      value: value" +
+                    "    });" +
+                    "    xhr.send(data);" +
+                    "    console.log('Sent event:', eventType, selector, value);" +
+                    "  } catch(e) {" +
+                    "    console.error('Error sending event:', e);" +
+                    "  }" +
+                    "}" +
+                    
+                    // Function to get a selector for an element
+                    "function getElementSelector(element) {" +
+                    "  if (!element) return '';" +
+                    "  if (element.id) return '#' + element.id;" +
+                    "  if (element.name) return '[name=\"' + element.name + '\"]';" +
+                    "  var tagName = element.tagName.toLowerCase();" +
+                    "  return tagName;" +
+                    "}" +
+                    
+                    // Click handler
                     "document.addEventListener('click', function(e) {" +
-                    "  const element = e.target;" +
-                    "  const selector = window.csSmartRecorder.getSelector(element);" +
-                    "  window.csSmartRecorder.sendEvent('CLICK', selector, '');" +
+                    "  var element = e.target;" +
+                    "  var selector = getElementSelector(element);" +
+                    "  sendRecorderEvent('CLICK', selector, '');" +
                     "}, true);" +
                     
-                    // Handle input/typing events
+                    // Input handler
                     "document.addEventListener('change', function(e) {" +
-                    "  const element = e.target;" +
-                    "  const selector = window.csSmartRecorder.getSelector(element);" +
-                    "  const value = element.value || '';" +
-                    "  window.csSmartRecorder.sendEvent('TYPE', selector, value);" +
-                    "}, true);" +
-                    
-                    // Handle select dropdown changes
-                    "document.addEventListener('change', function(e) {" +
-                    "  if (e.target.tagName.toLowerCase() === 'select') {" +
-                    "    const element = e.target;" +
-                    "    const selector = window.csSmartRecorder.getSelector(element);" +
-                    "    const selected = element.options[element.selectedIndex];" +
-                    "    const value = selected ? selected.text : '';" +
-                    "    window.csSmartRecorder.sendEvent('SELECT', selector, value);" +
+                    "  var element = e.target;" +
+                    "  var selector = getElementSelector(element);" +
+                    "  var value = element.value || '';" +
+                    "  if (element.tagName.toLowerCase() === 'select') {" +
+                    "    var selectedIndex = element.selectedIndex;" +
+                    "    if (selectedIndex >= 0) {" +
+                    "      value = element.options[selectedIndex].text;" +
+                    "      sendRecorderEvent('SELECT', selector, value);" +
+                    "    }" +
+                    "  } else {" +
+                    "    sendRecorderEvent('TYPE', selector, value);" +
                     "  }" +
-                    "}, true);";
+                    "}, true);" +
+                    
+                    "console.log('CS Smart recorder activated');";
                 
                 jsExecutor.executeScript(recorderScript);
                 log.info("Recorder script injected successfully");
