@@ -6135,7 +6135,25 @@ public class EnvironmentManager {
             String envVarName = matcher.group(1);
             String envVarValue = System.getenv(envVarName);
             
-            // If environment variable exists, use it, otherwise keep originalpackage com.cssmart.core.config.exceptions;
+            // If environment variable exists, use it, otherwise keep original
+            if (envVarValue != null) {
+                // Replace $ and \ in the replacement string with \$ and \\
+                envVarValue = envVarValue.replace("\\", "\\\\").replace("$", "\\$");
+                matcher.appendReplacement(sb, envVarValue);
+                log.debug("Replaced environment variable {}={}", envVarName, envVarValue);
+            } else {
+                // If no environment variable found, keep original placeholder
+                log.debug("Environment variable not found: {}", envVarName);
+                matcher.appendReplacement(sb, matcher.group(0));
+            }
+        }
+        
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
+}
+
+package com.cssmart.core.config.exceptions;
 
 /**
  * Exception for configuration related errors
@@ -6183,22 +6201,3 @@ public class DashboardMetrics {
     private ExecutionMetrics metrics;
     private List<Insight> insights;
 }
-
-
-            if (envVarValue != null) {
-                // Replace $ and \ in the replacement string with \$ and \\
-                envVarValue = envVarValue.replace("\\", "\\\\").replace("$", "\\$");
-                matcher.appendReplacement(sb, envVarValue);
-                log.debug("Replaced environment variable {}={}", envVarName, envVarValue);
-            } else {
-                // If no environment variable found, keep original placeholder
-                log.debug("Environment variable not found: {}", envVarName);
-                matcher.appendReplacement(sb, matcher.group(0));
-            }
-        }
-        
-        matcher.appendTail(sb);
-        return sb.toString();
-    }
-}
-
