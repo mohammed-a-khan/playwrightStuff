@@ -8438,4 +8438,78 @@ private void handleWebSocketAction(WebSocketSession session, String sessionId, O
     }
 }
 
-
+private void injectRecorderScript() {
+    if (driver instanceof JavascriptExecutor) {
+        try {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Create a session ID for this recording session
+            String sessionId = UUID.randomUUID().toString();
+            
+            // Very simple and carefully checked JavaScript 
+            String recorderScript = 
+                "window.csSmartRecorderSessionId = '" + sessionId + "';" +
+                "window.csSmartRecorderActive = true;" +
+                
+                "window.csSmartRecorder = {};" +
+                
+                "window.csSmartRecorder.sendEvent = function(actionType, element, value) {" +
+                "  var xhr = new XMLHttpRequest();" +
+                "  xhr.open('POST', '/api/recorder/event', true);" +
+                "  xhr.setRequestHeader('Content-Type', 'application/json');" +
+                "  xhr.onreadystatechange = function() {" +
+                "    if (xhr.readyState === 4) {" +
+                "      console.log('Event sent: ' + actionType + ', Status: ' + xhr.status);" +
+                "    }" +
+                "  };" +
+                "  var data = JSON.stringify({" +
+                "    sessionId: window.csSmartRecorderSessionId," +
+                "    actionType: actionType," +
+                "    element: element," +
+                "    value: value" +
+                "  });" +
+                "  xhr.send(data);" +
+                "};" +
+                
+                "window.csSmartRecorder.getElementSelector = function(element) {" +
+                "  if (!element) return 'unknown';" +
+                "  if (element.id) return '#' + element.id;" +
+                "  if (element.name) return '[name=\"' + element.name + '\"]';" +
+                "  return element.tagName.toLowerCase();" +
+                "};" +
+                
+                "document.addEventListener('click', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.csSmartRecorder.getElementSelector(e.target);" +
+                "  window.csSmartRecorder.sendEvent('CLICK', selector, '');" +
+                "});" +
+                
+                "document.addEventListener('input', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.csSmartRecorder.getElementSelector(e.target);" +
+                "  window.csSmartRecorder.sendEvent('TYPE', selector, e.target.value);" +
+                "});" +
+                
+                "document.addEventListener('change', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.csSmartRecorder.getElementSelector(e.target);" +
+                "  if (e.target.tagName.toLowerCase() === 'select') {" +
+                "    window.csSmartRecorder.sendEvent('SELECT', selector, e.target.value);" +
+                "  }" +
+                "});" +
+                
+                "console.log('CS Smart Test Recorder initialized with session ID: ' + window.csSmartRecorderSessionId);" +
+                "window.csSmartRecorder.sendEvent('INIT', 'recorder', 'initialized');";
+            
+            // Execute the script
+            jsExecutor.executeScript(recorderScript);
+            
+            log.info("Recorder script injected successfully with session ID: {}", sessionId);
+            
+        } catch (Exception e) {
+            log.error("Failed to inject recorder script: {}", e.getMessage(), e);
+        }
+    } else {
+        log.error("Driver does not support JavaScript execution");
+    }
+}
