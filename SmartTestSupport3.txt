@@ -8339,38 +8339,83 @@ public class TestRecorderHandler extends TextWebSocketHandler {
             sendError(session, "No active recording session found");
         }
     }
-    
     /**
-     * Record an action in the current session
-     */
-    @SuppressWarnings("unchecked")
-    private void recordAction(WebSocketSession session, String sessionId, Object actionData) throws Exception {
-        TestRecorder recorder = recorders.get(sessionId);
-        if (recorder != null) {
-            try {
-                Map<String, String> data = (Map<String, String>) actionData;
-                
-                String actionType = data.get("action");
-                String element = data.get("element");
-                String value = data.get("value");
-                
-                Action action = new Action(ActionType.valueOf(actionType));
-                action.setValue(value);
-                
-                recorder.recordAction(action, element, value);
-                
-                // Send the recorded step back to client for display
-                RecordedStep step = recorder.getLastRecordedStep();
-                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
-                
-            } catch (Exception e) {
-                log.error("Error recording action", e);
-                sendError(session, "Failed to record action: " + e.getMessage());
+ * Record an action from an HTTP endpoint
+ * This is a public method that can be called from the controller
+ * @param sessionId The session ID (if known, otherwise null)
+ * @param action The action to record
+ * @param element The element identifier
+ * @param value The action value
+ */
+public void recordAction(String sessionId, Action action, String element, String value) {
+    log.info("Recording action: {} on {} with value {}", action.getType(), element, value);
+    
+    TestRecorder recorder = null;
+    
+    // If we have a specific session ID
+    if (sessionId != null && !sessionId.isEmpty()) {
+        recorder = recorders.get(sessionId);
+    } 
+    // Otherwise, find the first active recorder
+    else if (!recorders.isEmpty()) {
+        for (Map.Entry<String, TestRecorder> entry : recorders.entrySet()) {
+            if (entry.getValue().isRecording()) {
+                recorder = entry.getValue();
+                sessionId = entry.getKey();
+                break;
             }
-        } else {
-            sendError(session, "No active recording session found");
         }
     }
+    
+    if (recorder != null) {
+        try {
+            recorder.recordAction(action, element, value);
+            
+            // Notify the WebSocket client about the new step
+            WebSocketSession session = sessions.get(sessionId);
+            if (session != null && session.isOpen()) {
+                RecordedStep step = recorder.getLastRecordedStep();
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+            }
+        } catch (Exception e) {
+            log.error("Error recording action", e);
+        }
+    } else {
+        log.warn("No active recorder found to record action");
+    }
+}
+
+    /**
+ * Record an action from a WebSocket message
+ */
+@SuppressWarnings("unchecked")
+private void handleWebSocketAction(WebSocketSession session, String sessionId, Object actionData) throws Exception {
+    TestRecorder recorder = recorders.get(sessionId);
+    if (recorder != null) {
+        try {
+            Map<String, String> data = (Map<String, String>) actionData;
+            
+            String actionType = data.get("action");
+            String element = data.get("element");
+            String value = data.get("value");
+            
+            Action action = new Action(ActionType.valueOf(actionType));
+            action.setValue(value);
+            
+            recorder.recordAction(action, element, value);
+            
+            // Send the recorded step back to client for display
+            RecordedStep step = recorder.getLastRecordedStep();
+            sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+            
+        } catch (Exception e) {
+            log.error("Error recording action", e);
+            sendError(session, "Failed to record action: " + e.getMessage());
+        }
+    } else {
+        sendError(session, "No active recording session found");
+    }
+}
     
     /**
      * Send a message to the WebSocket client
