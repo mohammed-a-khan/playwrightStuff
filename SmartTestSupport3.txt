@@ -6201,3 +6201,1103 @@ public class DashboardMetrics {
     private ExecutionMetrics metrics;
     private List<Insight> insights;
 }
+
+
+package com.cssmart.ui.service;
+
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.controller.GeneratedTest;
+import com.cssmart.ai.engine.AIEngine;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+/**
+ * Service for managing recorded tests, including storing and converting between
+ * recorded TestCase objects and GeneratedTest objects for the Test Generator
+ */
+@Slf4j
+@Service
+public class TestRecordingService {
+    
+    private final AIEngine aiEngine;
+    private final Map<String, TestCase> recordedTests;
+    private static final String RECORDED_TESTS_DIR = "recorded-tests";
+    
+    @Autowired
+    public TestRecordingService(AIEngine aiEngine) {
+        this.aiEngine = aiEngine;
+        this.recordedTests = new ConcurrentHashMap<>();
+        
+        // Ensure recorded tests directory exists
+        File dir = new File(RECORDED_TESTS_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+    }
+    
+    /**
+     * Save a recorded test case
+     * @param testCase The test case to save
+     * @return The saved test case with ID
+     */
+    public TestCase saveRecordedTest(TestCase testCase) {
+        try {
+            log.info("Saving recorded test: {}", testCase.getName());
+            
+            // Ensure test case has an ID
+            if (testCase.getId() == null || testCase.getId().isEmpty()) {
+                testCase.setId(UUID.randomUUID().toString());
+            }
+            
+            // Store in memory
+            recordedTests.put(testCase.getId(), testCase);
+            
+            // Save to file system
+            saveTestToFile(testCase);
+            
+            return testCase;
+        } catch (Exception e) {
+            log.error("Error saving recorded test", e);
+            throw new RuntimeException("Failed to save recorded test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get a recorded test by ID
+     * @param id Test ID
+     * @return Test case or null if not found
+     */
+    public TestCase getRecordedTest(String id) {
+        return recordedTests.get(id);
+    }
+    
+    /**
+     * Convert a recorded TestCase to a GeneratedTest for the Test Generator
+     * @param testCase The test case to convert
+     * @return A GeneratedTest object
+     */
+    public GeneratedTest convertToGeneratedTest(TestCase testCase) {
+        try {
+            log.info("Converting recorded test to generated test: {}", testCase.getName());
+            
+            GeneratedTest generatedTest = new GeneratedTest();
+            generatedTest.setId(testCase.getId());
+            generatedTest.setName(testCase.getName());
+            generatedTest.setDescription(testCase.getDescription());
+            generatedTest.setClassName(testCase.getClassName());
+            generatedTest.setMethodName(testCase.getMethodName());
+            generatedTest.setCode(testCase.getCode());
+            
+            // Convert steps
+            if (testCase.getSteps() != null) {
+                generatedTest.setSteps(testCase.getSteps());
+            }
+            
+            return generatedTest;
+        } catch (Exception e) {
+            log.error("Error converting recorded test to generated test", e);
+            throw new RuntimeException("Failed to convert test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Convert a GeneratedTest to a TestCase
+     * @param generatedTest The generated test to convert
+     * @return A TestCase object
+     */
+    public TestCase convertToTestCase(GeneratedTest generatedTest) {
+        try {
+            log.info("Converting generated test to test case: {}", generatedTest.getName());
+            
+            TestCase testCase = new TestCase();
+            testCase.setId(generatedTest.getId());
+            testCase.setName(generatedTest.getName());
+            testCase.setDescription(generatedTest.getDescription());
+            testCase.setClassName(generatedTest.getClassName());
+            testCase.setMethodName(generatedTest.getMethodName());
+            testCase.setCode(generatedTest.getCode());
+            
+            // Convert steps
+            if (generatedTest.getSteps() != null) {
+                testCase.setSteps(generatedTest.getSteps());
+            }
+            
+            return testCase;
+        } catch (Exception e) {
+            log.error("Error converting generated test to test case", e);
+            throw new RuntimeException("Failed to convert test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Enhance a test case with AI
+     * @param testCase The test case to enhance
+     * @return The enhanced test case
+     */
+    public TestCase enhanceTestCase(TestCase testCase) {
+        try {
+            log.info("Enhancing test case with AI: {}", testCase.getName());
+            
+            // Use AI engine to enhance the test case
+            // This is a placeholder for the actual AI enhancement
+            if (aiEngine != null) {
+                // In a real implementation, this would use AI to improve the test
+                // For now, we'll just make some simple enhancements
+                
+                // Improve the test name if it's generic
+                if (testCase.getName() == null || testCase.getName().contains("Recorded Test")) {
+                    if (testCase.getSteps() != null && !testCase.getSteps().isEmpty()) {
+                        // Generate a more descriptive name based on the steps
+                        String firstAction = testCase.getSteps().get(0).getAction();
+                        String firstElement = testCase.getSteps().get(0).getElement();
+                        
+                        if (firstAction != null && firstElement != null) {
+                            testCase.setName("Test " + firstAction + " on " + firstElement);
+                        }
+                    }
+                }
+                
+                // Improve the description
+                if (testCase.getDescription() == null || testCase.getDescription().isEmpty() || 
+                        testCase.getDescription().equals("Automatically recorded test case")) {
+                    testCase.setDescription("Automated test to verify functionality of the application");
+                }
+                
+                // You would call the AI engine here in a real implementation
+                // testCase = aiEngine.enhanceTestCase(testCase);
+            }
+            
+            return testCase;
+        } catch (Exception e) {
+            log.error("Error enhancing test case", e);
+            
+            // Return the original test case if enhancement fails
+            return testCase;
+        }
+    }
+    
+    /**
+     * Save a test case to file
+     * @param testCase The test case to save
+     */
+    private void saveTestToFile(TestCase testCase) {
+        try {
+            // Save test case to file
+            File testFile = new File(RECORDED_TESTS_DIR, testCase.getId() + ".json");
+            
+            // Use Jackson to serialize to JSON
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            objectMapper.writeValue(testFile, testCase);
+            
+            log.info("Saved test case to file: {}", testFile.getAbsolutePath());
+            
+            // If code is present, also save it as a Java file
+            if (testCase.getCode() != null && !testCase.getCode().isEmpty()) {
+                String packageDir = "src/main/java/com/cssmart/tests/generated".replace('.', '/');
+                File packagePath = new File(packageDir);
+                if (!packagePath.exists()) {
+                    packagePath.mkdirs();
+                }
+                
+                File javaFile = new File(packageDir, testCase.getClassName() + ".java");
+                Files.writeString(javaFile.toPath(), testCase.getCode());
+                
+                log.info("Saved test code to: {}", javaFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.error("Error saving test case to file", e);
+            throw new RuntimeException("Failed to save test to file: " + e.getMessage(), e);
+        }
+    }
+}
+
+package com.cssmart.ui.controller;
+
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.service.TestRecordingService;
+import com.cssmart.ui.service.TestGeneratorService;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.List;
+
+/**
+ * REST controller for test recorder operations
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/recorder")
+public class RecorderController {
+    
+    private final TestRecordingService testRecordingService;
+    private final TestGeneratorService testGeneratorService;
+    
+    @Autowired
+    public RecorderController(TestRecordingService testRecordingService, TestGeneratorService testGeneratorService) {
+        this.testRecordingService = testRecordingService;
+        this.testGeneratorService = testGeneratorService;
+    }
+    
+    /**
+     * Save a recorded test case
+     * @param testCase Recorded test case
+     * @return Saved test case
+     */
+    @PostMapping("/save")
+    public ResponseEntity<TestCase> saveTestCase(@RequestBody TestCase testCase) {
+        log.info("Saving recorded test case: {}", testCase.getName());
+        
+        try {
+            // Enhance and save the test case
+            TestCase enhancedTestCase = testRecordingService.enhanceTestCase(testCase);
+            TestCase savedTestCase = testRecordingService.saveRecordedTest(enhancedTestCase);
+            
+            return ResponseEntity.ok(savedTestCase);
+        } catch (Exception e) {
+            log.error("Error saving test case", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Convert a recorded test case to a generated test for editing
+     * @param id Test case ID
+     * @return Generated test
+     */
+    @GetMapping("/{id}/convert")
+    public ResponseEntity<GeneratedTest> convertToGeneratedTest(@PathVariable("id") String id) {
+        log.info("Converting recorded test case to generated test: {}", id);
+        
+        try {
+            // Get the recorded test case
+            TestCase testCase = testRecordingService.getRecordedTest(id);
+            
+            if (testCase == null) {
+                log.warn("Test case not found with ID: {}", id);
+                return ResponseEntity.notFound().build();
+            }
+            
+            // Convert to generated test format
+            GeneratedTest generatedTest = testRecordingService.convertToGeneratedTest(testCase);
+            
+            return ResponseEntity.ok(generatedTest);
+        } catch (Exception e) {
+            log.error("Error converting test case", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Get browser configuration options
+     * @return Browser configuration
+     */
+    @GetMapping("/browser-config")
+    public ResponseEntity<BrowserConfig> getBrowserConfig() {
+        log.info("Fetching browser configuration options");
+        
+        try {
+            BrowserConfig config = new BrowserConfig();
+            config.addBrowserOption("chrome", "Chrome");
+            config.addBrowserOption("firefox", "Firefox");
+            config.addBrowserOption("edge", "Edge");
+            config.addBrowserOption("safari", "Safari");
+            
+            return ResponseEntity.ok(config);
+        } catch (Exception e) {
+            log.error("Error fetching browser configuration", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Run a test after recording
+     * @param id Test ID
+     * @return Execution status
+     */
+    @PostMapping("/{id}/run")
+    public ResponseEntity<Map<String, Object>> runTest(@PathVariable("id") String id) {
+        log.info("Running recorded test: {}", id);
+        
+        try {
+            // In a real implementation, this would invoke the test execution service
+            // For now, return a simple status message
+            Map<String, Object> result = new HashMap<>();
+            result.put("status", "success");
+            result.put("message", "Test execution started");
+            result.put("executionId", UUID.randomUUID().toString());
+            
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Error running test", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Get all recorded tests
+     * @return List of recorded tests
+     */
+    @GetMapping
+    public ResponseEntity<List<TestCase>> getAllRecordedTests() {
+        log.info("Fetching all recorded tests");
+        
+        try {
+            // In a real implementation, this would retrieve tests from a repository
+            // For now, return an empty list
+            List<TestCase> tests = new ArrayList<>();
+            
+            return ResponseEntity.ok(tests);
+        } catch (Exception e) {
+            log.error("Error fetching recorded tests", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+}
+
+/**
+ * Browser configuration options
+ */
+class BrowserConfig {
+    private List<BrowserOption> browsers = new ArrayList<>();
+    
+    public void addBrowserOption(String value, String label) {
+        browsers.add(new BrowserOption(value, label));
+    }
+    
+    public List<BrowserOption> getBrowsers() {
+        return browsers;
+    }
+    
+    public void setBrowsers(List<BrowserOption> browsers) {
+        this.browsers = browsers;
+    }
+    
+    static class BrowserOption {
+        private String value;
+        private String label;
+        
+        public BrowserOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+        
+        public String getValue() {
+            return value;
+        }
+        
+        public void setValue(String value) {
+            this.value = value;
+        }
+        
+        public String getLabel() {
+            return label;
+        }
+        
+        public void setLabel(String label) {
+            this.label = label;
+        }
+    }
+}
+
+package com.cssmart.ai.codegen.model;
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+import java.time.LocalDateTime;
+
+/**
+ * Represents a single test step 
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class TestStep {
+    private String action;
+    private String element;
+    private String value;
+    private String description;
+    private LocalDateTime timestamp;
+}
+
+package com.cssmart.ui.service;
+
+import com.cssmart.ai.codegen.TestGenerator;
+import com.cssmart.ai.codegen.model.TestStep;
+import com.cssmart.ai.codegen.model.TestCase;
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ui.controller.GeneratedTest;
+import com.cssmart.ui.controller.TestTemplate;
+import com.cssmart.ui.controller.TemplateParameter;
+import com.cssmart.ui.recorder.model.RecordedStep;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+/**
+ * Service for AI-powered test generation
+ */
+@Slf4j
+@Service
+public class TestGeneratorService {
+    
+    private final AIEngine aiEngine;
+    private final Map<String, GeneratedTest> generatedTests = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final String GENERATED_TESTS_DIR = "generated-tests";
+    private static final String TEST_CODE_DIR = "src/main/java/com/cssmart/tests/generated";
+    
+    @Autowired
+    public TestGeneratorService(AIEngine aiEngine) {
+        this.aiEngine = aiEngine;
+        
+        // Ensure directories exist
+        File generatedDir = new File(GENERATED_TESTS_DIR);
+        if (!generatedDir.exists()) {
+            generatedDir.mkdirs();
+        }
+        
+        File codeDir = new File(TEST_CODE_DIR);
+        if (!codeDir.exists()) {
+            codeDir.mkdirs();
+        }
+    }
+    
+    /**
+     * Generate a test from description
+     * @param description Natural language description of the test
+     * @return Generated test
+     */
+    public GeneratedTest generateTest(String description) {
+        log.info("Generating test from description: {}", description);
+        
+        try {
+            // Create a new test with basic information
+            GeneratedTest generatedTest = new GeneratedTest();
+            generatedTest.setId(UUID.randomUUID().toString());
+            generatedTest.setName(generateTestName(description));
+            generatedTest.setDescription(description);
+            
+            // Generate class and method names
+            String className = generateClassName(generatedTest.getName());
+            String methodName = generateMethodName(generatedTest.getName());
+            generatedTest.setClassName(className);
+            generatedTest.setMethodName(methodName);
+            
+            // Generate steps based on description
+            List<RecordedStep> recordedSteps = generateStepsAsRecorded(description);
+            
+            // Convert RecordedStep to TestStep
+            List<TestStep> steps = convertToTestSteps(recordedSteps);
+            generatedTest.setSteps(steps);
+            
+            // Generate code
+            String code = generateCode(generatedTest);
+            generatedTest.setCode(code);
+            
+            // Store for later reference
+            generatedTests.put(generatedTest.getId(), generatedTest);
+            
+            // Save to file
+            saveTestToFile(generatedTest);
+            
+            return generatedTest;
+        } catch (Exception e) {
+            log.error("Error generating test", e);
+            throw new RuntimeException("Failed to generate test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Convert RecordedStep list to TestStep list
+     * @param recordedSteps List of RecordedStep objects
+     * @return List of TestStep objects
+     */
+    private List<TestStep> convertToTestSteps(List<RecordedStep> recordedSteps) {
+        if (recordedSteps == null) {
+            return new ArrayList<>();
+        }
+        
+        return recordedSteps.stream()
+            .map(this::convertToTestStep)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Convert a single RecordedStep to TestStep
+     * @param recordedStep RecordedStep object
+     * @return TestStep object
+     */
+    private TestStep convertToTestStep(RecordedStep recordedStep) {
+        return TestStep.builder()
+            .action(recordedStep.getAction())
+            .element(recordedStep.getElement())
+            .value(recordedStep.getValue())
+            .description(recordedStep.getDescription())
+            .timestamp(recordedStep.getTimestamp())
+            .build();
+    }
+    
+    /**
+     * Save a generated test
+     * @param test Test to save
+     * @return Saved test with ID
+     */
+    public GeneratedTest saveTest(GeneratedTest test) {
+        log.info("Saving generated test: {}", test.getName());
+        
+        try {
+            // Ensure the test has an ID
+            if (test.getId() == null || test.getId().isEmpty()) {
+                test.setId(UUID.randomUUID().toString());
+            }
+            
+            // Regenerate code if needed
+            if (test.getCode() == null || test.getCode().isEmpty()) {
+                test.setCode(generateCode(test));
+            }
+            
+            // Store in memory
+            generatedTests.put(test.getId(), test);
+            
+            // Save to file
+            saveTestToFile(test);
+            
+            // Save Java file
+            saveJavaFile(test);
+            
+            return test;
+        } catch (Exception e) {
+            log.error("Error saving test", e);
+            throw new RuntimeException("Failed to save test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get a list of test templates
+     * @return List of available test templates
+     */
+    public List<TestTemplate> getTemplates() {
+        log.info("Fetching test templates");
+        
+        try {
+            // Create sample templates
+            List<TestTemplate> templates = new ArrayList<>();
+            
+            // Login test template
+            TestTemplate loginTemplate = new TestTemplate();
+            loginTemplate.setId("login-template");
+            loginTemplate.setName("Login Test");
+            loginTemplate.setDescription("Template for testing user login functionality");
+            
+            List<TemplateParameter> loginParams = new ArrayList<>();
+            TemplateParameter usernameParam = new TemplateParameter();
+            usernameParam.setName("username");
+            usernameParam.setDescription("Username to use for login");
+            usernameParam.setType("string");
+            usernameParam.setRequired(true);
+            loginParams.add(usernameParam);
+            
+            TemplateParameter passwordParam = new TemplateParameter();
+            passwordParam.setName("password");
+            passwordParam.setDescription("Password to use for login");
+            passwordParam.setType("string");
+            passwordParam.setRequired(true);
+            loginParams.add(passwordParam);
+            
+            loginTemplate.setParameters(loginParams);
+            templates.add(loginTemplate);
+            
+            // Search test template
+            TestTemplate searchTemplate = new TestTemplate();
+            searchTemplate.setId("search-template");
+            searchTemplate.setName("Search Test");
+            searchTemplate.setDescription("Template for testing search functionality");
+            
+            List<TemplateParameter> searchParams = new ArrayList<>();
+            TemplateParameter searchTermParam = new TemplateParameter();
+            searchTermParam.setName("searchTerm");
+            searchTermParam.setDescription("Term to search for");
+            searchTermParam.setType("string");
+            searchTermParam.setRequired(true);
+            searchParams.add(searchTermParam);
+            
+            searchTemplate.setParameters(searchParams);
+            templates.add(searchTemplate);
+            
+            return templates;
+        } catch (Exception e) {
+            log.error("Error fetching templates", e);
+            throw new RuntimeException("Failed to fetch templates: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Generate a test from a template
+     * @param templateId Template ID
+     * @param parameters Template parameters
+     * @return Generated test
+     */
+    public GeneratedTest generateFromTemplate(String templateId, Map<String, Object> parameters) {
+        log.info("Generating test from template: {}", templateId);
+        
+        try {
+            // Build a description based on template and parameters
+            StringBuilder description = new StringBuilder();
+            
+            if ("login-template".equals(templateId)) {
+                String username = (String) parameters.get("username");
+                String password = (String) parameters.get("password");
+                
+                description.append("Test user login functionality with username ")
+                    .append(username)
+                    .append(" and password ")
+                    .append(password);
+            } else if ("search-template".equals(templateId)) {
+                String searchTerm = (String) parameters.get("searchTerm");
+                
+                description.append("Test search functionality for term ")
+                    .append(searchTerm);
+            } else {
+                throw new IllegalArgumentException("Unknown template ID: " + templateId);
+            }
+            
+            // Generate test using the constructed description
+            return generateTest(description.toString());
+        } catch (Exception e) {
+            log.error("Error generating test from template", e);
+            throw new RuntimeException("Failed to generate test from template: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get a generated test by ID
+     * @param id Test ID
+     * @return Generated test or null if not found
+     */
+    public GeneratedTest getTest(String id) {
+        return generatedTests.get(id);
+    }
+    
+    /**
+     * Generate a test name from description
+     */
+    private String generateTestName(String description) {
+        // Simple approach: take first few words
+        String[] words = description.split("\\s+");
+        StringBuilder name = new StringBuilder();
+        
+        for (int i = 0; i < Math.min(4, words.length); i++) {
+            if (words[i].length() > 0) {
+                name.append(Character.toUpperCase(words[i].charAt(0)))
+                    .append(words[i].substring(1).toLowerCase())
+                    .append(" ");
+            }
+        }
+        
+        if (name.length() == 0) {
+            return "Generated Test";
+        }
+        
+        return name.toString().trim() + " Test";
+    }
+    
+    /**
+     * Generate a class name from test name
+     */
+    private String generateClassName(String testName) {
+        // Remove "Test" suffix if present, then add it back later
+        if (testName.endsWith(" Test")) {
+            testName = testName.substring(0, testName.length() - 5);
+        }
+        
+        // Replace spaces with nothing and keep only alphanumeric characters
+        String className = testName.replaceAll("[^a-zA-Z0-9]", "");
+        
+        // Ensure first character is uppercase
+        if (className.length() > 0) {
+            className = Character.toUpperCase(className.charAt(0)) + className.substring(1);
+        } else {
+            className = "Generated";
+        }
+        
+        return className + "Test";
+    }
+    
+    /**
+     * Generate a method name from test name
+     */
+    private String generateMethodName(String testName) {
+        // Remove "Test" suffix if present
+        if (testName.endsWith(" Test")) {
+            testName = testName.substring(0, testName.length() - 5);
+        }
+        
+        // Replace spaces with nothing and keep only alphanumeric characters
+        String methodName = testName.replaceAll("[^a-zA-Z0-9]", "");
+        
+        // Ensure first character is lowercase
+        if (methodName.length() > 0) {
+            methodName = Character.toLowerCase(methodName.charAt(0)) + methodName.substring(1);
+        } else {
+            methodName = "test";
+        }
+        
+        return "test" + methodName;
+    }
+    
+    /**
+     * Generate steps based on description
+     * Renamed from generateSteps to clarify it returns RecordedStep objects
+     */
+    private List<RecordedStep> generateStepsAsRecorded(String description) {
+        List<RecordedStep> steps = new ArrayList<>();
+        
+        // In a real implementation, this would use AI to generate steps
+        // For now, we'll create some sample steps
+        
+        // Detect login scenario
+        if (description.toLowerCase().contains("login")) {
+            // Navigate to login page
+            RecordedStep navigateStep = new RecordedStep();
+            navigateStep.setAction("NAVIGATE");
+            navigateStep.setValue("https://example.com/login");
+            navigateStep.setTimestamp(java.time.LocalDateTime.now());
+            navigateStep.setDescription("Navigate to login page");
+            steps.add(navigateStep);
+            
+            // Enter username
+            RecordedStep usernameStep = new RecordedStep();
+            usernameStep.setAction("TYPE");
+            usernameStep.setElement("username field");
+            usernameStep.setValue("testuser");
+            usernameStep.setTimestamp(java.time.LocalDateTime.now());
+            usernameStep.setDescription("Enter username");
+            steps.add(usernameStep);
+            
+            // Enter password
+            RecordedStep passwordStep = new RecordedStep();
+            passwordStep.setAction("TYPE");
+            passwordStep.setElement("password field");
+            passwordStep.setValue("password123");
+            passwordStep.setTimestamp(java.time.LocalDateTime.now());
+            passwordStep.setDescription("Enter password");
+            steps.add(passwordStep);
+            
+            // Click login button
+            RecordedStep loginStep = new RecordedStep();
+            loginStep.setAction("CLICK");
+            loginStep.setElement("login button");
+            loginStep.setTimestamp(java.time.LocalDateTime.now());
+            loginStep.setDescription("Click login button");
+            steps.add(loginStep);
+            
+            // Verify successful login
+            RecordedStep verifyStep = new RecordedStep();
+            verifyStep.setAction("VERIFY_PRESENCE");
+            verifyStep.setElement("welcome message");
+            verifyStep.setTimestamp(java.time.LocalDateTime.now());
+            verifyStep.setDescription("Verify successful login");
+            steps.add(verifyStep);
+        }
+        // Detect search scenario
+        else if (description.toLowerCase().contains("search")) {
+            // Navigate to homepage
+            RecordedStep navigateStep = new RecordedStep();
+            navigateStep.setAction("NAVIGATE");
+            navigateStep.setValue("https://example.com");
+            navigateStep.setTimestamp(java.time.LocalDateTime.now());
+            navigateStep.setDescription("Navigate to homepage");
+            steps.add(navigateStep);
+            
+            // Enter search term
+            RecordedStep searchStep = new RecordedStep();
+            searchStep.setAction("TYPE");
+            searchStep.setElement("search field");
+            searchStep.setValue("test product");
+            searchStep.setTimestamp(java.time.LocalDateTime.now());
+            searchStep.setDescription("Enter search term");
+            steps.add(searchStep);
+            
+            // Click search button
+            RecordedStep submitStep = new RecordedStep();
+            submitStep.setAction("CLICK");
+            submitStep.setElement("search button");
+            submitStep.setTimestamp(java.time.LocalDateTime.now());
+            submitStep.setDescription("Click search button");
+            steps.add(submitStep);
+            
+            // Verify search results
+            RecordedStep verifyStep = new RecordedStep();
+            verifyStep.setAction("VERIFY_PRESENCE");
+            verifyStep.setElement("search results");
+            verifyStep.setTimestamp(java.time.LocalDateTime.now());
+            verifyStep.setDescription("Verify search results");
+            steps.add(verifyStep);
+        }
+        // Default scenario for other descriptions
+        else {
+            // Navigate to homepage
+            RecordedStep navigateStep = new RecordedStep();
+            navigateStep.setAction("NAVIGATE");
+            navigateStep.setValue("https://example.com");
+            navigateStep.setTimestamp(java.time.LocalDateTime.now());
+            navigateStep.setDescription("Navigate to homepage");
+            steps.add(navigateStep);
+            
+            // Generic verification step
+            RecordedStep verifyStep = new RecordedStep();
+            verifyStep.setAction("VERIFY_PRESENCE");
+            verifyStep.setElement("page content");
+            verifyStep.setTimestamp(java.time.LocalDateTime.now());
+            verifyStep.setDescription("Verify page content");
+            steps.add(verifyStep);
+        }
+        
+        return steps;
+    }
+    
+    /**
+     * Generate code from test information
+     */
+    private String generateCode(GeneratedTest test) {
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.testng.Assert;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("/**\n");
+        code.append(" * ").append(test.getDescription()).append("\n");
+        code.append(" * Generated by CS Smart Test Framework\n");
+        code.append(" */\n");
+        code.append("@Slf4j\n");
+        code.append("public class ").append(test.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(test.getDescription()).append("\")\n");
+        code.append("    public void ").append(test.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(test.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        if (test.getSteps() != null && !test.getSteps().isEmpty()) {
+            for (TestStep step : test.getSteps()) {
+                code.append("        // ").append(step.getDescription()).append("\n");
+                
+                if ("NAVIGATE".equals(step.getAction())) {
+                    code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+                } else if ("CLICK".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.click();\n");
+                } else if ("TYPE".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.clear();\n");
+                    code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+                } else if ("SELECT".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                        .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+                } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                        .append(step.getElement()).append(" should be present\");\n");
+                } else if ("VERIFY_VISIBILITY".equals(step.getAction())) {
+                    code.append("        elementFinder.waitForElementVisible(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(elementFinder.isElementVisible(\"")
+                        .append(step.getElement()).append("\"), \"")
+                        .append(step.getElement()).append(" should be visible\");\n");
+                } else if ("VERIFY_TEXT".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(element.getText().contains(\"")
+                        .append(step.getValue()).append("\"), \"")
+                        .append(step.getElement()).append(" should contain text '")
+                        .append(step.getValue()).append("'\");\n");
+                } else if ("WAIT".equals(step.getAction())) {
+                    code.append("        elementFinder.waitForElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                } else {
+                    code.append("        // TODO: Implement ").append(step.getAction())
+                        .append(" action for ").append(step.getElement()).append("\n");
+                }
+                
+                code.append("\n");
+            }
+        } else {
+            code.append("        // TODO: Implement test steps\n\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    /**
+     * Save test to file
+     */
+    private void saveTestToFile(GeneratedTest test) {
+        try {
+            // Save as JSON
+            File testFile = new File(GENERATED_TESTS_DIR, test.getId() + ".json");
+            
+            // Use Jackson to serialize to JSON
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            objectMapper.writeValue(testFile, test);
+            
+            log.info("Saved test to file: {}", testFile.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Error saving test to file", e);
+            throw new RuntimeException("Failed to save test to file: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Save Java file
+     */
+    private void saveJavaFile(GeneratedTest test) {
+        try {
+            // Ensure directory exists
+            File packageDir = new File(TEST_CODE_DIR);
+            if (!packageDir.exists()) {
+                packageDir.mkdirs();
+            }
+            
+            // Save Java file
+            File javaFile = new File(packageDir, test.getClassName() + ".java");
+            Files.writeString(javaFile.toPath(), test.getCode());
+            
+            log.info("Saved Java file: {}", javaFile.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Error saving Java file", e);
+            throw new RuntimeException("Failed to save Java file: " + e.getMessage(), e);
+        }
+    }
+}
+
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+import java.time.LocalDateTime;
+
+/**
+ * Represents a step recorded during a test recording session
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class RecordedStep {
+    private String action;
+    private String element;
+    private String value;
+    private String description;
+    private LocalDateTime timestamp;
+}
+
+
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * Represents a test case created from recorded steps
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class TestCase {
+    private String id;
+    private String name;
+    private String description;
+    private List<RecordedStep> steps;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String className;
+    private String methodName;
+    private String code;
+}
+
+
+package com.cssmart.ui.controller;
+
+import com.cssmart.ai.codegen.model.TestStep;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+
+import java.util.List;
+
+/**
+ * Represents a test generated by the AI or converted from a recorded test
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class GeneratedTest {
+    private String id;
+    private String name;
+    private String description;
+    private List<TestStep> steps;
+    private String className;
+    private String methodName;
+    private String code;
+}
