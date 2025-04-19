@@ -7681,10 +7681,10 @@ public class TestRecorder {
                     "        headers: { 'Content-Type': 'application/json' }," +
                     "        body: JSON.stringify(payload)" +
                     "      })" +
-                    "      .then(response => {" +
+                    "      .then(function(response) {" +
                     "        if (!response.ok) console.error('Failed to send event:', response.status);" +
                     "      })" +
-                    "      .catch(err => console.error('Error sending event:', err));" +
+                    "      .catch(function(err) { console.error('Error sending event:', err); });" +
                     "      console.log('CS Smart Recorder:', eventType, selector, value);" +
                     "    } catch(e) {" +
                     "      console.error('Error in recorder:', e);" +
