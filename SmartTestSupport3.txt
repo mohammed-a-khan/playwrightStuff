@@ -7301,3 +7301,288 @@ public class GeneratedTest {
     private String methodName;
     private String code;
 }
+
+
+package com.cssmart.ui.service;
+
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.controller.GeneratedTest;
+import com.cssmart.ai.engine.AIEngine;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.UUID;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
+import com.cssmart.ai.codegen.model.TestStep;
+
+/**
+ * Service for managing recorded tests, including storing and converting between
+ * recorded TestCase objects and GeneratedTest objects for the Test Generator
+ */
+@Slf4j
+@Service
+public class TestRecordingService {
+    
+    private final AIEngine aiEngine;
+    private final Map<String, TestCase> recordedTests;
+    private static final String RECORDED_TESTS_DIR = "recorded-tests";
+    
+    @Autowired
+    public TestRecordingService(AIEngine aiEngine) {
+        this.aiEngine = aiEngine;
+        this.recordedTests = new ConcurrentHashMap<>();
+        
+        // Ensure recorded tests directory exists
+        File dir = new File(RECORDED_TESTS_DIR);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+    }
+    
+    /**
+     * Save a recorded test case
+     * @param testCase The test case to save
+     * @return The saved test case with ID
+     */
+    public TestCase saveRecordedTest(TestCase testCase) {
+        try {
+            log.info("Saving recorded test: {}", testCase.getName());
+            
+            // Ensure test case has an ID
+            if (testCase.getId() == null || testCase.getId().isEmpty()) {
+                testCase.setId(UUID.randomUUID().toString());
+            }
+            
+            // Store in memory
+            recordedTests.put(testCase.getId(), testCase);
+            
+            // Save to file system
+            saveTestToFile(testCase);
+            
+            return testCase;
+        } catch (Exception e) {
+            log.error("Error saving recorded test", e);
+            throw new RuntimeException("Failed to save recorded test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get a recorded test by ID
+     * @param id Test ID
+     * @return Test case or null if not found
+     */
+    public TestCase getRecordedTest(String id) {
+        return recordedTests.get(id);
+    }
+    
+    /**
+     * Convert a recorded TestCase to a GeneratedTest for the Test Generator
+     * @param testCase The test case to convert
+     * @return A GeneratedTest object
+     */
+    public GeneratedTest convertToGeneratedTest(TestCase testCase) {
+        try {
+            log.info("Converting recorded test to generated test: {}", testCase.getName());
+            
+            GeneratedTest generatedTest = new GeneratedTest();
+            generatedTest.setId(testCase.getId());
+            generatedTest.setName(testCase.getName());
+            generatedTest.setDescription(testCase.getDescription());
+            generatedTest.setClassName(testCase.getClassName());
+            generatedTest.setMethodName(testCase.getMethodName());
+            generatedTest.setCode(testCase.getCode());
+            
+            // Convert steps
+            if (testCase.getSteps() != null) {
+                generatedTest.setSteps(convertToTestSteps(testCase.getSteps()));
+            }
+            
+            return generatedTest;
+        } catch (Exception e) {
+            log.error("Error converting recorded test to generated test", e);
+            throw new RuntimeException("Failed to convert test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Convert a GeneratedTest to a TestCase
+     * @param generatedTest The generated test to convert
+     * @return A TestCase object
+     */
+    public TestCase convertToTestCase(GeneratedTest generatedTest) {
+        try {
+            log.info("Converting generated test to test case: {}", generatedTest.getName());
+            
+            TestCase testCase = new TestCase();
+            testCase.setId(generatedTest.getId());
+            testCase.setName(generatedTest.getName());
+            testCase.setDescription(generatedTest.getDescription());
+            testCase.setClassName(generatedTest.getClassName());
+            testCase.setMethodName(generatedTest.getMethodName());
+            testCase.setCode(generatedTest.getCode());
+            
+            // Convert steps
+            if (generatedTest.getSteps() != null) {
+                testCase.setSteps(convertToRecordedSteps(generatedTest.getSteps()));
+            }
+            
+            return testCase;
+        } catch (Exception e) {
+            log.error("Error converting generated test to test case", e);
+            throw new RuntimeException("Failed to convert test: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Enhance a test case with AI
+     * @param testCase The test case to enhance
+     * @return The enhanced test case
+     */
+    public TestCase enhanceTestCase(TestCase testCase) {
+        try {
+            log.info("Enhancing test case with AI: {}", testCase.getName());
+            
+            // Use AI engine to enhance the test case
+            // This is a placeholder for the actual AI enhancement
+            if (aiEngine != null) {
+                // In a real implementation, this would use AI to improve the test
+                // For now, we'll just make some simple enhancements
+                
+                // Improve the test name if it's generic
+                if (testCase.getName() == null || testCase.getName().contains("Recorded Test")) {
+                    if (testCase.getSteps() != null && !testCase.getSteps().isEmpty()) {
+                        // Generate a more descriptive name based on the steps
+                        String firstAction = testCase.getSteps().get(0).getAction();
+                        String firstElement = testCase.getSteps().get(0).getElement();
+                        
+                        if (firstAction != null && firstElement != null) {
+                            testCase.setName("Test " + firstAction + " on " + firstElement);
+                        }
+                    }
+                }
+                
+                // Improve the description
+                if (testCase.getDescription() == null || testCase.getDescription().isEmpty() || 
+                        testCase.getDescription().equals("Automatically recorded test case")) {
+                    testCase.setDescription("Automated test to verify functionality of the application");
+                }
+                
+                // You would call the AI engine here in a real implementation
+                // testCase = aiEngine.enhanceTestCase(testCase);
+            }
+            
+            return testCase;
+        } catch (Exception e) {
+            log.error("Error enhancing test case", e);
+            
+            // Return the original test case if enhancement fails
+            return testCase;
+        }
+    }
+    
+    /**
+     * Save a test case to file
+     * @param testCase The test case to save
+     */
+    private void saveTestToFile(TestCase testCase) {
+        try {
+            // Save test case to file
+            File testFile = new File(RECORDED_TESTS_DIR, testCase.getId() + ".json");
+            
+            // Use Jackson to serialize to JSON
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            objectMapper.writeValue(testFile, testCase);
+            
+            log.info("Saved test case to file: {}", testFile.getAbsolutePath());
+            
+            // If code is present, also save it as a Java file
+            if (testCase.getCode() != null && !testCase.getCode().isEmpty()) {
+                String packageDir = "src/main/java/com/cssmart/tests/generated".replace('.', '/');
+                File packagePath = new File(packageDir);
+                if (!packagePath.exists()) {
+                    packagePath.mkdirs();
+                }
+                
+                File javaFile = new File(packageDir, testCase.getClassName() + ".java");
+                Files.writeString(javaFile.toPath(), testCase.getCode());
+                
+                log.info("Saved test code to: {}", javaFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.error("Error saving test case to file", e);
+            throw new RuntimeException("Failed to save test to file: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Convert RecordedStep list to TestStep list
+     * @param recordedSteps List of RecordedStep objects
+     * @return List of TestStep objects
+     */
+    private List<TestStep> convertToTestSteps(List<RecordedStep> recordedSteps) {
+        if (recordedSteps == null) {
+            return new ArrayList<>();
+        }
+        
+        return recordedSteps.stream()
+            .map(this::convertToTestStep)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Convert a single RecordedStep to TestStep
+     * @param recordedStep RecordedStep object
+     * @return TestStep object
+     */
+    private TestStep convertToTestStep(RecordedStep recordedStep) {
+        return TestStep.builder()
+            .action(recordedStep.getAction())
+            .element(recordedStep.getElement())
+            .value(recordedStep.getValue())
+            .description(recordedStep.getDescription())
+            .timestamp(recordedStep.getTimestamp())
+            .build();
+    }
+    
+    /**
+     * Convert TestStep list to RecordedStep list
+     * @param testSteps List of TestStep objects
+     * @return List of RecordedStep objects
+     */
+    private List<RecordedStep> convertToRecordedSteps(List<TestStep> testSteps) {
+        if (testSteps == null) {
+            return new ArrayList<>();
+        }
+        
+        return testSteps.stream()
+            .map(this::convertToRecordedStep)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Convert a single TestStep to RecordedStep
+     * @param testStep TestStep object
+     * @return RecordedStep object
+     */
+    private RecordedStep convertToRecordedStep(TestStep testStep) {
+        return RecordedStep.builder()
+            .action(testStep.getAction())
+            .element(testStep.getElement())
+            .value(testStep.getValue())
+            .description(testStep.getDescription())
+            .timestamp(testStep.getTimestamp())
+            .build();
+    }
+}
