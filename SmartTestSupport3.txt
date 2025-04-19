@@ -8168,28 +8168,28 @@ public class TestRecorderHandler extends TextWebSocketHandler {
     }
     
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        String sessionId = session.getId();
-        RecorderMessage msg = objectMapper.readValue(message.getPayload(), RecorderMessage.class);
-        
-        log.debug("Received recorder message: {}", msg.getType());
-        
-        switch (msg.getType()) {
-            case "START_RECORDING":
-                startRecording(session, sessionId, msg.getData());
-                break;
-            case "STOP_RECORDING":
-                stopRecording(session, sessionId);
-                break;
-            case "ACTION":
-                recordAction(session, sessionId, msg.getData());
-                break;
-            default:
-                log.warn("Unknown message type: {}", msg.getType());
-                sendError(session, "Unknown message type: " + msg.getType());
-                break;
-        }
+protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+    String sessionId = session.getId();
+    RecorderMessage msg = objectMapper.readValue(message.getPayload(), RecorderMessage.class);
+    
+    log.debug("Received recorder message: {}", msg.getType());
+    
+    switch (msg.getType()) {
+        case "START_RECORDING":
+            startRecording(session, sessionId, msg.getData());
+            break;
+        case "STOP_RECORDING":
+            stopRecording(session, sessionId);
+            break;
+        case "ACTION":
+            handleWebSocketAction(session, sessionId, msg.getData());  // Updated this line
+            break;
+        default:
+            log.warn("Unknown message type: {}", msg.getType());
+            sendError(session, "Unknown message type: " + msg.getType());
+            break;
     }
+}
     
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
