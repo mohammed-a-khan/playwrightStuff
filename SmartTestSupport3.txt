@@ -7688,38 +7688,25 @@ public class TestRecorderHandler extends TextWebSocketHandler {
     }
     
     /**
-     * Record an action from an HTTP endpoint
-     * This is a public method that can be called from the controller
-     * @param sessionId The session ID (if known, otherwise null)
-     * @param action The action to record
-     * @param element The element identifier
-     * @param value The action value
-     */
-    public void recordAction(String sessionId, Action action, String element, String value) {
-        log.info("Recording action from HTTP: {} on {} with value {}", action.getType(), element, value);
-        
-        TestRecorder recorder = null;
-        
-        // If we have a specific session ID
-        if (sessionId != null && !sessionId.isEmpty()) {
-            recorder = recorders.get(sessionId);
-            if (recorder == null) {
-                log.warn("No recorder found for session ID: {}", sessionId);
-                
-                // Try to find an active recorder
-                for (Map.Entry<String, TestRecorder> entry : recorders.entrySet()) {
-                    if (entry.getValue().isRecording()) {
-                        recorder = entry.getValue();
-                        sessionId = entry.getKey();
-                        log.info("Found active recorder with session ID: {}", sessionId);
-                        break;
-                    }
-                }
-            }
-        } 
-        // If no session ID or no recorder found with provided ID
+ * Record an action from an HTTP endpoint
+ * This is a public method that can be called from the controller
+ * @param sessionId The session ID (if known, otherwise null)
+ * @param action The action to record
+ * @param element The element identifier
+ * @param value The action value
+ */
+public void recordAction(String sessionId, Action action, String element, String value) {
+    log.info("Recording action from HTTP: {} on {} with value {}", action.getType(), element, value);
+    
+    TestRecorder recorder = null;
+    
+    // If we have a specific session ID
+    if (sessionId != null && !sessionId.isEmpty()) {
+        recorder = recorders.get(sessionId);
         if (recorder == null) {
-            // Find the first active recorder
+            log.warn("No recorder found for session ID: {}", sessionId);
+            
+            // Try to find an active recorder
             for (Map.Entry<String, TestRecorder> entry : recorders.entrySet()) {
                 if (entry.getValue().isRecording()) {
                     recorder = entry.getValue();
@@ -7728,34 +7715,47 @@ public class TestRecorderHandler extends TextWebSocketHandler {
                     break;
                 }
             }
-            
-            if (recorder == null) {
-                log.warn("No active recorder found to record action");
-                return;
+        }
+    } 
+    // If no session ID or no recorder found with provided ID
+    if (recorder == null) {
+        // Find the first active recorder
+        for (Map.Entry<String, TestRecorder> entry : recorders.entrySet()) {
+            if (entry.getValue().isRecording()) {
+                recorder = entry.getValue();
+                sessionId = entry.getKey();
+                log.info("Found active recorder with session ID: {}", sessionId);
+                break;
             }
         }
         
-        try {
-            recorder.recordAction(action, element, value);
-            log.info("Action recorded successfully");
-            
-            // Notify the WebSocket client about the new step
-            WebSocketSession session = sessions.get(sessionId);
-            if (session != null && session.isOpen()) {
-                RecordedStep step = recorder.getLastRecordedStep();
-                if (step != null) {
-                    log.info("Sending step to client: {}", step.getDescription());
-                    sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
-                } else {
-                    log.warn("No step recorded");
-                }
-            } else {
-                log.warn("WebSocket session not available or closed");
-            }
-        } catch (Exception e) {
-            log.error("Error recording action: {}", e.getMessage(), e);
+        if (recorder == null) {
+            log.warn("No active recorder found to record action");
+            return;
         }
     }
+    
+    try {
+        recorder.recordAction(action, element, value);
+        log.info("Action recorded successfully");
+        
+        // Notify the WebSocket client about the new step
+        WebSocketSession session = sessions.get(sessionId);
+        if (session != null && session.isOpen()) {
+            RecordedStep step = recorder.getLastRecordedStep();
+            if (step != null) {
+                log.info("Sending step to client: {}", step.getDescription());
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+            } else {
+                log.warn("No step recorded");
+            }
+        } else {
+            log.warn("WebSocket session not available or closed");
+        }
+    } catch (Exception e) {
+        log.error("Error recording action: {}", e.getMessage(), e);
+    }
+}
     
     /**
      * Start a new recording session
@@ -7950,6 +7950,16 @@ public class TestRecorder {
             steps.add(step);
             
             log.info("Recorded navigation to: {}", baseUrl);
+    
+            // Add a simulated test click after navigation for debugging
+            try {
+                // Record a simulated click event to verify recording works
+                Action testAction = new Action(ActionType.CLICK);
+                recordAction(testAction, "button.test", "");
+                log.info("Added test click action to verify recording");
+            } catch (Exception e) {
+                log.error("Error adding test actions", e);
+            }
             
             // Inject recorder script
             injectRecorderScript();
@@ -8012,98 +8022,106 @@ public class TestRecorder {
     }
     
     private void injectRecorderScript() {
-        if (driver instanceof JavascriptExecutor) {
-            try {
-                JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
-                
-                // Enhanced recorder script with better event detection
-                String recorderScript = 
-                    "window.csSmartRecorderSessionId = '" + sessionId + "';" +
-                    "window.csSmartRecorderActive = true;" +
-                    
-                    "window.csSmartRecorder = {" +
-                    "  debug: function(msg) {" +
-                    "    console.log('[CS Smart Recorder] ' + msg);" +
-                    "  }," +
-                    
-                    "  sendEvent: function(actionType, element, value) {" +
-                    "    this.debug('Sending event: ' + actionType + ' on ' + element + (value ? ' with value: ' + value : ''));" +
-                    "    var xhr = new XMLHttpRequest();" +
-                    "    xhr.open('POST', '/api/recorder/event', true);" +
-                    "    xhr.setRequestHeader('Content-Type', 'application/json');" +
-                    "    xhr.onload = function() {" +
-                    "      window.csSmartRecorder.debug('Response: ' + xhr.status + ' ' + xhr.responseText);" +
-                    "    };" +
-                    "    xhr.onerror = function() {" +
-                    "      window.csSmartRecorder.debug('Error sending event: ' + actionType);" +
-                    "    };" +
-                    "    var data = JSON.stringify({" +
-                    "      sessionId: window.csSmartRecorderSessionId," +
-                    "      actionType: actionType," +
-                    "      element: element," +
-                    "      value: value" +
-                    "    });" +
-                    "    xhr.send(data);" +
-                    "  }," +
-                    
-                    "  getElementSelector: function(element) {" +
-                    "    if (!element) return 'unknown';" +
-                    "    if (element.id) return '#' + element.id;" +
-                    "    if (element.name) return '[name=\"' + element.name + '\"]';" +
-                    "    return element.tagName.toLowerCase();" +
-                    "  }," +
-                    
-                    "  setupListeners: function() {" +
-                    "    this.debug('Setting up event listeners');" +
-                    
-                    "    document.addEventListener('click', function(e) {" +
-                    "      if (!window.csSmartRecorderActive) return;" +
-                    "      window.csSmartRecorder.debug('Click detected');" +
-                    "      var selector = window.csSmartRecorder.getElementSelector(e.target);" +
-                    "      window.csSmartRecorder.sendEvent('CLICK', selector, '');" +
-                    "    }, true);" +
-                    
-                    "    document.addEventListener('input', function(e) {" +
-                    "      if (!window.csSmartRecorderActive) return;" +
-                    "      window.csSmartRecorder.debug('Input detected');" +
-                    "      var selector = window.csSmartRecorder.getElementSelector(e.target);" +
-                    "      window.csSmartRecorder.sendEvent('TYPE', selector, e.target.value);" +
-                    "    }, true);" +
-                    
-                    "    document.addEventListener('change', function(e) {" +
-                    "      if (!window.csSmartRecorderActive) return;" +
-                    "      window.csSmartRecorder.debug('Change detected');" +
-                    "      var selector = window.csSmartRecorder.getElementSelector(e.target);" +
-                    "      if (e.target.tagName.toLowerCase() === 'select') {" +
-                    "        window.csSmartRecorder.sendEvent('SELECT', selector, e.target.value);" +
-                    "      }" +
-                    "    }, true);" +
-                    
-                    "    document.addEventListener('submit', function(e) {" +
-                    "      if (!window.csSmartRecorderActive) return;" +
-                    "      window.csSmartRecorder.debug('Form submission detected');" +
-                    "      var selector = window.csSmartRecorder.getElementSelector(e.target);" +
-                    "      window.csSmartRecorder.sendEvent('SUBMIT_FORM', selector, '');" +
-                    "    }, true);" +
-                    "  }" +
-                    "};" +
-                    
-                    "window.csSmartRecorder.debug('Initializing recorder with session ID: ' + window.csSmartRecorderSessionId);" +
-                    "window.csSmartRecorder.setupListeners();" +
-                    "window.csSmartRecorder.sendEvent('INIT', 'recorder', 'initialized');";
-                
-                // Execute the script
-                jsExecutor.executeScript(recorderScript);
-                
-                log.info("Recorder script injected successfully with session ID: {}", sessionId);
-                
-            } catch (Exception e) {
-                log.error("Failed to inject recorder script: {}", e.getMessage(), e);
+    if (driver instanceof JavascriptExecutor) {
+        try {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Get the current URL to determine the correct base path
+            String currentUrl = driver.getCurrentUrl();
+            String basePath = "";
+            // Extract the protocol and host
+            if (currentUrl.startsWith("http")) {
+                int protocolEnd = currentUrl.indexOf("//");
+                int pathStart = currentUrl.indexOf("/", protocolEnd + 2);
+                if (pathStart > 0) {
+                    basePath = currentUrl.substring(0, pathStart);
+                } else {
+                    basePath = currentUrl;
+                }
             }
-        } else {
-            log.error("Driver does not support JavaScript execution");
+            
+            // Very simple script with absolute URL paths
+            String recorderScript = 
+                "window.csSmartRecorderSessionId = '" + sessionId + "';" +
+                "window.csSmartRecorderActive = true;" +
+                "window.csSmartRecorderEvents = [];" +
+                
+                // Debug script to alert the sessionId in the browser
+                "console.log('CS Smart Recorder activated with session ID: " + sessionId + "');" +
+                
+                // Very simple function to send events
+                "window.sendRecorderEvent = function(type, element, value) {" +
+                "  console.log('Recording event: ' + type + ' on ' + element);" +
+                "  var xhr = new XMLHttpRequest();" +
+                "  xhr.open('POST', '" + basePath + "/api/recorder/event', true);" +
+                "  xhr.setRequestHeader('Content-Type', 'application/json');" +
+                "  xhr.onreadystatechange = function() {" +
+                "    if (xhr.readyState === 4) {" +
+                "      console.log('Event sent, response: ' + xhr.status);" +
+                "      if (xhr.status !== 200) {" +
+                "        console.error('Failed to send event, response text: ' + xhr.responseText);" +
+                "      }" +
+                "    }" +
+                "  };" +
+                "  var data = {" +
+                "    sessionId: window.csSmartRecorderSessionId," +
+                "    actionType: type," +
+                "    element: element," +
+                "    value: value" +
+                "  };" +
+                "  xhr.send(JSON.stringify(data));" +
+                "  window.csSmartRecorderEvents.push(data);" +
+                "};" +
+                
+                // Simplified element selector
+                "window.getElementSelector = function(element) {" +
+                "  if (!element) return 'unknown';" +
+                "  if (element.id) return '#' + element.id;" +
+                "  if (element.name) return '[name=' + element.name + ']';" +
+                "  return element.tagName.toLowerCase();" +
+                "};" +
+                
+                // Click handler
+                "document.addEventListener('click', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.getElementSelector(e.target);" +
+                "  window.sendRecorderEvent('CLICK', selector, '');" +
+                "}, true);" +
+                
+                // Input handler
+                "document.addEventListener('change', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.getElementSelector(e.target);" +
+                "  window.sendRecorderEvent('TYPE', selector, e.target.value);" +
+                "}, true);" +
+                
+                // Send test event to verify connectivity
+                "setTimeout(function() {" +
+                "  window.sendRecorderEvent('INIT', 'test', 'test');" +
+                "}, 500);";
+            
+            // Execute the script
+            jsExecutor.executeScript(recorderScript);
+            
+            // Also add a diagnostic message to verify the script was injected
+            jsExecutor.executeScript(
+                "console.log('CS Smart Recorder diagnostic info: ' + " +
+                "JSON.stringify({" +
+                "  sessionId: window.csSmartRecorderSessionId," +
+                "  isActive: window.csSmartRecorderActive," +
+                "  location: window.location.href" +
+                "}));"
+            );
+            
+            log.info("Recorder script injected successfully with session ID: {}", sessionId);
+            
+        } catch (Exception e) {
+            log.error("Failed to inject recorder script: {}", e.getMessage(), e);
         }
+    } else {
+        log.error("Driver does not support JavaScript execution");
     }
+}
     
     public TestCase stopRecording() {
         this.isRecording = false;
@@ -8300,6 +8318,10 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * Controller to handle events sent from the browser recorder script
  */
@@ -8322,6 +8344,7 @@ public class RecorderEventController {
         try {
             // Skip INIT events as they are just for testing the connection
             if ("INIT".equals(event.getActionType())) {
+                log.info("Received initialization event, connection is working");
                 return ResponseEntity.ok("Initialization event received");
             }
             
@@ -8348,9 +8371,16 @@ public class RecorderEventController {
         }
     }
     
-    /**
-     * Debug endpoint to check recorder status
-     */
+    @GetMapping("/debug")
+    public ResponseEntity<Map<String, Object>> debugInfo() {
+        log.info("Debug endpoint called");
+        Map<String, Object> debug = new HashMap<>();
+        debug.put("timestamp", LocalDateTime.now().toString());
+        debug.put("controller", "RecorderEventController is active");
+        debug.put("recorderHandler", recorderHandler != null ? "Available" : "NULL");
+        return ResponseEntity.ok(debug);
+    }
+    
     @GetMapping("/status")
     public ResponseEntity<String> getStatus() {
         return ResponseEntity.ok("Recorder service is running");
@@ -8382,4 +8412,25 @@ public class RecorderEventController {
         }
     }
 }
+
+
+
+package com.cssmart.ui.config;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+            .allowedOrigins("*")
+            .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+            .allowedHeaders("*");
+    }
+}
+
+
 
