@@ -1,0 +1,5641 @@
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.ElementPrediction;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.exceptions.AIPredictionException;
+import com.cssmart.ai.engine.exceptions.AIActionException;
+import com.cssmart.ai.engine.exceptions.AIPatternException;
+import com.cssmart.ai.patterns.PatternRecognizer;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ui.recorder.model.TestCase;
+
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebElement;
+
+import java.util.List;
+
+/**
+ * Core AI Engine that provides intelligent capabilities to the framework.
+ * Implements Singleton pattern to ensure only one instance exists.
+ */
+@Slf4j
+public class AIEngine {
+    private static AIEngine instance;
+    private final ElementPredictor elementPredictor;
+    private final ActionGenerator actionGenerator;
+    private final PatternRecognizer patternRecognizer;
+    
+    private AIEngine() {
+        this.elementPredictor = new ElementPredictor();
+        this.actionGenerator = new ActionGenerator();
+        this.patternRecognizer = new PatternRecognizer();
+    }
+    
+    /**
+     * Get the singleton instance of AIEngine
+     * 
+     * @return AIEngine instance
+     */
+    public static synchronized AIEngine getInstance() {
+        if (instance == null) {
+            instance = new AIEngine();
+            log.info("AIEngine initialized");
+        }
+        return instance;
+    }
+    
+    /**
+     * Predict element locators based on natural language description
+     * 
+     * @param description Natural language description of an element
+     * @return Element prediction with locator strategies
+     */
+    public ElementPrediction predictElement(String description) {
+        try {
+            log.debug("Predicting element from description: {}", description);
+            return elementPredictor.predict(description);
+        } catch (Exception e) {
+            log.error("Error predicting element: {}", description, e);
+            throw new AIPredictionException("Failed to predict element", e);
+        }
+    }
+    
+    /**
+     * Generate suggested actions for a WebElement
+     * 
+     * @param element WebElement to analyze
+     * @return List of possible actions
+     */
+    public List<Action> suggestActions(WebElement element) {
+        try {
+            log.debug("Generating actions for element: {}", element);
+            return actionGenerator.generateActions(element);
+        } catch (Exception e) {
+            log.error("Error generating actions for element", e);
+            throw new AIActionException("Failed to generate actions", e);
+        }
+    }
+    
+    /**
+     * Recognize patterns in a sequence of actions
+     * 
+     * @param actions List of actions to analyze
+     * @return List of detected patterns
+     */
+    public List<Pattern> recognizePatterns(List<Action> actions) {
+        try {
+            log.debug("Recognizing patterns from {} actions", actions.size());
+            return patternRecognizer.findPatterns(actions);
+        } catch (Exception e) {
+            log.error("Error recognizing patterns", e);
+            throw new AIPatternException("Failed to recognize patterns", e);
+        }
+    }
+    
+    /**
+     * Enhance a test case with AI optimizations
+     * 
+     * @param testCase Test case to enhance
+     * @return Enhanced test case
+     */
+    public TestCase enhanceTestCase(TestCase testCase) {
+        log.debug("Enhancing test case: {}", testCase.getName());
+        
+        // This would contain more complex logic in real implementation
+        // For now, we'll just return the original test case
+        
+        return testCase;
+    }
+    
+    /**
+     * Verify text presence on a page with intelligent matching
+     * 
+     * @param driver WebDriver instance
+     * @param text Text to verify
+     * @return True if text is present
+     */
+    public boolean verifyTextPresence(org.openqa.selenium.WebDriver driver, String text) {
+        log.debug("Verifying text presence: {}", text);
+        
+        // Simple implementation - could be enhanced with fuzzy matching, etc.
+        String pageSource = driver.getPageSource();
+        return pageSource.contains(text);
+    }
+    
+    /**
+     * Generate locators for an element description
+     * 
+     * @param description Element description
+     * @return List of locator strategies
+     */
+    public List<org.openqa.selenium.By> generateLocators(String description) {
+        log.debug("Generating locators for: {}", description);
+        ElementPrediction prediction = predictElement(description);
+        
+        return prediction.getLocators().stream()
+            .map(locator -> locator.toBy())
+            .collect(java.util.stream.Collectors.toList());
+    }
+}
+
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.ElementAnalysis;
+import com.cssmart.ai.engine.model.ElementPrediction;
+import com.cssmart.ai.engine.model.Locator;
+import com.cssmart.ai.engine.model.LocatorType;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * AI-based element predictor that generates locator strategies
+ * from natural language descriptions
+ */
+@Slf4j
+public class ElementPredictor {
+    private final LocatorStrategy locatorStrategy;
+    
+    // Patterns for element type extraction
+    private static final Pattern BUTTON_PATTERN = Pattern.compile("\\b(button|btn)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LINK_PATTERN = Pattern.compile("\\b(link|anchor)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern INPUT_PATTERN = Pattern.compile("\\b(input|textbox|field|textfield)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern DROPDOWN_PATTERN = Pattern.compile("\\b(dropdown|select|combobox)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CHECKBOX_PATTERN = Pattern.compile("\\b(checkbox|check box)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RADIO_PATTERN = Pattern.compile("\\b(radio|radio button)\\b", Pattern.CASE_INSENSITIVE);
+    
+    public ElementPredictor() {
+        this.locatorStrategy = new LocatorStrategy();
+    }
+    
+    /**
+     * Predict locators for an element based on its description
+     * 
+     * @param description Natural language description of element
+     * @return ElementPrediction containing possible locators
+     */
+    public ElementPrediction predict(String description) {
+        log.debug("Predicting element from description: {}", description);
+        
+        // Analyze the description
+        ElementAnalysis analysis = analyzeDescription(description);
+        
+        // Generate locator strategies
+        List<Locator> locators = locatorStrategy.generateLocators(analysis);
+        
+        // Create and return the prediction
+        return new ElementPrediction(locators, analysis.getConfidence());
+    }
+    
+    /**
+     * Analyze a description to extract element type, attributes, etc.
+     * 
+     * @param description Element description
+     * @return Analysis results
+     */
+    private ElementAnalysis analyzeDescription(String description) {
+        ElementAnalysis analysis = new ElementAnalysis();
+        
+        // Analyze element type
+        String elementType = determineElementType(description);
+        analysis.setElementType(elementType);
+        
+        // Extract attributes
+        Map<String, String> attributes = extractAttributes(description);
+        analysis.setAttributes(attributes);
+        
+        // Calculate confidence score
+        double confidence = calculateConfidence(analysis);
+        analysis.setConfidence(confidence);
+        
+        log.debug("Analysis results: type={}, attributes={}, confidence={}", 
+                elementType, attributes, confidence);
+        
+        return analysis;
+    }
+    
+    /**
+     * Determine the element type from a description
+     * 
+     * @param description Element description
+     * @return HTML element type
+     */
+    private String determineElementType(String description) {
+        String lowerDesc = description.toLowerCase();
+        
+        // Check for common element types
+        if (BUTTON_PATTERN.matcher(lowerDesc).find()) {
+            return "button";
+        } else if (LINK_PATTERN.matcher(lowerDesc).find()) {
+            return "a";
+        } else if (INPUT_PATTERN.matcher(lowerDesc).find()) {
+            return "input";
+        } else if (DROPDOWN_PATTERN.matcher(lowerDesc).find()) {
+            return "select";
+        } else if (CHECKBOX_PATTERN.matcher(lowerDesc).find()) {
+            return "input"; // type=checkbox
+        } else if (RADIO_PATTERN.matcher(lowerDesc).find()) {
+            return "input"; // type=radio
+        }
+        
+        // Default to div if no specific type is identified
+        return "div";
+    }
+    
+    /**
+     * Extract potential attributes from a description
+     * 
+     * @param description Element description
+     * @return Map of attribute names to values
+     */
+    private Map<String, String> extractAttributes(String description) {
+        Map<String, String> attributes = new HashMap<>();
+        String lowerDesc = description.toLowerCase();
+        
+        // Extract potential ID
+        Pattern idPattern = Pattern.compile("\\bid[:\\s]?[\"']?([\\w-]+)[\"']?", Pattern.CASE_INSENSITIVE);
+        Matcher idMatcher = idPattern.matcher(lowerDesc);
+        if (idMatcher.find()) {
+            attributes.put("id", idMatcher.group(1));
+        }
+        
+        // Extract potential class
+        Pattern classPattern = Pattern.compile("\\bclass[:\\s]?[\"']?([\\w\\s-]+)[\"']?", Pattern.CASE_INSENSITIVE);
+        Matcher classMatcher = classPattern.matcher(lowerDesc);
+        if (classMatcher.find()) {
+            attributes.put("class", classMatcher.group(1));
+        }
+        
+        // Extract potential name
+        Pattern namePattern = Pattern.compile("\\bname[:\\s]?[\"']?([\\w-]+)[\"']?", Pattern.CASE_INSENSITIVE);
+        Matcher nameMatcher = namePattern.matcher(lowerDesc);
+        if (nameMatcher.find()) {
+            attributes.put("name", nameMatcher.group(1));
+        }
+        
+        // Extract text content
+        Pattern textPattern = Pattern.compile("\\btext[:\\s]?[\"']?([^\"']+)[\"']?", Pattern.CASE_INSENSITIVE);
+        Matcher textMatcher = textPattern.matcher(description); // Use original case for text
+        if (textMatcher.find()) {
+            attributes.put("text", textMatcher.group(1));
+        } else {
+            // Try to extract quoted text as potential element text
+            Pattern quotedPattern = Pattern.compile("[\"']([^\"']+)[\"']");
+            Matcher quotedMatcher = quotedPattern.matcher(description);
+            if (quotedMatcher.find()) {
+                attributes.put("text", quotedMatcher.group(1));
+            }
+        }
+        
+        // Add input-specific attributes
+        if ("input".equals(attributes.get("elementType"))) {
+            if (lowerDesc.contains("checkbox") || lowerDesc.contains("check box")) {
+                attributes.put("type", "checkbox");
+            } else if (lowerDesc.contains("radio") || lowerDesc.contains("radio button")) {
+                attributes.put("type", "radio");
+            } else if (lowerDesc.contains("password")) {
+                attributes.put("type", "password");
+            } else if (lowerDesc.contains("email")) {
+                attributes.put("type", "email");
+            } else {
+                attributes.put("type", "text");
+            }
+        }
+        
+        return attributes;
+    }
+    
+    /**
+     * Calculate a confidence score for the prediction
+     * 
+     * @param analysis Element analysis results
+     * @return Confidence score (0.0-1.0)
+     */
+    private double calculateConfidence(ElementAnalysis analysis) {
+        double confidence = 0.0;
+        
+        // Base confidence for having an element type
+        if (analysis.getElementType() != null) {
+            confidence += 0.4;
+        }
+        
+        // Add confidence based on attributes
+        Map<String, String> attributes = analysis.getAttributes();
+        
+        // ID is the most reliable attribute
+        if (attributes.containsKey("id")) {
+            confidence += 0.4;
+        }
+        
+        // Text content is also reliable
+        if (attributes.containsKey("text")) {
+            confidence += 0.3;
+        }
+        
+        // Other attributes contribute less
+        if (attributes.containsKey("name")) {
+            confidence += 0.2;
+        }
+        
+        if (attributes.containsKey("class")) {
+            confidence += 0.1;
+        }
+        
+        // Ensure confidence is between 0 and 1
+        return Math.min(confidence, 1.0);
+    }
+}
+
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.engine.model.ElementProperties;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebElement;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Generates appropriate actions for web elements based on their properties
+ */
+@Slf4j
+public class ActionGenerator {
+    private final ElementAnalyzer elementAnalyzer;
+    
+    public ActionGenerator() {
+        this.elementAnalyzer = new ElementAnalyzer();
+    }
+    
+    /**
+     * Generate appropriate actions for a WebElement
+     * 
+     * @param element WebElement to analyze
+     * @return List of possible actions
+     */
+    public List<Action> generateActions(WebElement element) {
+        List<Action> actions = new ArrayList<>();
+        
+        try {
+            // Analyze element properties
+            ElementProperties properties = elementAnalyzer.analyze(element);
+            
+            // Generate appropriate actions based on element properties
+            if (properties.isClickable()) {
+                Action clickAction = new Action(ActionType.CLICK);
+                actions.add(clickAction);
+            }
+            
+            if (properties.isInput()) {
+                Action typeAction = new Action(ActionType.TYPE);
+                actions.add(typeAction);
+            }
+            
+            if (properties.isSelectable()) {
+                Action selectAction = new Action(ActionType.SELECT);
+                actions.add(selectAction);
+            }
+            
+            // Add validations
+            actions.addAll(generateValidations(properties));
+            
+            log.debug("Generated {} actions for element", actions.size());
+        } catch (Exception e) {
+            log.error("Error generating actions for element", e);
+        }
+        
+        return actions;
+    }
+    
+    /**
+     * Generate validation actions based on element properties
+     * 
+     * @param properties Element properties
+     * @return List of validation actions
+     */
+    private List<Action> generateValidations(ElementProperties properties) {
+        List<Action> validations = new ArrayList<>();
+        
+        // Add presence validation
+        Action presenceValidation = new Action(ActionType.VERIFY_PRESENCE);
+        validations.add(presenceValidation);
+        
+        // Add visibility validation if element should be visible
+        if (properties.shouldBeVisible()) {
+            Action visibilityValidation = new Action(ActionType.VERIFY_VISIBILITY);
+            validations.add(visibilityValidation);
+        }
+        
+        // Add state validations if applicable
+        if (properties.hasState()) {
+            Action stateValidation = new Action(ActionType.VERIFY_STATE);
+            stateValidation.setValue(properties.getState());
+            validations.add(stateValidation);
+        }
+        
+        return validations;
+    }
+    
+    /**
+     * Generate special actions for particular element types
+     * 
+     * @param element WebElement to analyze
+     * @param tagName Tag name of the element
+     * @return List of special actions
+     */
+    public List<Action> generateSpecialActions(WebElement element, String tagName) {
+        List<Action> specialActions = new ArrayList<>();
+        
+        // Generate special actions based on element tag
+        switch (tagName.toLowerCase()) {
+            case "a":
+                // For links, we might want to get href
+                Action getHrefAction = new Action(ActionType.GET_ATTRIBUTE);
+                getHrefAction.setValue("href");
+                specialActions.add(getHrefAction);
+                break;
+                
+            case "input":
+                String type = element.getAttribute("type");
+                if ("file".equals(type)) {
+                    // For file inputs, we need upload action
+                    Action uploadAction = new Action(ActionType.UPLOAD);
+                    specialActions.add(uploadAction);
+                } else if ("checkbox".equals(type) || "radio".equals(type)) {
+                    // For checkboxes and radio buttons, we need toggle actions
+                    Action toggleAction = new Action(ActionType.TOGGLE);
+                    specialActions.add(toggleAction);
+                }
+                break;
+                
+            case "select":
+                // For selects, we need different selection types
+                Action selectByTextAction = new Action(ActionType.SELECT_BY_TEXT);
+                Action selectByValueAction = new Action(ActionType.SELECT_BY_VALUE);
+                Action selectByIndexAction = new Action(ActionType.SELECT_BY_INDEX);
+                specialActions.add(selectByTextAction);
+                specialActions.add(selectByValueAction);
+                specialActions.add(selectByIndexAction);
+                break;
+        }
+        
+        return specialActions;
+    }
+}
+
+
+// ElementAnalysis.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Represents the analysis of an element description
+ */
+@Data
+public class ElementAnalysis {
+    private String elementType;
+    private Map<String, String> attributes = new HashMap<>();
+    private double confidence;
+}
+
+// ElementPrediction.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import java.util.List;
+
+/**
+ * Represents a prediction for an element with locators and confidence
+ */
+@Data
+public class ElementPrediction {
+    private final List<Locator> locators;
+    private final double confidence;
+    
+    public ElementPrediction(List<Locator> locators, double confidence) {
+        this.locators = locators;
+        this.confidence = confidence;
+    }
+}
+
+// Locator.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+import org.openqa.selenium.By;
+
+/**
+ * Represents a locator strategy for finding elements
+ */
+@Data
+public class Locator {
+    private final LocatorType type;
+    private final String value;
+    private final double confidence;
+    
+    public Locator(LocatorType type, String value, double confidence) {
+        this.type = type;
+        this.value = value;
+        this.confidence = confidence;
+    }
+    
+    /**
+     * Convert to Selenium By locator
+     */
+    public By toBy() {
+        return switch(type) {
+            case ID -> By.id(value);
+            case NAME -> By.name(value);
+            case CLASS_NAME -> By.className(value);
+            case TAG_NAME -> By.tagName(value);
+            case LINK_TEXT -> By.linkText(value);
+            case PARTIAL_LINK_TEXT -> By.partialLinkText(value);
+            case CSS -> By.cssSelector(value);
+            case XPATH -> By.xpath(value);
+        };
+    }
+}
+
+// LocatorType.java
+package com.cssmart.ai.engine.model;
+
+/**
+ * Supported locator types
+ */
+public enum LocatorType {
+    ID,
+    NAME,
+    CLASS_NAME,
+    TAG_NAME,
+    LINK_TEXT,
+    PARTIAL_LINK_TEXT,
+    CSS,
+    XPATH
+}
+
+// Action.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+
+/**
+ * Represents an action that can be performed on a web element
+ */
+@Data
+public class Action {
+    private final ActionType type;
+    private String value;
+    private String validation;
+    
+    public Action(ActionType type) {
+        this.type = type;
+    }
+}
+
+// ActionType.java
+package com.cssmart.ai.engine.model;
+
+/**
+ * Supported action types
+ */
+public enum ActionType {
+    CLICK,
+    TYPE,
+    SELECT,
+    SELECT_BY_TEXT,
+    SELECT_BY_VALUE,
+    SELECT_BY_INDEX,
+    VERIFY_PRESENCE,
+    VERIFY_VISIBILITY,
+    VERIFY_TEXT,
+    VERIFY_STATE,
+    WAIT,
+    HOVER,
+    GET_ATTRIBUTE,
+    UPLOAD,
+    TOGGLE,
+    NAVIGATE
+}
+
+// ElementProperties.java
+package com.cssmart.ai.engine.model;
+
+import lombok.Data;
+
+/**
+ * Properties of a web element determined by analysis
+ */
+@Data
+public class ElementProperties {
+    private boolean clickable;
+    private boolean input;
+    private boolean selectable;
+    private boolean visible;
+    private String state;
+    
+    public boolean shouldBeVisible() {
+        return visible;
+    }
+    
+    public boolean hasState() {
+        return state != null && !state.isEmpty();
+    }
+}
+package com.cssmart.ai.patterns;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.patterns.model.Pattern;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Analyzes actions to detect known patterns
+ */
+@Slf4j
+public class PatternRecognizer {
+    private final BehaviorAnalyzer behaviorAnalyzer;
+    private final SequenceDetector sequenceDetector;
+    
+    public PatternRecognizer() {
+        this.behaviorAnalyzer = new BehaviorAnalyzer();
+        this.sequenceDetector = new SequenceDetector();
+    }
+    
+    /**
+     * Find patterns in a list of actions
+     * 
+     * @param actions List of actions to analyze
+     * @return List of detected patterns
+     */
+    public List<Pattern> findPatterns(List<Action> actions) {
+        log.debug("Finding patterns in {} actions", actions.size());
+        List<Pattern> patterns = new ArrayList<>();
+        
+        // Analyze behavioral patterns (login, search, etc.)
+        List<Pattern> behaviorPatterns = behaviorAnalyzer.analyzeBehavior(actions);
+        patterns.addAll(behaviorPatterns);
+        
+        // Detect repeating sequences
+        List<Pattern> sequencePatterns = sequenceDetector.detectSequences(actions);
+        patterns.addAll(sequencePatterns);
+        
+        log.debug("Found {} patterns", patterns.size());
+        return patterns;
+    }
+    
+    /**
+     * Find patterns in natural language descriptions
+     * 
+     * @param descriptions List of text descriptions
+     * @return List of detected patterns
+     */
+    public List<Pattern> findPatternsFromText(List<String> descriptions) {
+        log.debug("Finding patterns in {} text descriptions", descriptions.size());
+        List<Pattern> patterns = new ArrayList<>();
+        
+        // Analyze text descriptions for patterns
+        // Simplified implementation for now
+        for (String description : descriptions) {
+            String lowerDesc = description.toLowerCase();
+            
+            // Check for login pattern
+            if (lowerDesc.contains("login") || lowerDesc.contains("sign in") || 
+                    lowerDesc.contains("username") && lowerDesc.contains("password")) {
+                patterns.add(new com.cssmart.ai.patterns.model.LoginPattern());
+            }
+            
+            // Check for search pattern
+            if (lowerDesc.contains("search") || lowerDesc.contains("find") || 
+                    lowerDesc.contains("query")) {
+                patterns.add(new com.cssmart.ai.patterns.model.SearchPattern());
+            }
+            
+            // Check for form filling pattern
+            if (lowerDesc.contains("form") || lowerDesc.contains("fill") || 
+                    lowerDesc.contains("input") || lowerDesc.contains("submit")) {
+                patterns.add(new com.cssmart.ai.patterns.model.FormPattern());
+            }
+            
+            // Check for navigation pattern
+            if (lowerDesc.contains("navigate") || lowerDesc.contains("go to") || 
+                    lowerDesc.contains("open") || lowerDesc.contains("visit")) {
+                patterns.add(new com.cssmart.ai.patterns.model.NavigationPattern());
+            }
+        }
+        
+        log.debug("Found {} patterns from text descriptions", patterns.size());
+        return patterns;
+    }
+}
+
+// Pattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import lombok.Data;
+
+import java.util.List;
+
+/**
+ * Base class for patterns detected in tests
+ */
+@Data
+public abstract class Pattern {
+    protected final String name;
+    protected final String description;
+    protected final double confidence;
+    
+    public Pattern(String name, String description, double confidence) {
+        this.name = name;
+        this.description = description;
+        this.confidence = confidence;
+    }
+    
+    /**
+     * Check if a list of actions matches this pattern
+     * 
+     * @param actions List of actions to check
+     * @return true if pattern matches
+     */
+    public abstract boolean matches(List<Action> actions);
+}
+
+// FormPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * Pattern that represents form filling behavior
+ */
+public class FormPattern extends Pattern {
+    
+    public FormPattern() {
+        super("Form", "Form filling pattern", 0.9);
+    }
+    
+    public FormPattern(List<Action> actions) {
+        super("Form", "Form filling pattern", calculateConfidence(actions));
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        // Count form-related actions
+        long formActionCount = actions.stream()
+            .filter(action -> action.getType() == ActionType.TYPE ||
+                            action.getType() == ActionType.SELECT)
+            .count();
+        
+        // Get unique elements affected by actions
+        long uniqueElements = actions.stream()
+            .map(Action::getValue)
+            .filter(value -> value != null && !value.isEmpty())
+            .distinct()
+            .count();
+        
+        // Must have multiple form actions and at least one submit/click
+        boolean hasSubmit = actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.CLICK);
+        
+        return formActionCount >= 2 && uniqueElements >= 2 && hasSubmit;
+    }
+    
+    private static double calculateConfidence(List<Action> actions) {
+        long formActionCount = actions.stream()
+            .filter(action -> action.getType() == ActionType.TYPE ||
+                            action.getType() == ActionType.SELECT)
+            .count();
+            
+        return Math.min(1.0, formActionCount / (double) actions.size());
+    }
+}
+
+// LoginPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+import java.util.List;
+
+/**
+ * Pattern that represents login behavior
+ */
+public class LoginPattern extends Pattern {
+    
+    public LoginPattern() {
+        super("Login", "Login pattern", 0.9);
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        // A login typically has:
+        // 1. Two or more type actions (username, password)
+        // 2. A click action (login button)
+        
+        long typeActions = actions.stream()
+            .filter(action -> action.getType() == ActionType.TYPE)
+            .count();
+        
+        boolean hasClick = actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.CLICK);
+        
+        return typeActions >= 2 && hasClick;
+    }
+}
+
+// NavigationPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+import java.util.List;
+
+/**
+ * Pattern that represents navigation behavior
+ */
+public class NavigationPattern extends Pattern {
+    
+    public NavigationPattern() {
+        super("Navigation", "Navigation pattern", 0.85);
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        // Navigation typically has:
+        // 1. Navigate actions
+        // 2. Or click actions on navigation elements (links, menus)
+        
+        boolean hasNavigate = actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.NAVIGATE);
+        
+        long clickCount = actions.stream()
+            .filter(action -> action.getType() == ActionType.CLICK)
+            .count();
+        
+        return hasNavigate || clickCount >= 3;
+    }
+}
+
+// SearchPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+import java.util.List;
+
+/**
+ * Pattern that represents search behavior
+ */
+public class SearchPattern extends Pattern {
+    
+    public SearchPattern() {
+        super("Search", "Search pattern", 0.9);
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        // A search typically has:
+        // 1. A type action (search term)
+        // 2. A click action (search button) or enter key
+        
+        boolean hasType = actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.TYPE);
+        
+        boolean hasClick = actions.stream()
+            .anyMatch(action -> action.getType() == ActionType.CLICK);
+        
+        boolean hasVerify = actions.stream()
+            .anyMatch(action -> action.getType().toString().startsWith("VERIFY"));
+        
+        return hasType && (hasClick || hasVerify);
+    }
+}
+
+// ValidationPattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+import java.util.List;
+
+/**
+ * Pattern that represents validation behavior
+ */
+public class ValidationPattern extends Pattern {
+    
+    public ValidationPattern() {
+        super("Validation", "Validation pattern", 0.8);
+    }
+    
+    @Override
+    public boolean matches(List<Action> actions) {
+        // Validation typically has multiple verify actions
+        
+        long verifyCount = actions.stream()
+            .filter(action -> action.getType().toString().startsWith("VERIFY"))
+            .count();
+        
+        return verifyCount >= 3;
+    }
+}
+
+// SequencePattern.java
+package com.cssmart.ai.patterns.model;
+
+import com.cssmart.ai.engine.model.Action;
+import lombok.Getter;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Pattern that represents a repeating sequence of actions
+ */
+public class SequencePattern extends Pattern {
+    @Getter
+    private final List<Action> actions;
+    
+    public SequencePattern(List<Action> actions, String name, String description, double confidence) {
+        super(name, description, confidence);
+        this.actions = new ArrayList<>(actions);  // Create a copy to avoid modification
+    }
+    
+    public SequencePattern(List<Action> actions) {
+        super("Sequence", "Repeating action sequence", calculateConfidence(actions));
+        this.actions = new ArrayList<>(actions);
+    }
+    
+    private static double calculateConfidence(List<Action> actions) {
+        // Simple confidence calculation based on sequence length
+        return Math.min(1.0, actions.size() / 10.0);
+    }
+    
+    @Override
+    public boolean matches(List<Action> inputActions) {
+        // Check if input actions contain this sequence
+        for (int i = 0; i <= inputActions.size() - actions.size(); i++) {
+            boolean matches = true;
+            
+            for (int j = 0; j < actions.size(); j++) {
+                if (actions.get(j).getType() != inputActions.get(i + j).getType()) {
+                    matches = false;
+                    break;
+                }
+            }
+            
+            if (matches) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    public String generateDescription() {
+        StringBuilder description = new StringBuilder("Sequence of actions: ");
+        
+        for (int i = 0; i < actions.size(); i++) {
+            if (i > 0) {
+                description.append(" → ");
+            }
+            description.append(actions.get(i).getType());
+        }
+        
+        return description.toString();
+    }
+}
+
+package com.cssmart.core.driver;
+
+import org.openqa.selenium.WebDriver;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.Duration;
+
+import com.cssmart.core.config.ConfigurationManager;
+
+/**
+ * Manages WebDriver instances for test execution
+ * Uses ThreadLocal to support parallel test execution
+ */
+@Slf4j
+public class DriverManager {
+    private static DriverManager instance;
+    private final ThreadLocal<WebDriver> driverThreadLocal;
+    private final ConfigurationManager configManager;
+    private final BrowserManager browserManager;
+    
+    private DriverManager() {
+        this.driverThreadLocal = new ThreadLocal<>();
+        this.configManager = ConfigurationManager.getInstance();
+        this.browserManager = BrowserManager.getInstance();
+        log.info("DriverManager initialized");
+    }
+    
+    /**
+     * Get the singleton instance of DriverManager
+     * 
+     * @return DriverManager instance
+     */
+    public static synchronized DriverManager getInstance() {
+        if (instance == null) {
+            instance = new DriverManager();
+        }
+        return instance;
+    }
+    
+    /**
+     * Get the WebDriver instance for the current thread
+     * Creates a new instance if one doesn't exist
+     * 
+     * @return WebDriver instance
+     */
+    public WebDriver getDriver() {
+        WebDriver driver = driverThreadLocal.get();
+        if (driver == null) {
+            driver = initializeDriver();
+            driverThreadLocal.set(driver);
+        }
+        return driver;
+    }
+    
+    /**
+     * Get a WebDriver instance for a specific browser type
+     * 
+     * @param browserType Browser type to use
+     * @return WebDriver instance
+     */
+    public WebDriver getDriver(String browserType) {
+        WebDriver driver = driverThreadLocal.get();
+        if (driver == null || !browserManager.isBrowserType(driver, browserType)) {
+            if (driver != null) {
+                quitDriver();
+            }
+            driver = browserManager.createDriver(browserType);
+            configureDriver(driver);
+            driverThreadLocal.set(driver);
+        }
+        return driver;
+    }
+    
+    /**
+     * Initialize a new WebDriver instance
+     * 
+     * @return WebDriver instance
+     */
+    private WebDriver initializeDriver() {
+        String browserType = configManager.getConfig("browser.type", String.class);
+        if (browserType == null) {
+            browserType = "chrome"; // Default browser
+            log.warn("No browser type configured, using default: {}", browserType);
+        }
+        
+        WebDriver driver = browserManager.createDriver(browserType);
+        configureDriver(driver);
+        
+        return driver;
+    }
+    
+    /**
+     * Configure WebDriver instance with timeouts and window size
+     * 
+     * @param driver WebDriver instance to configure
+     */
+    private void configureDriver(WebDriver driver) {
+        // Configure timeouts
+        int timeout = configManager.getConfig("browser.timeout", Integer.class, 30);
+        driver.manage().timeouts().implicitlyWait(Duration.ofSeconds(timeout));
+        driver.manage().timeouts().pageLoadTimeout(Duration.ofSeconds(timeout));
+        
+        // Maximize window
+        driver.manage().window().maximize();
+        
+        log.debug("WebDriver configured with timeout: {} seconds", timeout);
+    }
+    
+    /**
+     * Quit the WebDriver instance for the current thread
+     */
+    public void quitDriver() {
+        WebDriver driver = driverThreadLocal.get();
+        if (driver != null) {
+            try {
+                driver.quit();
+                log.debug("WebDriver quit successfully");
+            } catch (Exception e) {
+                log.error("Error quitting WebDriver", e);
+            } finally {
+                driverThreadLocal.remove();
+            }
+        }
+    }
+    
+    /**
+     * Get the ElementFinder for the current WebDriver
+     * 
+     * @return ElementFinder instance
+     */
+    public ElementFinder getElementFinder() {
+        return new ElementFinder(getDriver());
+    }
+}
+
+package com.cssmart.core.driver;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.firefox.FirefoxOptions;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.edge.EdgeOptions;
+import org.openqa.selenium.safari.SafariDriver;
+import org.openqa.selenium.safari.SafariOptions;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.core.driver.exceptions.BrowserCreationException;
+import com.cssmart.core.driver.exceptions.UnsupportedBrowserException;
+
+/**
+ * Manages browser configuration and creation
+ */
+@Slf4j
+public class BrowserManager {
+    private static BrowserManager instance;
+    private final Map<String, WebDriver> browserInstances;
+    private final ConfigurationManager configManager;
+    
+    private BrowserManager() {
+        this.browserInstances = new ConcurrentHashMap<>();
+        this.configManager = ConfigurationManager.getInstance();
+        log.info("BrowserManager initialized");
+    }
+    
+    /**
+     * Get the singleton instance of BrowserManager
+     * 
+     * @return BrowserManager instance
+     */
+    public static synchronized BrowserManager getInstance() {
+        if (instance == null) {
+            instance = new BrowserManager();
+        }
+        return instance;
+    }
+    
+    /**
+     * Create a WebDriver instance for the specified browser type
+     * 
+     * @param browserType Type of browser to create (chrome, firefox, edge, safari)
+     * @return WebDriver instance
+     */
+    public WebDriver createDriver(String browserType) {
+        try {
+            log.info("Creating browser: {}", browserType);
+            
+            WebDriver driver = switch (browserType.toLowerCase()) {
+                case "chrome" -> createChromeDriver();
+                case "firefox" -> createFirefoxDriver();
+                case "edge" -> createEdgeDriver();
+                case "safari" -> createSafariDriver();
+                default -> throw new UnsupportedBrowserException(
+                    "Unsupported browser type: " + browserType);
+            };
+            
+            return driver;
+        } catch (Exception e) {
+            log.error("Failed to create browser: {}", browserType, e);
+            throw new BrowserCreationException(
+                "Failed to create browser: " + browserType, e);
+        }
+    }
+    
+    /**
+     * Check if a WebDriver instance is of a specific browser type
+     * 
+     * @param driver WebDriver instance to check
+     * @param browserType Browser type to compare against
+     * @return true if the driver is of the specified browser type
+     */
+    public boolean isBrowserType(WebDriver driver, String browserType) {
+        if (driver == null) {
+            return false;
+        }
+        
+        String driverClass = driver.getClass().getSimpleName().toLowerCase();
+        String browserTypeLower = browserType.toLowerCase();
+        
+        return driverClass.contains(browserTypeLower);
+    }
+    
+    /**
+     * Create a ChromeDriver instance
+     * 
+     * @return ChromeDriver instance
+     */
+    private ChromeDriver createChromeDriver() {
+        WebDriverManager.chromedriver().setup();
+        ChromeOptions options = new ChromeOptions();
+        
+        // Add default arguments
+        options.addArguments(getDefaultArguments());
+        
+        // Add Chrome-specific arguments
+        options.addArguments(getChromeArguments());
+        
+        // Add capabilities if configured
+        Map<String, Object> capabilities = configManager.getConfig(
+                "browser.capabilities", Map.class, Map.of());
+        capabilities.forEach(options::setCapability);
+        
+        // Set headless mode if configured
+        Boolean headless = configManager.getConfig("browser.headless", Boolean.class, false);
+        if (headless) {
+            options.addArguments("--headless=new");
+        }
+        
+        log.debug("Creating ChromeDriver with options: {}", options);
+        return new ChromeDriver(options);
+    }
+    
+    /**
+     * Create a FirefoxDriver instance
+     * 
+     * @return FirefoxDriver instance
+     */
+    private FirefoxDriver createFirefoxDriver() {
+        WebDriverManager.firefoxdriver().setup();
+        FirefoxOptions options = new FirefoxOptions();
+        
+        // Add default arguments
+        List<String> defaultArgs = getDefaultArguments();
+        defaultArgs.forEach(options::addArguments);
+        
+        // Add Firefox-specific arguments
+        getFirefoxArguments().forEach(options::addArguments);
+        
+        // Set headless mode if configured
+        Boolean headless = configManager.getConfig("browser.headless", Boolean.class, false);
+        if (headless) {
+            options.addArguments("-headless");
+        }
+        
+        log.debug("Creating FirefoxDriver with options: {}", options);
+        return new FirefoxDriver(options);
+    }
+    
+    /**
+     * Create an EdgeDriver instance
+     * 
+     * @return EdgeDriver instance
+     */
+    private EdgeDriver createEdgeDriver() {
+        WebDriverManager.edgedriver().setup();
+        EdgeOptions options = new EdgeOptions();
+        
+        // Add default arguments
+        getDefaultArguments().forEach(options::addArgument);
+        
+        // Set headless mode if configured
+        Boolean headless = configManager.getConfig("browser.headless", Boolean.class, false);
+        if (headless) {
+            options.addArguments("--headless=new");
+        }
+        
+        log.debug("Creating EdgeDriver with options: {}", options);
+        return new EdgeDriver(options);
+    }
+    
+    /**
+     * Create a SafariDriver instance
+     * 
+     * @return SafariDriver instance
+     */
+    private SafariDriver createSafariDriver() {
+        SafariOptions options = new SafariOptions();
+        
+        // Add capabilities if configured
+        Map<String, Object> capabilities = configManager.getConfig(
+                "browser.capabilities", Map.class, Map.of());
+        capabilities.forEach(options::setCapability);
+        
+        log.debug("Creating SafariDriver with options: {}", options);
+        return new SafariDriver(options);
+    }
+    
+    /**
+     * Get default arguments for all browsers
+     * 
+     * @return List of default arguments
+     */
+    private List<String> getDefaultArguments() {
+        return Arrays.asList(
+            "--start-maximized",
+            "--disable-notifications",
+            "--disable-infobars"
+        );
+    }
+    
+    /**
+     * Get Chrome-specific arguments
+     * 
+     * @return List of Chrome arguments
+     */
+    private List<String> getChromeArguments() {
+        List<String> args = new ArrayList<>();
+        args.add("--remote-allow-origins=*");
+        
+        // Add custom arguments from configuration
+        List<String> customArgs = configManager.getConfig(
+                "browser.chrome.arguments", List.class, List.of());
+        args.addAll(customArgs);
+        
+        return args;
+    }
+    
+    /**
+     * Get Firefox-specific arguments
+     * 
+     * @return List of Firefox arguments
+     */
+    private List<String> getFirefoxArguments() {
+        List<String> args = new ArrayList<>();
+        
+        // Add custom arguments from configuration
+        List<String> customArgs = configManager.getConfig(
+                "browser.firefox.arguments", List.class, List.of());
+        args.addAll(customArgs);
+        
+        return args;
+    }
+}
+
+package com.cssmart.core.driver;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.By;
+import org.openqa.selenium.TimeoutException;
+import org.openqa.selenium.StaleElementReferenceException;
+import org.openqa.selenium.NoSuchElementException;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.ArrayList;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.core.driver.exceptions.ElementNotFoundException;
+
+/**
+ * Smart element finder that uses AI to locate elements based on descriptions
+ */
+@Slf4j
+public class ElementFinder {
+    private final WebDriver driver;
+    private final WebDriverWait wait;
+    private final AIEngine aiEngine;
+    private final int defaultTimeoutSeconds;
+    
+    /**
+     * Create a new ElementFinder
+     * 
+     * @param driver WebDriver instance to use
+     */
+    public ElementFinder(WebDriver driver) {
+        this.driver = driver;
+        this.aiEngine = AIEngine.getInstance();
+        this.defaultTimeoutSeconds = ConfigurationManager.getInstance()
+                .getConfig("element.timeout", Integer.class, 15);
+        this.wait = new WebDriverWait(driver, Duration.ofSeconds(defaultTimeoutSeconds));
+        
+        log.debug("ElementFinder initialized with timeout: {} seconds", defaultTimeoutSeconds);
+    }
+    
+    /**
+     * Find an element based on a natural language description
+     * Uses AI to generate locators
+     * 
+     * @param description Natural language description of the element
+     * @return WebElement if found
+     * @throws ElementNotFoundException if element cannot be found
+     */
+    public WebElement findElement(String description) {
+        log.debug("Finding element with description: {}", description);
+        
+        // Get AI-generated locators
+        List<By> locators = aiEngine.generateLocators(description);
+        
+        // Try each locator
+        for (By locator : locators) {
+            try {
+                log.debug("Trying locator: {}", locator);
+                return wait.until(ExpectedConditions.presenceOfElementLocated(locator));
+            } catch (TimeoutException e) {
+                log.debug("Locator timed out: {}", locator);
+            } catch (Exception e) {
+                log.debug("Failed to find element with locator: {}", locator);
+            }
+        }
+        
+        // If all locators fail, try a more flexible approach with partial text
+        try {
+            String xpathWithPartialText = createPartialTextXPath(description);
+            log.debug("Trying partial text locator: {}", xpathWithPartialText);
+            return wait.until(ExpectedConditions.presenceOfElementLocated(
+                    By.xpath(xpathWithPartialText)));
+        } catch (Exception e) {
+            log.debug("Failed to find element with partial text");
+        }
+        
+        throw new ElementNotFoundException("Could not find element: " + description);
+    }
+    
+    /**
+     * Find an element based on a specific locator
+     * 
+     * @param locator Selenium By locator
+     * @return WebElement if found
+     * @throws ElementNotFoundException if element cannot be found
+     */
+    public WebElement findElement(By locator) {
+        try {
+            log.debug("Finding element with locator: {}", locator);
+            return wait.until(ExpectedConditions.presenceOfElementLocated(locator));
+        } catch (Exception e) {
+            log.error("Failed to find element with locator: {}", locator, e);
+            throw new ElementNotFoundException("Could not find element with locator: " + locator);
+        }
+    }
+    
+    /**
+     * Find multiple elements based on a natural language description
+     * 
+     * @param description Natural language description of the elements
+     * @return List of WebElements
+     * @throws ElementNotFoundException if no elements are found
+     */
+    public List<WebElement> findElements(String description) {
+        log.debug("Finding elements with description: {}", description);
+        
+        // Get AI-generated locators
+        List<By> locators = aiEngine.generateLocators(description);
+        
+        // Try each locator
+        for (By locator : locators) {
+            try {
+                log.debug("Trying locator: {}", locator);
+                List<WebElement> elements = wait.until(
+                        ExpectedConditions.presenceOfAllElementsLocatedBy(locator));
+                
+                if (!elements.isEmpty()) {
+                    log.debug("Found {} elements with locator: {}", elements.size(), locator);
+                    return elements;
+                }
+            } catch (Exception e) {
+                log.debug("Failed to find elements with locator: {}", locator);
+            }
+        }
+        
+        // If all locators fail, try a more flexible approach with partial text
+        try {
+            String xpathWithPartialText = createPartialTextXPath(description);
+            log.debug("Trying partial text locator: {}", xpathWithPartialText);
+            List<WebElement> elements = wait.until(
+                    ExpectedConditions.presenceOfAllElementsLocatedBy(
+                            By.xpath(xpathWithPartialText)));
+            
+            if (!elements.isEmpty()) {
+                return elements;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to find elements with partial text");
+        }
+        
+        throw new ElementNotFoundException("Could not find elements: " + description);
+    }
+    
+    /**
+     * Wait for an element to be visible
+     * 
+     * @param description Natural language description of the element
+     * @return WebElement that is visible
+     * @throws ElementNotFoundException if element cannot be found or is not visible
+     */
+    public WebElement waitForVisible(String description) {
+        log.debug("Waiting for element to be visible: {}", description);
+        
+        // Get AI-generated locators
+        List<By> locators = aiEngine.generateLocators(description);
+        
+        // Try each locator
+        for (By locator : locators) {
+            try {
+                log.debug("Trying locator for visibility: {}", locator);
+                return wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
+            } catch (Exception e) {
+                log.debug("Failed to find visible element with locator: {}", locator);
+            }
+        }
+        
+        throw new ElementNotFoundException("Could not find visible element: " + description);
+    }
+    
+    /**
+     * Wait for an element to be clickable
+     * 
+     * @param description Natural language description of the element
+     * @return WebElement that is clickable
+     * @throws ElementNotFoundException if element cannot be found or is not clickable
+     */
+    public WebElement waitForClickable(String description) {
+        log.debug("Waiting for element to be clickable: {}", description);
+        
+        // Get AI-generated locators
+        List<By> locators = aiEngine.generateLocators(description);
+        
+        // Try each locator
+        for (By locator : locators) {
+            try {
+                log.debug("Trying locator for clickability: {}", locator);
+                return wait.until(ExpectedConditions.elementToBeClickable(locator));
+            } catch (Exception e) {
+                log.debug("Failed to find clickable element with locator: {}", locator);
+            }
+        }
+        
+        throw new ElementNotFoundException("Could not find clickable element: " + description);
+    }
+    
+    /**
+     * Create an XPath that matches elements containing part of the given text
+     * 
+     * @param text Text to search for
+     * @return XPath expression
+     */
+    private String createPartialTextXPath(String text) {
+        // Extract potential text content from description
+        String[] words = text.split("\\s+");
+        StringBuilder xpathBuilder = new StringBuilder("//");
+        
+        // Add common element types that might contain text
+        xpathBuilder.append("*[");
+        
+        // Add conditions for each word
+        for (int i = 0; i < words.length; i++) {
+            String word = words[i].replaceAll("[^a-zA-Z0-9]", "");
+            if (word.length() < 3) continue; // Skip short words
+            
+            if (i > 0) {
+                xpathBuilder.append(" and ");
+            }
+            
+            // Match text in the element or its attributes
+            xpathBuilder.append("(contains(text(),'").append(word).append("') or ")
+                       .append("contains(@*,'").append(word).append("'))");
+        }
+        
+        xpathBuilder.append("]");
+        return xpathBuilder.toString();
+    }
+    
+    /**
+     * Check if an element exists
+     * 
+     * @param description Natural language description of the element
+     * @return true if element exists
+     */
+    public boolean elementExists(String description) {
+        try {
+            findElement(description);
+            return true;
+        } catch (ElementNotFoundException e) {
+            return false;
+        }
+    }
+    
+    /**
+     * Check if an element is visible
+     * 
+     * @param description Natural language description of the element
+     * @return true if element is visible
+     */
+    public boolean isElementVisible(String description) {
+        try {
+            WebElement element = findElement(description);
+            return element.isDisplayed();
+        } catch (ElementNotFoundException | StaleElementReferenceException e) {
+            return false;
+        }
+    }
+}
+
+package com.cssmart.core.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.core.type.TypeReference;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.io.InputStream;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.cssmart.core.config.exceptions.ConfigurationException;
+
+/**
+ * Manages configuration settings for the framework
+ * Implements Singleton pattern to ensure only one instance exists
+ */
+@Slf4j
+public class ConfigurationManager {
+    private static ConfigurationManager instance;
+    private final Map<String, Object> configCache;
+    private final ObjectMapper yamlMapper;
+    private final EnvironmentManager environmentManager;
+    
+    private ConfigurationManager() {
+        this.configCache = new ConcurrentHashMap<>();
+        this.yamlMapper = new ObjectMapper(new YAMLFactory());
+        this.environmentManager = new EnvironmentManager();
+        
+        // Load default configuration
+        loadDefaultConfig();
+        log.info("ConfigurationManager initialized with default settings");
+    }
+    
+    /**
+     * Get the singleton instance of ConfigurationManager
+     * 
+     * @return ConfigurationManager instance
+     */
+    public static synchronized ConfigurationManager getInstance() {
+        if (instance == null) {
+            instance = new ConfigurationManager();
+        }
+        return instance;
+    }
+    
+    /**
+     * Load configuration from a file
+     * 
+     * @param configPath Path to the configuration file
+     * @throws ConfigurationException if the configuration cannot be loaded
+     */
+    public void loadConfig(String configPath) {
+        try {
+            log.info("Loading configuration from: {}", configPath);
+            
+            // Load configuration file
+            Map<String, Object> config = yamlMapper.readValue(
+                new File(configPath), 
+                new TypeReference<Map<String, Object>>() {}
+            );
+            
+            // Process environment variables
+            config = environmentManager.processEnvironmentVariables(config);
+            
+            // Update cache
+            configCache.putAll(config);
+            
+            log.info("Configuration loaded successfully");
+        } catch (Exception e) {
+            log.error("Failed to load configuration from: {}", configPath, e);
+            throw new ConfigurationException("Configuration loading failed", e);
+        }
+    }
+    
+    /**
+     * Get a configuration value
+     * 
+     * @param <T> Type of the configuration value
+     * @param key Configuration key (use dot notation for nested properties)
+     * @param type Class representing the type of the configuration value
+     * @return Configuration value, or null if not found
+     */
+    public <T> T getConfig(String key, Class<T> type) {
+        return getConfig(key, type, null);
+    }
+    
+    /**
+     * Get a configuration value with a default value
+     * 
+     * @param <T> Type of the configuration value
+     * @param key Configuration key (use dot notation for nested properties)
+     * @param type Class representing the type of the configuration value
+     * @param defaultValue Default value to return if the configuration is not found
+     * @return Configuration value, or defaultValue if not found
+     */
+    public <T> T getConfig(String key, Class<T> type, T defaultValue) {
+        try {
+            String[] parts = key.split("\\.");
+            Map<String, Object> currentMap = configCache;
+            
+            // Navigate through nested maps
+            for (int i = 0; i < parts.length - 1; i++) {
+                Object value = currentMap.get(parts[i]);
+                if (value == null) {
+                    return defaultValue;
+                }
+                
+                if (!(value instanceof Map)) {
+                    return defaultValue;
+                }
+                
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nestedMap = (Map<String, Object>) value;
+                currentMap = nestedMap;
+            }
+            
+            // Get the final value
+            Object value = currentMap.get(parts[parts.length - 1]);
+            if (value == null) {
+                return defaultValue;
+            }
+            
+            try {
+                return yamlMapper.convertValue(value, type);
+            } catch (Exception e) {
+                log.warn("Failed to convert configuration value: {} to type: {}", key, type.getName(), e);
+                return defaultValue;
+            }
+        } catch (Exception e) {
+            log.warn("Error retrieving configuration: {}", key, e);
+            return defaultValue;
+        }
+    }
+    
+    /**
+     * Check if a configuration key exists
+     * 
+     * @param key Configuration key
+     * @return true if the configuration exists
+     */
+    public boolean hasConfig(String key) {
+        String[] parts = key.split("\\.");
+        Map<String, Object> currentMap = configCache;
+        
+        // Navigate through nested maps
+        for (int i = 0; i < parts.length - 1; i++) {
+            Object value = currentMap.get(parts[i]);
+            if (value == null) {
+                return false;
+            }
+            
+            if (!(value instanceof Map)) {
+                return false;
+            }
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nestedMap = (Map<String, Object>) value;
+            currentMap = nestedMap;
+        }
+        
+        return currentMap.containsKey(parts[parts.length - 1]);
+    }
+    
+    /**
+     * Set a configuration value
+     * 
+     * @param key Configuration key
+     * @param value Configuration value
+     */
+    public void setConfig(String key, Object value) {
+        String[] parts = key.split("\\.");
+        Map<String, Object> currentMap = configCache;
+        
+        // Navigate through nested maps, creating them if necessary
+        for (int i = 0; i < parts.length - 1; i++) {
+            Object mapValue = currentMap.get(parts[i]);
+            
+            if (mapValue == null || !(mapValue instanceof Map)) {
+                Map<String, Object> newMap = new ConcurrentHashMap<>();
+                currentMap.put(parts[i], newMap);
+                currentMap = newMap;
+            } else {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> nestedMap = (Map<String, Object>) mapValue;
+                currentMap = nestedMap;
+            }
+        }
+        
+        // Set the final value
+        currentMap.put(parts[parts.length - 1], value);
+        log.debug("Configuration set: {} = {}", key, value);
+    }
+    
+    /**
+     * Load default configuration from resources
+     */
+    private void loadDefaultConfig() {
+        try {
+            // Load default configuration from resources
+            InputStream defaultConfigStream = getClass().getResourceAsStream("/config/default.yaml");
+            if (defaultConfigStream == null) {
+                log.warn("Default configuration file not found");
+                return;
+            }
+            
+            Map<String, Object> defaults = yamlMapper.readValue(
+                defaultConfigStream,
+                new TypeReference<Map<String, Object>>() {}
+            );
+            
+            // Process environment variables
+            defaults = environmentManager.processEnvironmentVariables(defaults);
+            
+            configCache.putAll(defaults);
+            log.info("Default configuration loaded successfully");
+            
+            // Load environment-specific configuration if defined
+            String environment = System.getProperty("environment");
+            if (environment != null && !environment.isEmpty()) {
+                loadEnvironmentConfig(environment);
+            }
+        } catch (Exception e) {
+            log.error("Failed to load default configuration", e);
+            throw new ConfigurationException("Default configuration loading failed", e);
+        }
+    }
+    
+    /**
+     * Load environment-specific configuration
+     * 
+     * @param environment Environment name
+     */
+    public void loadEnvironmentConfig(String environment) {
+        try {
+            String envConfigPath = "/config/environments/" + environment + ".yaml";
+            InputStream envConfigStream = getClass().getResourceAsStream(envConfigPath);
+            
+            if (envConfigStream == null) {
+                log.warn("Environment configuration not found for: {}", environment);
+                return;
+            }
+            
+            Map<String, Object> envConfig = yamlMapper.readValue(
+                envConfigStream,
+                new TypeReference<Map<String, Object>>() {}
+            );
+            
+            // Process environment variables
+            envConfig = environmentManager.processEnvironmentVariables(envConfig);
+            
+            // Update cache with environment-specific configuration
+            configCache.putAll(envConfig);
+            log.info("Environment configuration loaded for: {}", environment);
+        } catch (Exception e) {
+            log.error("Failed to load environment configuration for: {}", environment, e);
+            throw new ConfigurationException("Environment configuration loading failed", e);
+        }
+    }
+
+    package com.cssmart.core.config;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Manages environment variables and their substitution in configuration
+ */
+@Slf4j
+public class EnvironmentManager {
+    private final Map<String, String> environmentCache;
+    private final Pattern envVarPattern = Pattern.compile("\\$\\{([^}]+)\\}");
+    
+    /**
+     * Create a new EnvironmentManager
+     */
+    public EnvironmentManager() {
+        this.environmentCache = new HashMap<>();
+        loadEnvironmentVariables();
+    }
+    
+    /**
+     * Process environment variables in configuration settings
+     * 
+     * @param config Configuration map
+     * @return Processed configuration map
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> processEnvironmentVariables(Map<String, Object> config) {
+        Map<String, Object> processed = new HashMap<>();
+        
+        config.forEach((key, value) -> {
+            if (value instanceof String) {
+                processed.put(key, processValue((String) value));
+            } else if (value instanceof Map) {
+                processed.put(key, processEnvironmentVariables((Map<String, Object>) value));
+            } else if (value instanceof Iterable) {
+                processed.put(key, processIterable((Iterable<?>) value));
+            } else {
+                processed.put(key, value);
+            }
+        });
+        
+        return processed;
+    }
+    
+    /**
+     * Process environment variables in an iterable
+     * 
+     * @param iterable Iterable to process
+     * @return Processed iterable
+     */
+    @SuppressWarnings("unchecked")
+    private Iterable<?> processIterable(Iterable<?> iterable) {
+        java.util.List<Object> result = new java.util.ArrayList<>();
+        
+        for (Object item : iterable) {
+            if (item instanceof String) {
+                result.add(processValue((String) item));
+            } else if (item instanceof Map) {
+                result.add(processEnvironmentVariables((Map<String, Object>) item));
+            } else if (item instanceof Iterable) {
+                result.add(processIterable((Iterable<?>) item));
+            } else {
+                result.add(item);
+            }
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Process environment variables in a string value
+     * 
+     * @param value String value to process
+     * @return Processed string value
+     */
+    private String processValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        
+        Matcher matcher = envVarPattern.matcher(value);
+        StringBuffer sb = new StringBuffer();
+        
+        while (matcher.find()) {
+            String envKey = matcher.group(1);
+            String envValue = environmentCache.getOrDefault(envKey, "");
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(envValue));
+        }
+        
+        matcher.appendTail(sb);
+        return sb.toString();
+    }
+    
+    /**
+     * Load environment variables into cache
+     */
+    private void loadEnvironmentVariables() {
+        // Load system environment variables
+        environmentCache.putAll(System.getenv());
+        
+        // Load system properties
+        System.getProperties().forEach((key, value) -> 
+            environmentCache.put(key.toString(), value.toString()));
+        
+        log.debug("Loaded {} environment variables", environmentCache.size());
+    }
+    
+    /**
+     * Get all environment variables
+     * 
+     * @return Map of environment variables
+     */
+    public Map<String, String> getEnvironmentVariables() {
+        return new HashMap<>(environmentCache);
+    }
+    
+    /**
+     * Get a specific environment variable
+     * 
+     * @param key Environment variable key
+     * @return Environment variable value, or null if not found
+     */
+    public String getEnvironmentVariable(String key) {
+        return environmentCache.get(key);
+    }
+    
+    /**
+     * Set an environment variable in the cache
+     * 
+     * @param key Environment variable key
+     * @param value Environment variable value
+     */
+    public void setEnvironmentVariable(String key, String value) {
+        environmentCache.put(key, value);
+    }
+}
+
+package com.cssmart.core.base;
+
+import org.testng.ITestResult;
+import org.testng.annotations.*;
+import org.openqa.selenium.WebDriver;
+import lombok.extern.slf4j.Slf4j;
+
+import java.lang.reflect.Method;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.core.driver.DriverManager;
+import com.cssmart.core.driver.ElementFinder;
+import com.cssmart.core.annotations.CSSmartTest;
+import com.cssmart.core.base.exceptions.FrameworkInitializationException;
+import com.cssmart.reporting.ReportManager;
+import com.cssmart.reporting.util.ScreenshotManager;
+
+/**
+ * Base class for all test classes
+ * Provides common functionality and lifecycle management
+ */
+@Slf4j
+public class CSSmartTestBase {
+    protected WebDriver driver;
+    protected ElementFinder elementFinder;
+    protected TestContext context;
+    protected ConfigurationManager configManager;
+    protected AIEngine aiEngine;
+    
+    /**
+     * Set up before test suite
+     */
+    @BeforeSuite
+    public void beforeSuite() {
+        log.info("Initializing test suite");
+        configManager = ConfigurationManager.getInstance();
+        initializeFramework();
+    }
+    
+    /**
+     * Set up before test method
+     * 
+     * @param method Test method to run
+     */
+    @BeforeMethod
+    public void beforeMethod(Method method) {
+        log.info("Starting test: {}", method.getName());
+        
+        // Initialize AI engine
+        aiEngine = AIEngine.getInstance();
+        
+        // Initialize driver
+        driver = DriverManager.getInstance().getDriver();
+        elementFinder = new ElementFinder(driver);
+        
+        // Initialize context
+        context = new TestContext();
+        context.setTestMethod(method);
+        
+        // Process test configuration
+        processTestConfig(method);
+        
+        log.debug("Test setup complete");
+    }
+    
+    /**
+     * Clean up after test method
+     * 
+     * @param result Test result
+     */
+    @AfterMethod
+    public void afterMethod(ITestResult result) {
+        try {
+            // Handle test result
+            handleTestResult(result);
+            
+            // Generate report
+            ReportManager.getInstance().generateTestReport(result);
+            
+        } finally {
+            // Cleanup
+            cleanup();
+            log.info("Test completed: {}", result.getName());
+        }
+    }
+    
+    /**
+     * Initialize framework components
+     */
+    protected void initializeFramework() {
+        try {
+            // Load configuration
+            String configPath = System.getProperty("config", "config/test-config.yaml");
+            configManager.loadConfig(configPath);
+            
+            // Initialize components
+            initializeComponents();
+            
+        } catch (Exception e) {
+            log.error("Failed to initialize framework", e);
+            throw new FrameworkInitializationException("Framework initialization failed", e);
+        }
+    }
+    
+    /**
+     * Initialize framework components
+     */
+    protected void initializeComponents() {
+        // Initialize AI Engine
+        AIEngine.getInstance();
+        
+        // Initialize Report Manager
+        ReportManager.getInstance();
+        
+        // Additional components initialization
+    }
+    
+    /**
+     * Process test configuration annotations
+     * 
+     * @param method Test method
+     */
+    protected void processTestConfig(Method method) {
+        CSSmartTest testAnnotation = method.getAnnotation(CSSmartTest.class);
+            
+        if (testAnnotation != null) {
+            // Process test configuration
+            processTestAnnotation(testAnnotation);
+            
+            // Log test information
+            log.info("Test description: {}", testAnnotation.description());
+            if (testAnnotation.tags().length > 0) {
+                log.info("Test tags: {}", String.join(", ", testAnnotation.tags()));
+            }
+        }
+    }
+    
+    /**
+     * Process test annotation
+     * 
+     * @param annotation CSSmartTest annotation
+     */
+    protected void processTestAnnotation(CSSmartTest annotation) {
+        // Configure browser if specified
+        if (annotation.browser() != null && !annotation.browser().isEmpty()) {
+            driver = DriverManager.getInstance().getDriver(annotation.browser());
+            elementFinder = new ElementFinder(driver);
+        }
+        
+        // Configure data provider if specified
+        if (annotation.dataProvider() != null && !annotation.dataProvider().isEmpty()) {
+            // Data provider configuration would go here
+        }
+    }
+    
+    /**
+     * Handle test result
+     * 
+     * @param result Test result
+     */
+    protected void handleTestResult(ITestResult result) {
+        if (result.getStatus() == ITestResult.FAILURE) {
+            log.error("Test failed: {}", result.getName());
+            log.error("Failure reason: {}", result.getThrowable().getMessage());
+            
+            // Capture screenshot
+            String screenshot = captureScreenshot();
+            
+            // Add to report
+            if (screenshot != null) {
+                ReportManager.getInstance().addScreenshot(screenshot);
+            }
+        } else if (result.getStatus() == ITestResult.SUCCESS) {
+            log.info("Test passed: {}", result.getName());
+        } else {
+            log.warn("Test skipped: {}", result.getName());
+        }
+    }
+    
+    /**
+     * Capture screenshot
+     * 
+     * @return Screenshot file path
+     */
+    protected String captureScreenshot() {
+        try {
+            return ScreenshotManager.capture(driver);
+        } catch (Exception e) {
+            log.error("Failed to capture screenshot", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Clean up resources
+     */
+    protected void cleanup() {
+        if (driver != null) {
+            try {
+                driver.quit();
+                log.debug("WebDriver quit successfully");
+            } catch (Exception e) {
+                log.error("Error quitting WebDriver", e);
+            }
+        }
+    }
+    
+    /**
+     * Navigate to a URL
+     * 
+     * @param url URL to navigate to
+     */
+    protected void navigateTo(String url) {
+        log.info("Navigating to: {}", url);
+        driver.get(url);
+    }
+    
+    /**
+     * Find an element
+     * 
+     * @param description Element description
+     * @return WebElement
+     */
+    protected org.openqa.selenium.WebElement findElement(String description) {
+        return elementFinder.findElement(description);
+    }
+    
+    /**
+     * Click an element
+     * 
+     * @param description Element description
+     */
+    protected void click(String description) {
+        log.info("Clicking: {}", description);
+        elementFinder.findElement(description).click();
+    }
+    
+    /**
+     * Type text into an element
+     * 
+     * @param description Element description
+     * @param text Text to type
+     */
+    protected void type(String description, String text) {
+        log.info("Typing '{}' into: {}", text, description);
+        org.openqa.selenium.WebElement element = elementFinder.findElement(description);
+        element.clear();
+        element.sendKeys(text);
+    }
+    
+    /**
+     * Verify text is present on the page
+     * 
+     * @param text Text to verify
+     * @return true if text is present
+     */
+    protected boolean verifyTextPresent(String text) {
+        log.info("Verifying text is present: {}", text);
+        return aiEngine.verifyTextPresence(driver, text);
+    }
+}
+
+package com.cssmart.core.base;
+
+import lombok.Data;
+import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Stores test context information during test execution
+ */
+@Data
+public class TestContext {
+    private Method testMethod;
+    private Map<String, Object> testData;
+    private Map<String, Object> runtime;
+    
+    /**
+     * Create a new test context
+     */
+    public TestContext() {
+        this.testData = new HashMap<>();
+        this.runtime = new HashMap<>();
+    }
+    
+    /**
+     * Set test data
+     * 
+     * @param data Test data map
+     */
+    public void setTestData(Map<String, Object> data) {
+        this.testData.putAll(data);
+    }
+    
+    /**
+     * Get test data value
+     * 
+     * @param <T> Type of the data value
+     * @param key Data key
+     * @param type Class representing the type of the data value
+     * @return Data value, or null if not found
+     */
+    public <T> T getTestData(String key, Class<T> type) {
+        Object value = testData.get(key);
+        if (value == null) {
+            return null;
+        }
+        return type.cast(value);
+    }
+    
+    /**
+     * Set runtime data
+     * 
+     * @param key Data key
+     * @param value Data value
+     */
+    public void setRuntimeData(String key, Object value) {
+        runtime.put(key, value);
+    }
+    
+    /**
+     * Get runtime data value
+     * 
+     * @param <T> Type of the data value
+     * @param key Data key
+     * @param type Class representing the type of the data value
+     * @return Data value, or null if not found
+     */
+    public <T> T getRuntimeData(String key, Class<T> type) {
+        Object value = runtime.get(key);
+        if (value == null) {
+            return null;
+        }
+        return type.cast(value);
+    }
+    
+    /**
+     * Check if test data exists for a key
+     * 
+     * @param key Data key
+     * @return true if data exists
+     */
+    public boolean hasTestData(String key) {
+        return testData.containsKey(key);
+    }
+    
+    /**
+     * Check if runtime data exists for a key
+     * 
+     * @param key Data key
+     * @return true if data exists
+     */
+    public boolean hasRuntimeData(String key) {
+        return runtime.containsKey(key);
+    }
+    
+    /**
+     * Clear all test data
+     */
+    public void clearTestData() {
+        testData.clear();
+    }
+    
+    /**
+     * Clear all runtime data
+     */
+    public void clearRuntimeData() {
+        runtime.clear();
+    }
+    
+    /**
+     * Get the test class name
+     * 
+     * @return Test class name
+     */
+    public String getTestClassName() {
+        if (testMethod == null) {
+            return "Unknown";
+        }
+        return testMethod.getDeclaringClass().getSimpleName();
+    }
+    
+    /**
+     * Get the test method name
+     * 
+     * @return Test method name
+     */
+    public String getTestMethodName() {
+        if (testMethod == null) {
+            return "Unknown";
+        }
+        return testMethod.getName();
+    }
+}
+
+package com.cssmart.core.annotations;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Annotation for CS Smart test methods and classes
+ * Provides configuration options for tests
+ */
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ElementType.METHOD, ElementType.TYPE})
+public @interface CSSmartTest {
+    /**
+     * Test description
+     * 
+     * @return Test description
+     */
+    String description() default "";
+    
+    /**
+     * Test tags
+     * 
+     * @return Array of test tags
+     */
+    String[] tags() default {};
+    
+    /**
+     * Data provider name
+     * 
+     * @return Data provider name
+     */
+    String dataProvider() default "";
+    
+    /**
+     * Browser to use for the test
+     * 
+     * @return Browser name
+     */
+    String browser() default "";
+    
+    /**
+     * Whether to capture video of the test
+     * 
+     * @return true to capture video
+     */
+    boolean captureVideo() default false;
+    
+    /**
+     * Whether to retry the test on failure
+     * 
+     * @return true to retry on failure
+     */
+    boolean retryOnFailure() default false;
+    
+    /**
+     * Maximum number of retries
+     * 
+     * @return Maximum number of retries
+     */
+    int maxRetries() default 1;
+    
+    /**
+     * Environment to run the test in
+     * 
+     * @return Environment name
+     */
+    String environment() default "";
+    
+    /**
+     * Whether to use AI healing for elements
+     * 
+     * @return true to use AI healing
+     */
+    boolean useAIHealing() default true;
+    
+    /**
+     * Whether to generate a report for this test
+     * 
+     * @return true to generate a report
+     */
+    boolean generateReport() default true;
+}
+
+// AI Engine Exceptions
+
+// AIPredictionException.java
+package com.cssmart.ai.engine.exceptions;
+
+/**
+ * Exception thrown when AI prediction fails
+ */
+public class AIPredictionException extends RuntimeException {
+    public AIPredictionException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public AIPredictionException(String message) {
+        super(message);
+    }
+}
+
+// AIActionException.java
+package com.cssmart.ai.engine.exceptions;
+
+/**
+ * Exception thrown when AI action generation fails
+ */
+public class AIActionException extends RuntimeException {
+    public AIActionException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public AIActionException(String message) {
+        super(message);
+    }
+}
+
+// AIPatternException.java
+package com.cssmart.ai.engine.exceptions;
+
+/**
+ * Exception thrown when AI pattern recognition fails
+ */
+public class AIPatternException extends RuntimeException {
+    public AIPatternException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public AIPatternException(String message) {
+        super(message);
+    }
+}
+
+// Core Framework Exceptions
+
+// ConfigurationException.java
+package com.cssmart.core.config.exceptions;
+
+/**
+ * Exception thrown when configuration loading or access fails
+ */
+public class ConfigurationException extends RuntimeException {
+    public ConfigurationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public ConfigurationException(String message) {
+        super(message);
+    }
+}
+
+// EnvironmentException.java
+package com.cssmart.core.config.exceptions;
+
+/**
+ * Exception thrown when environment variable processing fails
+ */
+public class EnvironmentException extends RuntimeException {
+    public EnvironmentException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public EnvironmentException(String message) {
+        super(message);
+    }
+}
+
+// Browser Manager Exceptions
+
+// BrowserCreationException.java
+package com.cssmart.core.driver.exceptions;
+
+/**
+ * Exception thrown when browser creation fails
+ */
+public class BrowserCreationException extends RuntimeException {
+    public BrowserCreationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public BrowserCreationException(String message) {
+        super(message);
+    }
+}
+
+// UnsupportedBrowserException.java
+package com.cssmart.core.driver.exceptions;
+
+/**
+ * Exception thrown when an unsupported browser is requested
+ */
+public class UnsupportedBrowserException extends RuntimeException {
+    public UnsupportedBrowserException(String message) {
+        super(message);
+    }
+}
+
+// ElementNotFoundException.java
+package com.cssmart.core.driver.exceptions;
+
+/**
+ * Exception thrown when an element cannot be found
+ */
+public class ElementNotFoundException extends RuntimeException {
+    public ElementNotFoundException(String message) {
+        super(message);
+    }
+    
+    public ElementNotFoundException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+
+// Framework Initialization Exceptions
+
+// FrameworkInitializationException.java
+package com.cssmart.core.base.exceptions;
+
+/**
+ * Exception thrown when framework initialization fails
+ */
+public class FrameworkInitializationException extends RuntimeException {
+    public FrameworkInitializationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public FrameworkInitializationException(String message) {
+        super(message);
+    }
+}
+
+// PageInitializationException.java
+package com.cssmart.core.base.exceptions;
+
+/**
+ * Exception thrown when page initialization fails
+ */
+public class PageInitializationException extends RuntimeException {
+    public PageInitializationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public PageInitializationException(String message) {
+        super(message);
+    }
+}
+
+// AI Codegen Exceptions
+
+// CodeGenerationException.java
+package com.cssmart.ai.codegen.exceptions;
+
+/**
+ * Exception thrown when code generation fails
+ */
+public class CodeGenerationException extends RuntimeException {
+    public CodeGenerationException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public CodeGenerationException(String message) {
+        super(message);
+    }
+}
+
+// TemplateProcessingException.java
+package com.cssmart.ai.codegen.exceptions;
+
+/**
+ * Exception thrown when template processing fails
+ */
+public class TemplateProcessingException extends RuntimeException {
+    public TemplateProcessingException(String message, Throwable cause) {
+        super(message, cause);
+    }
+    
+    public TemplateProcessingException(String message) {
+        super(message);
+    }
+}
+
+package com.cssmart.reporting;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.core.config.ConfigurationManager;
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import lombok.extern.slf4j.Slf4j;
+import org.testng.ITestResult;
+
+import java.io.File;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+
+/**
+ * Manages test reporting
+ * Implements Singleton pattern to ensure only one instance exists
+ */
+@Slf4j
+public class ReportManager {
+    private static ReportManager instance;
+    private final Map<String, TestReport> reports;
+    private final ReportGenerator generator;
+    private final AIEngine aiEngine;
+    private final String outputDir;
+    
+    private ReportManager() {
+        this.reports = new ConcurrentHashMap<>();
+        this.generator = new ReportGenerator();
+        this.aiEngine = AIEngine.getInstance();
+        
+        // Get output directory from configuration
+        this.outputDir = ConfigurationManager.getInstance()
+            .getConfig("reporting.outputDir", String.class, "./reports");
+        
+        // Create output directory if it doesn't exist
+        new File(outputDir).mkdirs();
+        
+        log.info("ReportManager initialized with output directory: {}", outputDir);
+    }
+    
+    /**
+     * Get the singleton instance of ReportManager
+     * 
+     * @return ReportManager instance
+     */
+    public static synchronized ReportManager getInstance() {
+        if (instance == null) {
+            instance = new ReportManager();
+        }
+        return instance;
+    }
+    
+    /**
+     * Add a test report
+     * 
+     * @param testId Test ID
+     * @param report Test report
+     */
+    public void addTestReport(String testId, TestReport report) {
+        reports.put(testId, report);
+        log.debug("Test report added: {}", testId);
+    }
+    
+    /**
+     * Generate a report for a test result
+     * 
+     * @param result Test result
+     */
+    public void generateTestReport(ITestResult result) {
+        try {
+            log.debug("Generating test report for: {}", result.getName());
+            
+            // Create test report
+            TestReport report = createTestReport(result);
+            
+            // Add to reports
+            addTestReport(report.getId(), report);
+            
+            // Generate individual test report
+            generator.generateTestReport(report, outputDir);
+            
+        } catch (Exception e) {
+            log.error("Failed to generate test report: {}", result.getName(), e);
+        }
+    }
+    
+    /**
+     * Generate a summary report for all tests
+     */
+    public void generateSummaryReport() {
+        try {
+            log.info("Generating summary report");
+            
+            // Get all reports
+            List<TestReport> allReports = new ArrayList<>(reports.values());
+            
+            // AI-enhanced reports
+            List<TestReport> enhancedReports = allReports.stream()
+                .map(this::enhanceReport)
+                .collect(Collectors.toList());
+            
+            // Calculate metrics
+            ExecutionMetrics metrics = calculateMetrics(enhancedReports);
+            
+            // Generate reports
+            generator.generateSummaryReport(enhancedReports, metrics, outputDir);
+            
+            log.info("Summary report generated successfully");
+            
+        } catch (Exception e) {
+            log.error("Failed to generate summary report", e);
+        }
+    }
+    
+    /**
+     * Create a test report from a test result
+     * 
+     * @param result Test result
+     * @return Test report
+     */
+    private TestReport createTestReport(ITestResult result) {
+        TestStatus status;
+        if (result.getStatus() == ITestResult.SUCCESS) {
+            status = TestStatus.PASSED;
+        } else if (result.getStatus() == ITestResult.FAILURE) {
+            status = TestStatus.FAILED;
+        } else {
+            status = TestStatus.SKIPPED;
+        }
+        
+        String id = result.getTestClass().getName() + "." + result.getName();
+        String name = result.getName();
+        String className = result.getTestClass().getName();
+        String methodName = result.getName();
+        long duration = result.getEndMillis() - result.getStartMillis();
+        
+        // Build report
+        TestReport.TestReportBuilder builder = TestReport.builder()
+            .id(id)
+            .name(name)
+            .status(status)
+            .duration(duration)
+            .startTime(LocalDateTime.now().minusNanos(duration * 1000000))
+            .endTime(LocalDateTime.now())
+            .className(className)
+            .methodName(methodName);
+        
+        // Add exception if test failed
+        if (status == TestStatus.FAILED && result.getThrowable() != null) {
+            builder.exception(result.getThrowable().getMessage());
+            
+            // Get stack trace
+            StringBuilder stackTrace = new StringBuilder();
+            for (StackTraceElement element : result.getThrowable().getStackTrace()) {
+                stackTrace.append(element.toString()).append("\n");
+            }
+            builder.stackTrace(stackTrace.toString());
+        }
+        
+        return builder.build();
+    }
+    
+    /**
+     * Add a screenshot to the latest test report
+     * 
+     * @param screenshotPath Screenshot file path
+     */
+    public void addScreenshot(String screenshotPath) {
+        if (reports.isEmpty()) {
+            log.warn("No test reports available to add screenshot");
+            return;
+        }
+        
+        // Get the latest report
+        String latestId = reports.keySet().stream()
+            .sorted((id1, id2) -> reports.get(id2).getEndTime().compareTo(reports.get(id1).getEndTime()))
+            .findFirst()
+            .orElse(null);
+        
+        if (latestId == null) {
+            log.warn("No test report found to add screenshot");
+            return;
+        }
+        
+        TestReport report = reports.get(latestId);
+        TestReport updatedReport = TestReport.builder()
+            .id(report.getId())
+            .name(report.getName())
+            .description(report.getDescription())
+            .status(report.getStatus())
+            .duration(report.getDuration())
+            .startTime(report.getStartTime())
+            .endTime(report.getEndTime())
+            .tags(report.getTags())
+            .browser(report.getBrowser())
+            .environment(report.getEnvironment())
+            .className(report.getClassName())
+            .methodName(report.getMethodName())
+            .exception(report.getException())
+            .stackTrace(report.getStackTrace())
+            .screenshot(screenshotPath)
+            .steps(report.getSteps())
+            .metadata(report.getMetadata())
+            .build();
+        
+        reports.put(latestId, updatedReport);
+        log.debug("Screenshot added to test report: {}", latestId);
+    }
+    
+    /**
+     * Get current metrics for all tests
+     * 
+     * @return Execution metrics
+     */
+    public ExecutionMetrics getCurrentMetrics() {
+        return calculateMetrics(new ArrayList<>(reports.values()));
+    }
+    
+    /**
+     * Get recent test reports
+     * 
+     * @return List of recent test reports
+     */
+    public List<TestReport> getRecentReports() {
+        return reports.values().stream()
+            .sorted((r1, r2) -> r2.getEndTime().compareTo(r1.getEndTime()))
+            .limit(10)
+            .collect(Collectors.toList());
+    }
+    
+    /**
+     * Enhance a test report with AI insights
+     * 
+     * @param report Test report to enhance
+     * @return Enhanced test report
+     */
+    private TestReport enhanceReport(TestReport report) {
+        // This would use AI to enhance the report
+        // For now, just return the original report
+        return report;
+    }
+    
+    /**
+     * Calculate metrics for a list of test reports
+     * 
+     * @param reports List of test reports
+     * @return Execution metrics
+     */
+    private ExecutionMetrics calculateMetrics(List<TestReport> reports) {
+        int total = reports.size();
+        int passed = (int) reports.stream().filter(r -> r.getStatus() == TestStatus.PASSED).count();
+        int failed = (int) reports.stream().filter(r -> r.getStatus() == TestStatus.FAILED).count();
+        int skipped = (int) reports.stream().filter(r -> r.getStatus() == TestStatus.SKIPPED).count();
+        
+        double successRate = total == 0 ? 0 : (passed * 100.0) / total;
+        
+        long totalDuration = reports.stream().mapToLong(TestReport::getDuration).sum();
+        long avgDuration = total == 0 ? 0 : totalDuration / total;
+        long minDuration = reports.stream().mapToLong(TestReport::getDuration).min().orElse(0);
+        long maxDuration = reports.stream().mapToLong(TestReport::getDuration).max().orElse(0);
+        
+        return ExecutionMetrics.builder()
+            .totalTests(total)
+            .passedTests(passed)
+            .failedTests(failed)
+            .skippedTests(skipped)
+            .successRate(successRate)
+            .duration(totalDuration)
+            .avgDuration(avgDuration)
+            .minDuration(minDuration)
+            .maxDuration(maxDuration)
+            .build();
+    }
+}
+
+// TestReport.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Model class for a test report
+ */
+@Data
+@Builder
+public class TestReport {
+    private String id;
+    private String name;
+    private String description;
+    private TestStatus status;
+    private long duration;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private List<String> tags;
+    private String browser;
+    private String environment;
+    private String className;
+    private String methodName;
+    private String exception;
+    private String stackTrace;
+    private String screenshot;
+    private List<TestStep> steps;
+    private Map<String, Object> metadata;
+}
+
+// TestStatus.java
+package com.cssmart.reporting.model;
+
+/**
+ * Enum for test status
+ */
+public enum TestStatus {
+    PASSED,
+    FAILED,
+    SKIPPED
+}
+
+// TestStep.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * Model class for a test step
+ */
+@Data
+@Builder
+public class TestStep {
+    private String description;
+    private String action;
+    private String element;
+    private String value;
+    private TestStatus status;
+    private String screenshot;
+    private String exception;
+    private long duration;
+}
+
+// ExecutionMetrics.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * Model class for execution metrics
+ */
+@Data
+@Builder
+public class ExecutionMetrics {
+    private int totalTests;
+    private int passedTests;
+    private int failedTests;
+    private int skippedTests;
+    private double successRate;
+    private long duration;
+    private long avgDuration;
+    private long minDuration;
+    private long maxDuration;
+}
+
+// Insight.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * Model class for AI-generated insights
+ */
+@Data
+@Builder
+public class Insight {
+    private String title;
+    private String description;
+    private InsightType type;
+    private double confidence;
+}
+
+// InsightType.java
+package com.cssmart.reporting.model;
+
+/**
+ * Enum for insight types
+ */
+public enum InsightType {
+    PERFORMANCE,
+    RELIABILITY,
+    STABILITY,
+    COVERAGE,
+    IMPROVEMENT
+}
+
+// TrendData.java
+package com.cssmart.reporting.model;
+
+import lombok.Builder;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+/**
+ * Model class for trend data
+ */
+@Data
+@Builder
+public class TrendData {
+    private LocalDateTime date;
+    private int total;
+    private int passed;
+    private int failed;
+    private int skipped;
+    private double successRate;
+    private long avgDuration;
+}
+
+package com.cssmart.reporting;
+
+import com.cssmart.reporting.model.ExecutionMetrics;
+import com.cssmart.reporting.model.TestReport;
+import freemarker.template.Configuration;
+import freemarker.template.Template;
+import freemarker.template.TemplateExceptionHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.io.FileWriter;
+import java.io.Writer;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Generates HTML and other report formats
+ */
+@Slf4j
+public class ReportGenerator {
+    private final Configuration templateConfig;
+    private final ChartGenerator chartGenerator;
+    private final DateTimeFormatter dateFormatter;
+    
+    /**
+     * Create a new report generator
+     */
+    public ReportGenerator() {
+        this.templateConfig = initializeTemplateConfig();
+        this.chartGenerator = new ChartGenerator();
+        this.dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        log.info("ReportGenerator initialized");
+    }
+    
+    /**
+     * Generate a report for a single test
+     * 
+     * @param report Test report
+     * @param outputDir Output directory
+     */
+    public void generateTestReport(TestReport report, String outputDir) {
+        try {
+            log.debug("Generating test report for: {}", report.getName());
+            
+            // Create test report directory
+            String testReportDir = outputDir + "/tests";
+            new File(testReportDir).mkdirs();
+            
+            // Prepare data model
+            Map<String, Object> dataModel = new HashMap<>();
+            dataModel.put("report", report);
+            dataModel.put("generatedDate", LocalDateTime.now().format(dateFormatter));
+            
+            // Use FreeMarker template for test report
+            Template template = templateConfig.getTemplate("test-report.ftl");
+            
+            // Write report to file
+            String filename = testReportDir + "/" + report.getId().replaceAll("[^a-zA-Z0-9]", "_") + ".html";
+            try (Writer writer = new FileWriter(filename)) {
+                template.process(dataModel, writer);
+            }
+            
+            log.debug("Test report generated: {}", filename);
+            
+        } catch (Exception e) {
+            log.error("Failed to generate test report: {}", report.getName(), e);
+        }
+    }
+    
+    /**
+     * Generate a summary report for all tests
+     * 
+     * @param reports List of test reports
+     * @param metrics Execution metrics
+     * @param outputDir Output directory
+     */
+    public void generateSummaryReport(List<TestReport> reports, ExecutionMetrics metrics, String outputDir) {
+        try {
+            log.info("Generating summary report");
+            
+            // Prepare data model
+            Map<String, Object> dataModel = new HashMap<>();
+            dataModel.put("reports", reports);
+            dataModel.put("metrics", metrics);
+            dataModel.put("generatedDate", LocalDateTime.now().format(dateFormatter));
+            
+            // Generate charts
+            Map<String, String> charts = generateCharts(reports, metrics, outputDir);
+            dataModel.put("charts", charts);
+            
+            // Use FreeMarker template for summary report
+            Template template = templateConfig.getTemplate("summary-report.ftl");
+            
+            // Write report to file
+            String filename = outputDir + "/summary.html";
+            try (Writer writer = new FileWriter(filename)) {
+                template.process(dataModel, writer);
+            }
+            
+            log.info("Summary report generated: {}", filename);
+            
+        } catch (Exception e) {
+            log.error("Failed to generate summary report", e);
+        }
+    }
+    
+    /**
+     * Generate charts for the summary report
+     * 
+     * @param reports List of test reports
+     * @param metrics Execution metrics
+     * @param outputDir Output directory
+     * @return Map of chart names to chart file paths
+     */
+    private Map<String, String> generateCharts(List<TestReport> reports, ExecutionMetrics metrics, String outputDir) {
+        Map<String, String> charts = new HashMap<>();
+        
+        // Create charts directory
+        String chartsDir = outputDir + "/charts";
+        new File(chartsDir).mkdirs();
+        
+        try {
+            // Generate status distribution chart
+            String statusChart = chartGenerator.generateStatusDistributionChart(
+                    metrics.getPassedTests(), 
+                    metrics.getFailedTests(), 
+                    metrics.getSkippedTests(), 
+                    chartsDir + "/status-distribution.png");
+            charts.put("statusDistribution", "charts/status-distribution.png");
+            
+            // Generate execution trend chart
+            String trendChart = chartGenerator.generateExecutionTrendChart(
+                    reports, 
+                    chartsDir + "/execution-trend.png");
+            charts.put("executionTrend", "charts/execution-trend.png");
+            
+            // Generate duration chart
+            String durationChart = chartGenerator.generateDurationChart(
+                    reports, 
+                    chartsDir + "/duration-chart.png");
+            charts.put("durationChart", "charts/duration-chart.png");
+            
+        } catch (Exception e) {
+            log.error("Failed to generate charts", e);
+        }
+        
+        return charts;
+    }
+    
+    /**
+     * Initialize the FreeMarker template configuration
+     * 
+     * @return FreeMarker configuration
+     */
+    private Configuration initializeTemplateConfig() {
+        try {
+            Configuration config = new Configuration(Configuration.VERSION_2_3_32);
+            
+            // Set the template loading directory
+            config.setClassLoaderForTemplateLoading(getClass().getClassLoader(), "templates/html");
+            
+            // Set template exception handling
+            config.setTemplateExceptionHandler(TemplateExceptionHandler.RETHROW_HANDLER);
+            
+            // Set character encoding
+            config.setDefaultEncoding("UTF-8");
+            
+            return config;
+        } catch (Exception e) {
+            log.error("Failed to initialize template configuration", e);
+            throw new RuntimeException("Failed to initialize template configuration", e);
+        }
+    }
+}
+
+package com.cssmart.reporting;
+
+import com.cssmart.reporting.model.TestReport;
+import com.cssmart.reporting.model.TestStatus;
+import lombok.extern.slf4j.Slf4j;
+import org.jfree.chart.ChartFactory;
+import org.jfree.chart.ChartUtils;
+import org.jfree.chart.JFreeChart;
+import org.jfree.chart.plot.PiePlot;
+import org.jfree.chart.plot.PlotOrientation;
+import org.jfree.data.category.DefaultCategoryDataset;
+import org.jfree.data.general.DefaultPieDataset;
+
+import java.awt.*;
+import java.io.File;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ * Generates charts for test reports
+ */
+@Slf4j
+public class ChartGenerator {
+    private static final int DEFAULT_WIDTH = 600;
+    private static final int DEFAULT_HEIGHT = 400;
+    
+    /**
+     * Generate a pie chart showing test status distribution
+     * 
+     * @param passed Number of passed tests
+     * @param failed Number of failed tests
+     * @param skipped Number of skipped tests
+     * @param outputFile Output file path
+     * @return Output file path
+     */
+    public String generateStatusDistributionChart(int passed, int failed, int skipped, String outputFile) {
+        try {
+            DefaultPieDataset<String> dataset = new DefaultPieDataset<>();
+            dataset.setValue("Passed", passed);
+            dataset.setValue("Failed", failed);
+            dataset.setValue("Skipped", skipped);
+            
+            JFreeChart chart = ChartFactory.createPieChart(
+                "Test Status Distribution",
+                dataset,
+                true,
+                true,
+                false
+            );
+            
+            // Set custom colors
+            PiePlot<?> plot = (PiePlot<?>) chart.getPlot();
+            plot.setSectionPaint("Passed", new Color(76, 175, 80));
+            plot.setSectionPaint("Failed", new Color(244, 67, 54));
+            plot.setSectionPaint("Skipped", new Color(255, 152, 0));
+            
+            // Save chart to file
+            File file = new File(outputFile);
+            ChartUtils.saveChartAsPNG(file, chart, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            
+            log.debug("Status distribution chart generated: {}", outputFile);
+            return outputFile;
+            
+        } catch (Exception e) {
+            log.error("Failed to generate status distribution chart", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Generate a line chart showing test execution trend
+     * 
+     * @param reports List of test reports
+     * @param outputFile Output file path
+     * @return Output file path
+     */
+    public String generateExecutionTrendChart(List<TestReport> reports, String outputFile) {
+        try {
+            DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+            
+            // Sort reports by start time
+            List<TestReport> sortedReports = reports.stream()
+                .sorted(Comparator.comparing(TestReport::getStartTime))
+                .collect(Collectors.toList());
+            
+            int cumulativePassed = 0;
+            int cumulativeFailed = 0;
+            int cumulativeSkipped = 0;
+            
+            for (TestReport report : sortedReports) {
+                String timeKey = report.getStartTime().toString();
+                
+                if (report.getStatus() == TestStatus.PASSED) {
+                    cumulativePassed++;
+                } else if (report.getStatus() == TestStatus.FAILED) {
+                    cumulativeFailed++;
+                } else {
+                    cumulativeSkipped++;
+                }
+                
+                dataset.addValue(cumulativePassed, "Passed", timeKey);
+                dataset.addValue(cumulativeFailed, "Failed", timeKey);
+                dataset.addValue(cumulativeSkipped, "Skipped", timeKey);
+                dataset.addValue(cumulativePassed + cumulativeFailed + cumulativeSkipped, "Total", timeKey);
+            }
+            
+            JFreeChart chart = ChartFactory.createLineChart(
+                "Test Execution Trend",
+                "Time",
+                "Number of Tests",
+                dataset,
+                PlotOrientation.VERTICAL,
+                true,
+                true,
+                false
+            );
+            
+            // Save chart to file
+            File file = new File(outputFile);
+            ChartUtils.saveChartAsPNG(file, chart, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            
+            log.debug("Execution trend chart generated: {}", outputFile);
+            return outputFile;
+            
+        } catch (Exception e) {
+            log.error("Failed to generate execution trend chart", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Generate a bar chart showing test durations
+     * 
+     * @param reports List of test reports
+     * @param outputFile Output file path
+     * @return Output file path
+     */
+    public String generateDurationChart(List<TestReport> reports, String outputFile) {
+        try {
+            DefaultCategoryDataset dataset = new DefaultCategoryDataset();
+            
+            // Sort reports by duration (descending)
+            List<TestReport> sortedReports = reports.stream()
+                .sorted(Comparator.comparing(TestReport::getDuration).reversed())
+                .limit(10) // Only show top 10
+                .collect(Collectors.toList());
+            
+            for (TestReport report : sortedReports) {
+                String testName = report.getName();
+                
+                // Limit name length
+                if (testName.length() > 30) {
+                    testName = testName.substring(0, 27) + "...";
+                }
+                
+                // Convert to seconds
+                double durationInSeconds = report.getDuration() / 1000.0;
+                dataset.addValue(durationInSeconds, "Duration (s)", testName);
+            }
+            
+            JFreeChart chart = ChartFactory.createBarChart(
+                "Test Duration",
+                "Test Name",
+                "Duration (seconds)",
+                dataset,
+                PlotOrientation.HORIZONTAL,
+                false,
+                true,
+                false
+            );
+            
+            // Save chart to file
+            File file = new File(outputFile);
+            ChartUtils.saveChartAsPNG(file, chart, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+            
+            log.debug("Duration chart generated: {}", outputFile);
+            return outputFile;
+            
+        } catch (Exception e) {
+            log.error("Failed to generate duration chart", e);
+            return null;
+        }
+    }
+}
+
+package com.cssmart.reporting.util;
+
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.OutputType;
+import org.openqa.selenium.TakesScreenshot;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+/**
+ * Utility class for capturing and managing screenshots
+ */
+@Slf4j
+public class ScreenshotManager {
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+    
+    /**
+     * Capture a screenshot of the entire page
+     * 
+     * @param driver WebDriver instance
+     * @return Path to the saved screenshot, or null if failed
+     */
+    public static String capture(WebDriver driver) {
+        try {
+            // Create screenshots directory if it doesn't exist
+            Path screenshotsDir = Paths.get("reports/screenshots");
+            if (!Files.exists(screenshotsDir)) {
+                Files.createDirectories(screenshotsDir);
+            }
+            
+            // Generate filename
+            String timestamp = LocalDateTime.now().format(DATE_FORMATTER);
+            String filename = "screenshot_" + timestamp + ".png";
+            Path filepath = screenshotsDir.resolve(filename);
+            
+            // Take screenshot
+            File screenshot = ((TakesScreenshot) driver).getScreenshotAs(OutputType.FILE);
+            Files.copy(screenshot.toPath(), filepath);
+            
+            log.debug("Screenshot captured: {}", filepath);
+            return "screenshots/" + filename;
+            
+        } catch (Exception e) {
+            log.error("Failed to capture screenshot", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Capture a screenshot of a specific element
+     * 
+     * @param element WebElement to capture
+     * @return Path to the saved screenshot, or null if failed
+     */
+    public static String captureElement(WebElement element) {
+        try {
+            // Create screenshots directory if it doesn't exist
+            Path screenshotsDir = Paths.get("reports/screenshots");
+            if (!Files.exists(screenshotsDir)) {
+                Files.createDirectories(screenshotsDir);
+            }
+            
+            // Generate filename
+            String timestamp = LocalDateTime.now().format(DATE_FORMATTER);
+            String filename = "element_" + timestamp + ".png";
+            Path filepath = screenshotsDir.resolve(filename);
+            
+            // Take screenshot
+            File screenshot = element.getScreenshotAs(OutputType.FILE);
+            Files.copy(screenshot.toPath(), filepath);
+            
+            log.debug("Element screenshot captured: {}", filepath);
+            return "screenshots/" + filename;
+            
+        } catch (Exception e) {
+            log.error("Failed to capture element screenshot", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Capture a full page screenshot
+     * 
+     * @param driver WebDriver instance
+     * @param name Custom name for the screenshot
+     * @return Path to the saved screenshot, or null if failed
+     */
+    public static String captureNamed(WebDriver driver, String name) {
+        try {
+            // Create screenshots directory if it doesn't exist
+            Path screenshotsDir = Paths.get("reports/screenshots");
+            if (!Files.exists(screenshotsDir)) {
+                Files.createDirectories(screenshotsDir);
+            }
+            
+            // Generate filename with custom name
+            String sanitizedName = name.replaceAll("[^a-zA-Z0-9]", "_");
+            String timestamp = LocalDateTime.now().format(DATE_FORMATTER);
+            String filename = sanitizedName + "_" + timestamp + ".png";
+            Path filepath = screenshotsDir.resolve(filename);
+            
+            // Take screenshot
+            File screenshot = ((TakesScreenshot) driver).getScreenshotAs(OutputType.FILE);
+            Files.copy(screenshot.toPath(), filepath);
+            
+            log.debug("Named screenshot captured: {}", filepath);
+            return "screenshots/" + filename;
+            
+        } catch (Exception e) {
+            log.error("Failed to capture named screenshot: {}", name, e);
+            return null;
+        }
+    }
+    
+    /**
+     * Delete old screenshots to save disk space
+     * 
+     * @param daysToKeep Number of days to keep screenshots
+     * @return Number of deleted screenshots
+     */
+    public static int cleanupOldScreenshots(int daysToKeep) {
+        try {
+            Path screenshotsDir = Paths.get("reports/screenshots");
+            if (!Files.exists(screenshotsDir)) {
+                return 0;
+            }
+            
+            LocalDateTime cutoffDate = LocalDateTime.now().minusDays(daysToKeep);
+            
+            // List all screenshot files
+            File[] files = screenshotsDir.toFile().listFiles((dir, name) -> 
+                    name.endsWith(".png"));
+            
+            if (files == null || files.length == 0) {
+                return 0;
+            }
+            
+            int deletedCount = 0;
+            for (File file : files) {
+                // Get file creation time
+                LocalDateTime creationTime = 
+                        LocalDateTime.ofInstant(
+                            Files.getLastModifiedTime(file.toPath()).toInstant(), 
+                            java.time.ZoneId.systemDefault());
+                
+                // Delete if older than cutoff date
+                if (creationTime.isBefore(cutoffDate)) {
+                    if (file.delete()) {
+                        deletedCount++;
+                    }
+                }
+            }
+            
+            log.info("Cleaned up {} old screenshots", deletedCount);
+            return deletedCount;
+            
+        } catch (Exception e) {
+            log.error("Failed to clean up old screenshots", e);
+            return 0;
+        }
+    }
+
+
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.safari.SafariDriver;
+import io.github.bonigarcia.wdm.WebDriverManager;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Records test actions for later playback and generation
+ */
+@Slf4j
+public class TestRecorder {
+    private boolean isRecording;
+    private List<RecordedStep> steps;
+    private final AIEngine aiEngine;
+    private LocalDateTime startTime;
+    private String sessionId;
+    private WebDriver driver;
+    private String baseUrl;
+    
+    /**
+     * Create a new test recorder
+     */
+    public TestRecorder() {
+        this.isRecording = false;
+        this.steps = new ArrayList<>();
+        this.aiEngine = AIEngine.getInstance();
+        log.info("TestRecorder initialized");
+    }
+    
+    /**
+     * Start recording a test
+     * 
+     * @param browserType Type of browser to use (chrome, firefox, edge, safari)
+     * @param url Base URL to navigate to
+     */
+    public void startRecording(String browserType, String url) {
+        this.isRecording = true;
+        this.steps.clear();
+        this.baseUrl = url;
+        this.startTime = LocalDateTime.now();
+        this.sessionId = UUID.randomUUID().toString();
+        
+        // Initialize and launch browser
+        initializeBrowser(browserType);
+        
+        // Navigate to the base URL
+        if (driver != null && baseUrl != null && !baseUrl.isEmpty()) {
+            driver.get(baseUrl);
+            
+            // Record navigation as a step
+            RecordedStep step = new RecordedStep();
+            step.setAction("NAVIGATE");
+            step.setValue(baseUrl);
+            step.setTimestamp(LocalDateTime.now());
+            step.setDescription("Navigate to " + baseUrl);
+            steps.add(step);
+        }
+        
+        log.info("Recording started with session ID: {} on browser: {}", sessionId, browserType);
+    }
+    
+    /**
+     * Initialize a browser for recording
+     * 
+     * @param browserType Type of browser to use (chrome, firefox, edge, safari)
+     */
+    private void initializeBrowser(String browserType) {
+        try {
+            // Set up the WebDriver based on browser type
+            switch (browserType.toLowerCase()) {
+                case "chrome":
+                    WebDriverManager.chromedriver().setup();
+                    driver = new ChromeDriver();
+                    break;
+                case "firefox":
+                    WebDriverManager.firefoxdriver().setup();
+                    driver = new FirefoxDriver();
+                    break;
+                case "edge":
+                    WebDriverManager.edgedriver().setup();
+                    driver = new EdgeDriver();
+                    break;
+                case "safari":
+                    driver = new SafariDriver();
+                    break;
+                default:
+                    log.warn("Unsupported browser type: {}. Defaulting to Chrome.", browserType);
+                    WebDriverManager.chromedriver().setup();
+                    driver = new ChromeDriver();
+            }
+            
+            // Maximize browser window
+            driver.manage().window().maximize();
+            
+            log.info("Browser initialized: {}", browserType);
+        } catch (Exception e) {
+            log.error("Failed to initialize browser: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize browser: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Stop recording and generate a test case
+     * 
+     * @return Generated test case
+     */
+    public TestCase stopRecording() {
+        this.isRecording = false;
+        LocalDateTime endTime = LocalDateTime.now();
+        log.info("Recording stopped, captured {} steps", steps.size());
+        
+        // Close the browser
+        if (driver != null) {
+            try {
+                driver.quit();
+                log.info("Browser closed");
+            } catch (Exception e) {
+                log.error("Error closing browser: {}", e.getMessage(), e);
+            } finally {
+                driver = null;
+            }
+        }
+        
+        // Create test case from recorded steps
+        TestCase testCase = createTestCase(steps, startTime, endTime);
+        
+        // Clear steps
+        this.steps.clear();
+        
+        return testCase;
+    }
+    
+    /**
+     * Record an action on an element
+     * 
+     * @param action Action to record
+     * @param element Element description
+     * @param value Value (if applicable)
+     */
+    public void recordAction(Action action, String element, String value) {
+        if (!isRecording) {
+            log.warn("Attempted to record action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(action.getType().toString());
+        step.setElement(element);
+        step.setValue(value);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        step.setDescription(generateDescription(action.getType(), element, value));
+        
+        steps.add(step);
+        log.debug("Recorded step: {}", step);
+    }
+    
+    /**
+     * Record a browser action (navigate, refresh, etc.)
+     * 
+     * @param browserAction Action to record
+     * @param url URL (if applicable)
+     */
+    public void recordBrowserAction(String browserAction, String url) {
+        if (!isRecording) {
+            log.warn("Attempted to record browser action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(browserAction);
+        step.setValue(url);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        if ("NAVIGATE".equals(browserAction)) {
+            step.setDescription("Navigate to " + url);
+        } else if ("BACK".equals(browserAction)) {
+            step.setDescription("Navigate back");
+        } else if ("FORWARD".equals(browserAction)) {
+            step.setDescription("Navigate forward");
+        } else if ("REFRESH".equals(browserAction)) {
+            step.setDescription("Refresh page");
+        }
+        
+        steps.add(step);
+        log.debug("Recorded browser action: {}", step);
+    }
+    
+    /**
+     * Generate a human-readable description for an action
+     * 
+     * @param actionType Type of action
+     * @param element Element description
+     * @param value Value (if applicable)
+     * @return Human-readable description
+     */
+    private String generateDescription(ActionType actionType, String element, String value) {
+        switch (actionType) {
+            case CLICK:
+                return "Click on " + element;
+            case TYPE:
+                return "Enter '" + value + "' in " + element;
+            case SELECT:
+                return "Select '" + value + "' from " + element;
+            case VERIFY_PRESENCE:
+                return "Verify " + element + " is present";
+            case VERIFY_VISIBILITY:
+                return "Verify " + element + " is visible";
+            case VERIFY_STATE:
+                return "Verify " + element + " state is '" + value + "'";
+            case WAIT:
+                return "Wait for " + element;
+            case HOVER:
+                return "Hover over " + element;
+            default:
+                return actionType + " on " + element;
+        }
+    }
+    
+    /**
+     * Create a test case from recorded steps
+     * 
+     * @param steps List of recorded steps
+     * @param startTime Test start time
+     * @param endTime Test end time
+     * @return Test case
+     */
+    private TestCase createTestCase(List<RecordedStep> steps, LocalDateTime startTime, LocalDateTime endTime) {
+        TestCase testCase = new TestCase();
+        testCase.setId(sessionId);
+        testCase.setName("Recorded Test " + startTime.toString());
+        testCase.setDescription("Automatically recorded test case");
+        testCase.setSteps(new ArrayList<>(steps));
+        testCase.setStartTime(startTime);
+        testCase.setEndTime(endTime);
+        
+        // Generate class and method names
+        testCase.setClassName("RecordedTest" + startTime.toString().replaceAll("[^a-zA-Z0-9]", ""));
+        testCase.setMethodName("test" + startTime.toString().replaceAll("[^a-zA-Z0-9]", ""));
+        
+        // Use AI to enhance test case
+        enhanceTestCase(testCase);
+        
+        // Generate test code
+        testCase.setCode(generateTestCode(testCase));
+        
+        return testCase;
+    }
+    
+    /**
+     * Enhance a test case with AI-driven improvements
+     * 
+     * @param testCase Test case to enhance
+     */
+    private void enhanceTestCase(TestCase testCase) {
+        // Extract pattern from steps
+        List<Action> actions = new ArrayList<>();
+        for (RecordedStep step : testCase.getSteps()) {
+            try {
+                ActionType actionType = ActionType.valueOf(step.getAction());
+                Action action = new Action(actionType);
+                action.setValue(step.getValue());
+                actions.add(action);
+            } catch (IllegalArgumentException e) {
+                log.warn("Unknown action type: {}", step.getAction());
+            }
+        }
+        
+        if (!actions.isEmpty()) {
+            try {
+                // Detect patterns
+                List<Pattern> patterns = aiEngine.recognizePatterns(actions);
+                
+                // Generate better name and description based on patterns
+                if (!patterns.isEmpty()) {
+                    // Use the highest confidence pattern for naming
+                    Pattern topPattern = patterns.stream()
+                        .sorted((p1, p2) -> Double.compare(p2.getConfidence(), p1.getConfidence()))
+                        .findFirst()
+                        .orElse(null);
+                    
+                    if (topPattern != null) {
+                        testCase.setName(topPattern.getName() + " Test");
+                        testCase.setDescription(topPattern.getDescription());
+                        
+                        // Update class and method names
+                        testCase.setClassName(
+                            topPattern.getName().replaceAll("[^a-zA-Z0-9]", "") + "Test");
+                        testCase.setMethodName(
+                            "test" + topPattern.getName().replaceAll("[^a-zA-Z0-9]", ""));
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Error enhancing test case: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Generate test code from a test case
+     * 
+     * @param testCase Test case to generate code for
+     * @return Generated code
+     */
+    private String generateTestCode(TestCase testCase) {
+        // A simple code generation implementation
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.testng.Assert;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("/**\n");
+        code.append(" * ").append(testCase.getDescription()).append("\n");
+        code.append(" * Generated by CS Smart Test Framework\n");
+        code.append(" */\n");
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        for (RecordedStep step : testCase.getSteps()) {
+            code.append("        // ").append(step.getDescription()).append("\n");
+            
+            switch (step.getAction()) {
+                case "NAVIGATE":
+                    code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+                    break;
+                case "CLICK":
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.click();\n");
+                    break;
+                case "TYPE":
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.clear();\n");
+                    code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+                    break;
+                case "SELECT":
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                        .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+                    break;
+                case "VERIFY_PRESENCE":
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                        .append(step.getElement()).append(" should be present\");\n");
+                    break;
+                case "VERIFY_TEXT":
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(element.getText().contains(\"")
+                        .append(step.getValue()).append("\"), \"")
+                        .append(step.getElement()).append(" should contain text: ")
+                        .append(step.getValue()).append("\");\n");
+                    break;
+                case "WAIT":
+                    code.append("        elementFinder.waitForElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    break;
+                default:
+                    code.append("        // TODO: Implement ").append(step.getAction()).append(" action\n");
+                    break;
+            }
+            
+            code.append("\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    /**
+     * Check if recording is in progress
+     * 
+     * @return true if recording
+     */
+    public boolean isRecording() {
+        return isRecording;
+    }
+    
+    /**
+     * Get recorded steps
+     * 
+     * @return List of recorded steps
+     */
+    public List<RecordedStep> getSteps() {
+        return new ArrayList<>(steps);  // Return a copy to prevent modification
+    }
+    
+    /**
+     * Get the last recorded step
+     * 
+     * @return Last recorded step, or null if none
+     */
+    public RecordedStep getLastRecordedStep() {
+        if (steps.isEmpty()) {
+            return null;
+        }
+        return steps.get(steps.size() - 1);
+    }
+    
+    /**
+     * Get the WebDriver instance
+     * 
+     * @return WebDriver instance
+     */
+    public WebDriver getDriver() {
+        return driver;
+    }
+}
+
+// RecordedStep.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+import java.time.LocalDateTime;
+
+/**
+ * Represents a single step recorded during test recording
+ */
+@Data
+public class RecordedStep {
+    private String action;
+    private String element;
+    private String value;
+    private String description;
+    private LocalDateTime timestamp;
+    private String screenshot;
+}
+
+// TestCase.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * Represents a test case generated from recorded steps
+ */
+@Data
+public class TestCase {
+    private String id;
+    private String name;
+    private String description;
+    private List<RecordedStep> steps;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String className;
+    private String methodName;
+    private String code;
+}
+
+// RecorderMessage.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * Represents a message sent between the UI and server during recording
+ */
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class RecorderMessage {
+    private String type;
+    private Object data;
+}
+
+// RecorderConfig.java
+package com.cssmart.ui.recorder.model;
+
+import lombok.Data;
+
+/**
+ * Configuration for test recording
+ */
+@Data
+public class RecorderConfig {
+    private String url;
+    private String browser;
+    private boolean headless;
+    private int timeout;
+}
+
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecorderMessage;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * WebSocket handler for the test recorder
+ * Manages real-time communication between the browser and server
+ * for recording test actions
+ */
+@Slf4j
+@Component
+public class TestRecorderHandler extends TextWebSocketHandler {
+    
+    private final ObjectMapper objectMapper;
+    private final Map<String, TestRecorder> recorders;
+    private final AIEngine aiEngine;
+    
+    /**
+     * Create a new test recorder handler
+     * 
+     * @param objectMapper JSON object mapper
+     */
+    @Autowired
+    public TestRecorderHandler(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+        this.recorders = new ConcurrentHashMap<>();
+        this.aiEngine = AIEngine.getInstance();
+        log.info("TestRecorderHandler initialized");
+    }
+    
+    /**
+     * Handle WebSocket connection established
+     * 
+     * @param session WebSocket session
+     */
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        log.info("WebSocket connection established: {}", session.getId());
+    }
+    
+    /**
+     * Handle incoming text messages
+     * 
+     * @param session WebSocket session
+     * @param message Text message
+     */
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        String sessionId = session.getId();
+        RecorderMessage msg = objectMapper.readValue(message.getPayload(), RecorderMessage.class);
+        
+        log.debug("Received recorder message: {}", msg.getType());
+        
+        switch (msg.getType()) {
+            case "START_RECORDING":
+                startRecording(session, sessionId, msg.getData());
+                break;
+            case "STOP_RECORDING":
+                stopRecording(session, sessionId);
+                break;
+            case "ACTION":
+                recordAction(session, sessionId, msg.getData());
+                break;
+            default:
+                log.warn("Unknown message type: {}", msg.getType());
+                sendError(session, "Unknown message type: " + msg.getType());
+                break;
+        }
+    }
+    
+    /**
+     * Handle WebSocket connection closed
+     * 
+     * @param session WebSocket session
+     * @param status Close status
+     */
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        String sessionId = session.getId();
+        TestRecorder recorder = recorders.get(sessionId);
+        
+        // Make sure to stop recording and clean up resources
+        if (recorder != null && recorder.isRecording()) {
+            try {
+                recorder.stopRecording();
+            } catch (Exception e) {
+                log.error("Error stopping recording on connection close: {}", e.getMessage(), e);
+            }
+            recorders.remove(sessionId);
+        }
+        
+        log.info("WebSocket connection closed: {}", sessionId);
+    }
+    
+    /**
+     * Handle transport errors
+     * 
+     * @param session WebSocket session
+     * @param exception Exception
+     */
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) {
+        log.error("WebSocket transport error for session {}: {}", 
+                session.getId(), exception.getMessage(), exception);
+    }
+    
+    /**
+     * Start recording a test
+     * 
+     * @param session WebSocket session
+     * @param sessionId Session ID
+     * @param configData Recording configuration data
+     */
+    @SuppressWarnings("unchecked")
+    private void startRecording(WebSocketSession session, String sessionId, Object configData) throws Exception {
+        log.info("Starting recording session for: {}", sessionId);
+        
+        // Get recording configuration
+        String browserType = "chrome"; // Default
+        String url = "https://example.com"; // Default
+        
+        if (configData != null) {
+            try {
+                Map<String, Object> config = (Map<String, Object>) configData;
+                if (config.containsKey("browser")) {
+                    browserType = (String) config.get("browser");
+                }
+                if (config.containsKey("url")) {
+                    url = (String) config.get("url");
+                }
+                
+                log.info("Recording configuration - browser: {}, url: {}", browserType, url);
+            } catch (Exception e) {
+                log.error("Error parsing recording configuration: {}", e.getMessage(), e);
+            }
+        }
+        
+        // Initialize recorder
+        TestRecorder recorder = new TestRecorder();
+        
+        try {
+            // Start recording with the provided configuration
+            recorder.startRecording(browserType, url);
+            recorders.put(sessionId, recorder);
+            
+            sendMessage(session, new RecorderMessage("RECORDING_STARTED", null));
+        } catch (Exception e) {
+            log.error("Failed to start recording: {}", e.getMessage(), e);
+            sendError(session, "Failed to start recording: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Stop recording and return test case
+     * 
+     * @param session WebSocket session
+     * @param sessionId Session ID
+     */
+    private void stopRecording(WebSocketSession session, String sessionId) throws Exception {
+        log.info("Stopping recording session for: {}", sessionId);
+        
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            TestCase testCase = recorder.stopRecording();
+            
+            // Enhance test case with AI
+            testCase = aiEngine.enhanceTestCase(testCase);
+            
+            sendMessage(session, new RecorderMessage("TEST_CASE", testCase));
+            
+            // Cleanup
+            recorders.remove(sessionId);
+        } else {
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Record an action
+     * 
+     * @param session WebSocket session
+     * @param sessionId Session ID
+     * @param actionData Action data
+     */
+    @SuppressWarnings("unchecked")
+    private void recordAction(WebSocketSession session, String sessionId, Object actionData) throws Exception {
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            try {
+                Map<String, String> data = (Map<String, String>) actionData;
+                
+                String actionType = data.get("action");
+                String element = data.get("element");
+                String value = data.get("value");
+                
+                Action action = new Action(ActionType.valueOf(actionType));
+                action.setValue(value);
+                
+                recorder.recordAction(action, element, value);
+                
+                // Send the recorded step back to client for display
+                RecordedStep step = recorder.getLastRecordedStep();
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+                
+            } catch (Exception e) {
+                log.error("Error recording action", e);
+                sendError(session, "Failed to record action: " + e.getMessage());
+            }
+        } else {
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Send a message to the WebSocket client
+     * 
+     * @param session WebSocket session
+     * @param msg Message to send
+     */
+    private void sendMessage(WebSocketSession session, RecorderMessage msg) {
+        try {
+            String json = objectMapper.writeValueAsString(msg);
+            session.sendMessage(new TextMessage(json));
+        } catch (IOException e) {
+            log.error("Error sending message to WebSocket client", e);
+        }
+    }
+    
+    /**
+     * Send an error message to the WebSocket client
+     * 
+     * @param session WebSocket session
+     * @param errorMessage Error message
+     */
+    private void sendError(WebSocketSession session, String errorMessage) {
+        log.warn("Sending error to client: {}", errorMessage);
+        sendMessage(session, new RecorderMessage("ERROR", errorMessage));
+    }
+}
+
+package com.cssmart.ui.config;
+
+import com.cssmart.ui.recorder.TestRecorderHandler;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.socket.config.annotation.EnableWebSocket;
+import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
+import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
+
+/**
+ * Spring WebSocket configuration
+ */
+@Configuration
+@EnableWebSocket
+public class WebSocketConfig implements WebSocketConfigurer {
+    
+    private final TestRecorderHandler testRecorderHandler;
+    
+    /**
+     * Create a new WebSocket configuration
+     * 
+     * @param testRecorderHandler Test recorder handler
+     */
+    @Autowired
+    public WebSocketConfig(TestRecorderHandler testRecorderHandler) {
+        this.testRecorderHandler = testRecorderHandler;
+    }
+    
+    /**
+     * Register WebSocket handlers
+     * 
+     * @param registry WebSocket handler registry
+     */
+    @Override
+    public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
+        registry.addHandler(testRecorderHandler, "/recorder")
+            .setAllowedOrigins("*"); // In production, you would restrict this
+    }
+}
+
+package com.cssmart.ui.server;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/**
+ * Main application server for the CS Smart Test Framework
+ */
+@SpringBootApplication
+@ComponentScan("com.cssmart")
+@EnableScheduling
+public class CSSmartTestServer {
+    
+    /**
+     * Main method to start the application
+     * 
+     * @param args Command line arguments
+     */
+    public static void main(String[] args) {
+        SpringApplication.run(CSSmartTestServer.class, args);
+    }
+    
+    /**
+     * Configure CORS
+     * 
+     * @return WebMvcConfigurer
+     */
+    @Bean
+    public WebMvcConfigurer corsConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/**")
+                    .allowedOrigins("*")
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS");
+            }
+        };
+    }
+}
+
+// src/main/webapp/src/components/recorder/RecorderConfig.jsx
+import React from 'react';
+
+/**
+ * Component for configuring the test recorder
+ */
+const RecorderConfig = ({ config, updateConfig, disabled }) => {
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Recording Configuration</h2>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-gray-700 mb-2">URL to test</label>
+          <input 
+            type="text" 
+            className="w-full px-3 py-2 border rounded-md"
+            placeholder="https://example.com"
+            value={config.url}
+            onChange={(e) => updateConfig({ ...config, url: e.target.value })}
+            disabled={disabled}
+          />
+        </div>
+        <div>
+          <label className="block text-gray-700 mb-2">Browser</label>
+          <select 
+            className="w-full px-3 py-2 border rounded-md"
+            value={config.browser}
+            onChange={(e) => updateConfig({ ...config, browser: e.target.value })}
+            disabled={disabled}
+          >
+            <option value="chrome">Chrome</option>
+            <option value="firefox">Firefox</option>
+            <option value="edge">Edge</option>
+            <option value="safari">Safari</option>
+          </select>
+        </div>
+        <div className="flex items-center">
+          <input 
+            type="checkbox" 
+            id="headless" 
+            className="mr-2"
+            checked={config.headless}
+            onChange={(e) => updateConfig({ ...config, headless: e.target.checked })}
+            disabled={disabled}
+          />
+          <label htmlFor="headless" className="text-gray-700">Run in headless mode</label>
+        </div>
+        <div>
+          <label className="block text-gray-700 mb-2">Timeout (seconds)</label>
+          <input 
+            type="number" 
+            className="w-full px-3 py-2 border rounded-md"
+            value={config.timeout}
+            onChange={(e) => updateConfig({ ...config, timeout: parseInt(e.target.value) })}
+            disabled={disabled}
+            min="1"
+            max="120"
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RecorderConfig;
+
+// src/main/webapp/src/components/recorder/TestCodeViewer.jsx
+import React from 'react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { dracula } from 'react-syntax-highlighter/dist/esm/styles/prism';
+
+/**
+ * Component for displaying generated test code
+ */
+const TestCodeViewer = ({ code }) => {
+  return (
+    <div className="bg-gray-900 rounded-lg">
+      <SyntaxHighlighter 
+        language="java" 
+        style={dracula}
+        showLineNumbers={true}
+        customStyle={{ margin: 0, borderRadius: '0.5rem', maxHeight: '500px', overflowY: 'auto' }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+};
+
+export default TestCodeViewer;
+
+// src/main/webapp/src/components/recorder/RecordedSteps.jsx
+import React from 'react';
+
+/**
+ * Component for displaying recorded test steps
+ */
+const RecordedSteps = ({ steps }) => {
+  if (!steps || steps.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold mb-4">Recorded Steps</h2>
+        <div className="text-gray-500 text-center py-8">
+          No steps recorded yet. Start recording to capture test steps.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Recorded Steps</h2>
+      <div className="space-y-2 max-h-80 overflow-y-auto">
+        {steps.map((step, index) => (
+          <div key={index} className="p-3 border rounded-lg flex items-center">
+            <div className="w-8 h-8 bg-indigo-100 text-indigo-800 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+              {index + 1}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium truncate">{step.action}</div>
+              <div className="text-sm text-gray-600 truncate">{step.description}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default RecordedSteps;
+
+// src/main/webapp/src/components/dashboard/MetricsCard.jsx
+import React from 'react';
+
+/**
+ * Component for displaying execution metrics
+ */
+const MetricsCard = ({ metrics }) => {
+  if (!metrics) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+            <div className="h-4 bg-gray-200 rounded col-span-1"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Execution Metrics</h2>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Total Tests</span>
+          <span className="text-2xl font-bold">{metrics.totalTests}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Pass Rate</span>
+          <span className="text-2xl font-bold">{metrics.successRate.toFixed(1)}%</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Passed</span>
+          <span className="text-2xl font-bold text-green-600">{metrics.passedTests}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Failed</span>
+          <span className="text-2xl font-bold text-red-600">{metrics.failedTests}</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Duration</span>
+          <span className="text-2xl font-bold">{(metrics.duration / 1000).toFixed(1)}s</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-gray-500 text-sm">Avg. Duration</span>
+          <span className="text-2xl font-bold">{(metrics.avgDuration / 1000).toFixed(1)}s</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MetricsCard;
+
+// src/main/webapp/src/components/dashboard/TrendsChart.jsx
+import React from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+/**
+ * Component for displaying execution trends
+ */
+const TrendsChart = ({ data }) => {
+  if (!data || data.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="h-48 bg-gray-200 rounded"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">Execution Trends</h2>
+      <div className="h-48">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="date" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Line type="monotone" dataKey="passed" stroke="#4ade80" activeDot={{ r: 8 }} />
+            <Line type="monotone" dataKey="failed" stroke="#f87171" />
+            <Line type="monotone" dataKey="total" stroke="#60a5fa" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+};
+
+export default TrendsChart;
+
+// src/main/webapp/src/components/dashboard/InsightsPanel.jsx
+import React from 'react';
+
+/**
+ * Component for displaying AI-generated insights
+ */
+const InsightsPanel = ({ insights }) => {
+  if (!insights || insights.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="space-y-3">
+          <div className="h-4 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded"></div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <h2 className="text-xl font-semibold mb-4">AI Insights</h2>
+      <div className="space-y-3">
+        {insights.map((insight, index) => (
+          <div key={index} className="p-3 border rounded-lg">
+            <h3 className="font-semibold">{insight.title}</h3>
+            <p className="text-gray-600">{insight.description}</p>
+            <div className="flex items-center mt-2">
+              <span 
+                className={`px-2 py-0.5 rounded-full text-xs font-medium ${getTypeColor(insight.type)}`}>
+                {insight.type}
+              </span>
+              <span className="ml-2 text-xs text-gray-500">
+                Confidence: {(insight.confidence * 100).toFixed(0)}%
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const getTypeColor = (type) => {
+  switch (type) {
+    case 'PERFORMANCE': return 'bg-blue-100 text-blue-800';
+    case 'RELIABILITY': return 'bg-green-100 text-green-800';
+    case 'STABILITY': return 'bg-yellow-100 text-yellow-800';
+    case 'COVERAGE': return 'bg-purple-100 text-purple-800';
+    case 'IMPROVEMENT': return 'bg-indigo-100 text-indigo-800';
+    default: return 'bg-gray-100 text-gray-800';
+  }
+};
+
+export default InsightsPanel;
+
+// src/main/webapp/src/components/dashboard/TestSummaryTable.jsx
+import React from 'react';
+
+/**
+ * Component for displaying a summary table of tests
+ */
+const TestSummaryTable = ({ tests }) => {
+  if (!tests || tests.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow p-6 animate-pulse">
+        <div className="h-4 bg-gray-200 rounded w-1/4 mb-4"></div>
+        <div className="space-y-3">
+          <div className="h-4 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded"></div>
+          <div className="h-4 bg-gray-200 rounded"></div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="px-6 py-4 border-b">
+        <h2 className="text-xl font-semibold">Recent Tests</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Test Name
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Status
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Duration
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Time
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {tests.map((test, index) => (
+              <tr key={index}>
+                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                  {test.name}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                    test.status === 'PASSED' ? 'bg-green-100 text-green-800' :
+                    test.status === 'FAILED' ? 'bg-red-100 text-red-800' :
+                    'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {test.status}
+                  </span>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {(test.duration / 1000).toFixed(2)}s
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {new Date(test.endTime).toLocaleString()}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <a href={`/reports/tests/${test.id}`} className="text-indigo-600 hover:text-indigo-900 mr-4">
+                    View
+                  </a>
+                  {test.status === 'FAILED' && (
+                    <a href={`/reports/screenshots/${test.screenshot}`} className="text-indigo-600 hover:text-indigo-900">
+                      Screenshot
+                    </a>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+export default TestSummaryTable;
+
+// src/main/webapp/src/components/generator/TestBuilder.jsx
+import React, { useState } from 'react';
+
+/**
+ * Component for building and editing test cases
+ */
+const TestBuilder = ({ test, onSave }) => {
+  const [steps, setSteps] = useState(test?.steps || []);
+  const [testName, setTestName] = useState(test?.name || 'New Test');
+  const [testDescription, setTestDescription] = useState(test?.description || 'Test description');
+  
+  const updateStep = (index, updatedStep) => {
+    const newSteps = [...steps];
+    newSteps[index] = { ...newSteps[index], ...updatedStep };
+    setSteps(newSteps);
+  };
+  
+  const addStep = () => {
+    setSteps([...steps, { 
+      action: '', 
+      element: '', 
+      value: '', 
+      description: 'New step',
+      timestamp: new Date().toISOString()
+    }]);
+  };
+  
+  const removeStep = (index) => {
+    const newSteps = [...steps];
+    newSteps.splice(index, 1);
+    setSteps(newSteps);
+  };
+  
+  const moveStepUp = (index) => {
+    if (index === 0) return;
+    const newSteps = [...steps];
+    const temp = newSteps[index];
+    newSteps[index] = newSteps[index - 1];
+    newSteps[index - 1] = temp;
+    setSteps(newSteps);
+  };
+  
+  const moveStepDown = (index) => {
+    if (index === steps.length - 1) return;
+    const newSteps = [...steps];
+    const temp = newSteps[index];
+    newSteps[index] = newSteps[index + 1];
+    newSteps[index + 1] = temp;
+    setSteps(newSteps);
+  };
+  
+  const saveTest = () => {
+    const updatedTest = {
+      ...(test || {}),
+      id: test?.id || `test_${Date.now()}`,
+      name: testName,
+      description: testDescription,
+      steps: steps,
+      className: test?.className || `Test${Date.now()}`,
+      methodName: test?.methodName || `test${Date.now()}`
+    };
+    
+    if (onSave) {
+      onSave(updatedTest);
+    }
+  };
+  
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold">Test Builder</h2>
+        <div className="space-x-2">
+          <button
+            className="px-3 py-1 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
+            onClick={addStep}
+          >
+            Add Step
+          </button>
+          <button
+            className="px-3 py-1 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            onClick={saveTest}
+          >
+            Save Test
+          </button>
+        </div>
+      </div>
+      
+      <div className="mb-4 space-y-4">
+        <div>
+          <label className="block text-gray-700 text-sm mb-1">Test Name</label>
+          <input
+            type="text"
+            className="w-full px-3 py-2 border rounded-md"
+            value={testName}
+            onChange={(e) => setTestName(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="block text-gray-700 text-sm mb-1">Description</label>
+          <textarea
+            className="w-full px-3 py-2 border rounded-md"
+            value={testDescription}
+            onChange={(e) => setTestDescription(e.target.value)}
+            rows={2}
+          ></textarea>
+        </div>
+      </div>
+      
+      <div className="space-y-4">
+        {steps.map((step, index) => (
+          <div key={index} className="p-4 border rounded-lg space-y-3">
+            <div className="flex justify-between items-center">
+              <div className="font-medium flex items-center">
+                <span className="w-8 h-8 bg-indigo-100 text-indigo-800 rounded-full flex items-center justify-center mr-3">
+                  {index + 1}
+                </span>
+                Step
+              </div>
+              <div className="flex space-x-2">
+                <button
+                  className="text-gray-600 hover:text-gray-800"
+                  onClick={() => moveStepUp(index)}
+                  disabled={index === 0}
+                >
+                  ↑
+                </button>
+                <button
+                  className="text-gray-600 hover:text-gray-800"
+                  onClick={() => moveStepDown(index)}
+                  disabled={index === steps.length - 1}
+                >
+                  ↓
+                </button>
+                <button
+                  className="text-red-600 hover:text-red-800"
+                  onClick={() => removeStep(index)}
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-gray-700 text-sm mb-1">Action</label>
+                <select
+                  className="w-full px-3 py-1 border rounded-md"
+                  value={step.action}
+                  onChange={(e) => updateStep(index, { action: e.target.value })}
+                >
+                  <option value="">Select Action</option>
+                  <option value="NAVIGATE">Navigate</option>
+                  <option value="CLICK">Click</option>
+                  <option value="TYPE">Type</option>
+                  <option value="SELECT">Select</option>
+                  <option value="VERIFY_PRESENCE">Verify Presence</option>
+                  <option value="VERIFY_TEXT">Verify Text</option>
+                  <option value="VERIFY_VISIBILITY">Verify Visibility</option>
+                  <option value="WAIT">Wait</option>
+                </select>
+              </div>
+              
+              {step.action !== 'NAVIGATE' && (
+                <div>
+                  <label className="block text-gray-700 text-sm mb-1">Element</label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-1 border rounded-md"
+                    placeholder="Element Description"
+                    value={step.element || ''}
+                    onChange={(e) => updateStep(index, { element: e.target.value })}
+                  />
+                </div>
+              )}
+              
+              {(step.action === 'NAVIGATE' || step.action === 'TYPE' || 
+                step.action === 'SELECT' || step.action === 'VERIFY_TEXT') && (
+                <div className={step.action === 'NAVIGATE' ? "md:col-span-2" : "md:col-span-1"}>
+                  <label className="block text-gray-700 text-sm mb-1">
+                    {step.action === 'NAVIGATE' ? 'URL' : 'Value'}
+                  </label>
+                  <input
+                    type="text"
+                    className="w-full px-3 py-1 border rounded-md"
+                    placeholder={step.action === 'NAVIGATE' ? 'https://example.com' : 'Value'}
+                    value={step.value || ''}
+                    onChange={(e) => updateStep(index, { value: e.target.value })}
+                  />
+                </div>
+              )}
+              
+              <div className="md:col-span-2">
+                <label className="block text-gray-700 text-sm mb-1">Description</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-1 border rounded-md"
+                  placeholder="Step description"
+                  value={step.description || ''}
+                  onChange={(e) => updateStep(index, { description: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+        ))}
+        
+        {steps.length === 0 && (
+          <div className="text-center py-8 border rounded-lg text-gray-500">
+            No steps added yet. Click "Add Step" to start building your test.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default TestBuilder;
+
+// src/main/webapp/src/components/generator/TestGenerator.jsx
+import React, { useState } from 'react';
+import TestBuilder from './TestBuilder';
+import TestCodeViewer from '../recorder/TestCodeViewer';
+
+/**
+ * Component for generating tests from descriptions
+ */
+const TestGenerator = () => {
+  const [description, setDescription] = useState('');
+  const [generatedTest, setGeneratedTest] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [viewMode, setViewMode] = useState('builder'); // 'builder' or 'code'
+  
+  const generateTest = () => {
+    if (!description) return;
+    
+    setIsGenerating(true);
+    
+    // Call the API to generate the test
+    fetch('/api/generator/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ description }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        setGeneratedTest(data);
+        setIsGenerating(false);
+      })
+      .catch(err => {
+        console.error('Error generating test:', err);
+        setIsGenerating(false);
+      });
+  };
+  
+  const saveTest = (test) => {
+    fetch('/api/generator/save', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(test),
+    })
+      .then(res => res.json())
+      .then(data => {
+        console.log('Test saved:', data);
+        alert('Test saved successfully!');
+      })
+      .catch(err => {
+        console.error('Error saving test:', err);
+        alert('Failed to save test.');
+      });
+  };
+  
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold">Test Generator</h1>
+      
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold mb-4">Describe Test Scenario</h2>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-gray-700 mb-2">Test Description</label>
+            <textarea
+              className="w-full px-3 py-2 border rounded-md h-32"
+              placeholder="Describe what you want to test, e.g. 'Navigate to login page, enter valid credentials, and verify successful login'"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            ></textarea>
+          </div>
+          <button
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-indigo-300"
+            onClick={generateTest}
+            disabled={!description || isGenerating}
+          >
+            {isGenerating ? 'Generating...' : 'Generate Test'}
+          </button>
+        </div>
+      </div>
+      
+      {generatedTest && (
+        <div>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold">Generated Test</h2>
+            <div className="flex bg-gray-200 rounded-md overflow-hidden">
+              <button
+                className={`px-4 py-2 ${viewMode === 'builder' ? 'bg-indigo-600 text-white' : 'text-gray-700'}`}
+                onClick={() => setViewMode('builder')}
+              >
+                Builder
+              </button>
+              <button
+                className={`px-4 py-2 ${viewMode === 'code' ? 'bg-indigo-600 text-white' : 'text-gray-700'}`}
+                onClick={() => setViewMode('code')}
+              >
+                Code
+              </button>
+            </div>
+          </div>
+          
+          {viewMode === 'builder' ? (
+            <TestBuilder test={generatedTest} onSave={saveTest} />
+          ) : (
+            <TestCodeViewer code={generatedTest.code} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TestGenerator;
+
+// src/main/webapp/src/components/dashboard/Dashboard.jsx
+import React, { useState, useEffect } from 'react';
+import MetricsCard from './MetricsCard';
+import TrendsChart from './TrendsChart';
+import InsightsPanel from './InsightsPanel';
+import TestSummaryTable from './TestSummaryTable';
+
+/**
+ * Main dashboard component
+ */
+const Dashboard = () => {
+  const [metrics, setMetrics] = useState(null);
+  const [trends, setTrends] = useState([]);
+  const [tests, setTests] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  useEffect(() => {
+    // Fetch dashboard data
+    const fetchData = async () => {
+      setIsLoading(true);
+      try {
+        // Fetch metrics
+        const metricsResponse = await fetch('/api/dashboard/metrics');
+        const metricsData = await metricsResponse.json();
+        setMetrics(metricsData);
+        
+        // Fetch trends
+        const trendsResponse = await fetch('/api/dashboard/trends');
+        const trendsData = await trendsResponse.json();
+        setTrends(trendsData);
+        
+        // Fetch recent tests
+        const testsResponse = await fetch('/api/dashboard/tests');
+        const testsData = await testsResponse.json();
+        setTests(testsData);
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchData();
+    
+    // Set up polling for updates
+    const interval = setInterval(fetchData, 30000); // Update every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, []);
+  
+  if (isLoading && !metrics) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold">Dashboard</h1>
+        <div className="text-center py-20">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-indigo-500 border-t-transparent"></div>
+          <p className="mt-4 text-gray-600">Loading dashboard data...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-semibold">Dashboard</h1>
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <MetricsCard metrics={metrics} />
+        <TrendsChart data={trends} />
+        <InsightsPanel insights={metrics?.insights || []} />
+      </div>
+      
+      <TestSummaryTable tests={tests} />
+    </div>
+  );
+};
+
+export default Dashboard;
+
+// src/main/webapp/src/services/recorderService.js
+/**
+ * Service for communicating with the test recorder
+ */
+class RecorderService {
+  constructor() {
+    this.socket = null;
+    this.callbacks = {
+      onConnect: null,
+      onDisconnect: null,
+      onRecordingStarted: null,
+      onStepRecorded: null,
+      onTestCase: null,
+      onError: null
+    };
+    this.config = {
+      url: 'https://example.com',
+      browser: 'chrome',
+      headless: false,
+      timeout: 30
+    };
+  }
+  
+  /**
+   * Set recording configuration
+   */
+  setConfig(config) {
+    this.config = { ...this.config, ...config };
+  }
+  
+  /**
+   * Connect to the recorder WebSocket
+   */
+  connect() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      return true;
+    }
+    
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/recorder`;
+    
+    try {
+      this.socket = new WebSocket(wsUrl);
+      
+      this.socket.onopen = () => {
+        console.log('Recorder WebSocket connected');
+        if (this.callbacks.onConnect) {
+          this.callbacks.onConnect();
+        }
+      };
+      
+      this.socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          this.handleMessage(message);
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
+        }
+      };
+      
+      this.socket.onerror = (error) => {
+        console.error('Recorder WebSocket error:', error);
+        if (this.callbacks.onError) {
+          this.callbacks.onError(error);
+        }
+      };
+      
+      this.socket.onclose = () => {
+        console.log('Recorder WebSocket disconnected');
+        if (this.callbacks.onDisconnect) {
+          this.callbacks.onDisconnect();
+        }
+      };
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to connect to Recorder WebSocket:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Disconnect from the recorder WebSocket
+   */
+  disconnect() {
+    if (this.socket) {
+      this.socket.close();
+      this.socket = null;
+    }
+  }
+  
+  /**
+   * Start recording a test
+   */
+  startRecording() {
+    return this.sendMessage({ 
+      type: 'START_RECORDING',
+      data: this.config 
+    });
+  }
+  
+  /**
+   * Stop recording
+   */
+  stopRecording() {
+    return this.sendMessage({ type: 'STOP_RECORDING' });
+  }
+  
+  /**
+   * Record an action
+   */
+  recordAction(action) {
+    return this.sendMessage({ type: 'ACTION', data: action });
+  }
+  
+  /**
+   * Send a message through the WebSocket
+   */
+  sendMessage(message) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      console.error('WebSocket is not connected');
+      return false;
+    }
+    
+    try {
+      this.socket.send(JSON.stringify(message));
+      return true;
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      return false;
+    }
+  }
+  
+  /**
+   * Handle incoming messages
+   */
+  handleMessage(message) {
+    switch (message.type) {
+      case 'RECORDING_STARTED':
+        if (this.callbacks.onRecordingStarted) {
+          this.callbacks.onRecordingStarted();
+        }
+        break;
+      case 'STEP_RECORDED':
+        if (this.callbacks.onStepRecorded) {
+          this.callbacks.onStepRecorded(message.data);
+        }
+        break;
+      case 'TEST_CASE':
+        if (this.callbacks.onTestCase) {
+          this.callbacks.onTestCase(message.data);
+        }
+        break;
+      case 'ERROR':
+        if (this.callbacks.onError) {
+          this.callbacks.onError(message.data);
+        }
+        break;
+      default:
+        console.warn('Unknown message type:', message.type);
+    }
+  }
+  
+  /**
+   * Set callbacks for recorder events
+   */
+  setCallbacks(callbacks) {
+    this.callbacks = { ...this.callbacks, ...callbacks };
+  }
+}
+
+// Create a singleton instance
+const recorderService = new RecorderService();
+export default recorderService;
+
+// src/main/webapp/src/context/NotificationContext.jsx
+import React, { createContext, useState, useContext, useEffect } from 'react';
+
+const NotificationContext = createContext();
+
+/**
+ * Provider for global notifications
+ */
+export const NotificationProvider = ({ children }) => {
+  const [notifications, setNotifications] = useState([]);
+  
+  const addNotification = (message, type = 'info', duration = 5000) => {
+    const id = Date.now();
+    setNotifications(prev => [...prev, { id, message, type, duration }]);
+  };
+  
+  const removeNotification = (id) => {
+    setNotifications(prev => prev.filter(notification => notification.id !== id));
+  };
+  
+  // Auto-remove notifications after their duration
+  useEffect(() => {
+    const timers = notifications.map(notification => {
+      return setTimeout(() => {
+        removeNotification(notification.id);
+      }, notification.duration);
+    });
+    
+    return () => {
+      timers.forEach(timer => clearTimeout(timer));
+    };
+  }, [notifications]);
+  
+  return (
+    <NotificationContext.Provider value={{ notifications, addNotification, removeNotification }}>
+      {children}
+      <div className="fixed bottom-0 right-0 p-4 space-y-2 max-w-sm">
+        {notifications.map(notification => (
+          <div 
+            key={notification.id}
+            className={`p-4 rounded-md shadow-md ${
+              notification.type === 'success' ? 'bg-green-100 text-green-800' :
+              notification.type === 'error' ? 'bg-red-100 text-red-800' :
+              notification.type === 'warning' ? 'bg-yellow-100 text-yellow-800' :
+              'bg-blue-100 text-blue-800'
+            } flex justify-between items-start`}
+          >
+            <div>{notification.message}</div>
+            <button 
+              onClick={() => removeNotification(notification.id)}
+              className="ml-4 text-gray-500 hover:text-gray-700"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    </NotificationContext.Provider>
+  );
+};
+
+/**
+ * Hook for using notifications
+ */
+export const useNotification = () => {
+  const context = useContext(NotificationContext);
+  if (!context) {
+    throw new Error('useNotification must be used within a NotificationProvider');
+  }
+  return context;
+};
+
+// src/main/webapp/src/App.jsx (Enhanced Version)
+import React from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Navbar from './components/common/Navbar';
+import Sidebar from './components/common/Sidebar';
+import Dashboard from './components/dashboard/Dashboard';
+import TestRecorder from './components/recorder/TestRecorder';
+import TestGenerator from './components/generator/TestGenerator';
+import { NotificationProvider } from './context/NotificationContext';
+
+const App = () => {
+  return (
+    <NotificationProvider>
+      <BrowserRouter>
+        <div className="flex h-screen bg-gray-100">
+          <Sidebar />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <Navbar />
+            <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-4">
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/recorder" element={<TestRecorder />} />
+                <Route path="/generator" element={<TestGenerator />} />
+                {/* Add more routes as needed */}
+              </Routes>
+            </main>
+          </div>
+        </div>
+      </BrowserRouter>
+    </NotificationProvider>
+  );
+};
+
+export default App;
+
+
+
