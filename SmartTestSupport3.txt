@@ -8020,7 +8020,6 @@ public class TestRecorder {
     }
 }
 
-
 package com.cssmart.ui.controller;
 
 import com.cssmart.ai.engine.model.Action;
@@ -8069,7 +8068,21 @@ public class RecorderEventController {
             String value = payload.get("value");
             
             if (actionType == null || element == null) {
-                return ResponseEntity.badRequest().body("Missing required parameters");package com.cssmart.ui.recorder;
+                return ResponseEntity.badRequest().body("Missing required parameters");
+            }
+            
+            // Forward the event to the appropriate recorder
+            testRecorderHandler.handleBrowserEvent(actionType, element, value);
+            
+            return ResponseEntity.ok("Event recorded");
+        } catch (Exception e) {
+            log.error("Error processing browser event", e);
+            return ResponseEntity.status(500).body("Error processing event: " + e.getMessage());
+        }
+    }
+}
+
+package com.cssmart.ui.recorder;
 
 import com.cssmart.ai.engine.AIEngine;
 import com.cssmart.ai.engine.model.Action;
@@ -8330,18 +8343,6 @@ public class TestRecorderHandler extends TextWebSocketHandler {
     private void sendError(WebSocketSession session, String errorMessage) {
         log.warn("Sending error to client: {}", errorMessage);
         sendMessage(session, new RecorderMessage("ERROR", errorMessage));
-    }
-}
-            }
-            
-            // Forward the event to the appropriate recorder
-            testRecorderHandler.handleBrowserEvent(actionType, element, value);
-            
-            return ResponseEntity.ok("Event recorded");
-        } catch (Exception e) {
-            log.error("Error processing browser event", e);
-            return ResponseEntity.status(500).body("Error processing event: " + e.getMessage());
-        }
     }
 }
 
