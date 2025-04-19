@@ -7660,135 +7660,94 @@ public class TestRecorder {
      * Inject JavaScript code to capture user actions in the browser
      */
     private void injectRecorderScript() {
-        if (driver instanceof JavascriptExecutor) {
-            try {
-                JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+    if (driver instanceof JavascriptExecutor) {
+        try {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Create a session ID for this recording session
+            String sessionId = UUID.randomUUID().toString();
+            
+            // Simple recorder script with careful syntax checking
+            String recorderScript = 
+                "window.csSmartRecorderSessionId = '" + sessionId + "';" +
+                "window.csSmartRecorderActive = true;" +
+                "window.csSmartRecorderEvents = [];" +
                 
-                // Get the contextPath to ensure proper endpoint URLs
-                String contextPath = "";  // Replace with actual context path if needed
+                "window.csSmartRecorder = {" +
+                "  sendEvent: function(actionType, element, value) {" +
+                "    var xhr = new XMLHttpRequest();" +
+                "    xhr.open('POST', '/api/recorder/event', true);" +
+                "    xhr.setRequestHeader('Content-Type', 'application/json');" +
+                "    xhr.onreadystatechange = function() {" +
+                "      if (xhr.readyState === 4) {" +
+                "        console.log('Event sent: ' + actionType + ', Status: ' + xhr.status);" +
+                "      }" +
+                "    };" +
+                "    var data = JSON.stringify({" +
+                "      sessionId: window.csSmartRecorderSessionId," +
+                "      actionType: actionType," +
+                "      element: element," +
+                "      value: value" +
+                "    });" +
+                "    xhr.send(data);" +
+                "    console.log('Sending event: ' + actionType + ' on ' + element);" +
+                "  }," +
                 
-                // Enhance script for more comprehensive event capturing
-                String recorderScript = 
-                    "console.log('Injecting CS Smart recorder...');" +
-                    "window.csSmartRecorderSessionId = '" + sessionId + "';" +
-                    
-                    // Setup a simple function to send events
-                    "function sendRecorderEvent(eventType, selector, value) {" +
-                    "  try {" +
-                    "    console.log('Sending event:', eventType, selector, value);" +
-                    "    var xhr = new XMLHttpRequest();" +
-                    "    xhr.open('POST', '" + contextPath + "/api/recorder/event', true);" +
-                    "    xhr.setRequestHeader('Content-Type', 'application/json');" +
-                    "    xhr.onreadystatechange = function() {" +
-                    "      if (xhr.readyState === 4) {" +
-                    "        if (xhr.status === 200) {" +
-                    "          console.log('Event recorded successfully');" +
-                    "        } else {" +
-                    "          console.error('Failed to record event, status:', xhr.status);" +
-                    "        }" +
-                    "      }" +
-                    "    };" +
-                    "    var data = JSON.stringify({" +
-                    "      action: eventType," +
-                    "      element: selector," +
-                    "      value: value" +
-                    "    });" +
-                    "    xhr.send(data);" +
-                    "  } catch(e) {" +
-                    "    console.error('Error sending event:', e.message);" +
-                    "  }" +
-                    "}" +
-                    
-                    // Function to get a better selector for an element
-                    "function getElementSelector(element) {" +
-                    "  if (!element) return '';" +
-                    "  if (element.id) return '#' + element.id;" +
-                    "  if (element.name) return '[name=\"' + element.name + '\"]';" +
-                    "  " +
-                    "  // Try to build a better selector with tagName and attributes" +
-                    "  var tagName = element.tagName.toLowerCase();" +
-                    "  var selector = tagName;" +
-                    "  " +
-                    "  // Add class information if available" +
-                    "  if (element.className && typeof element.className === 'string' && element.className.trim() !== '') {" +
-                    "    var cleanClass = element.className.trim().replace(/\\s+/g, '.');" +
-                    "    selector += '.' + cleanClass;" +
-                    "  }" +
-                    "  " +
-                    "  // Add text content for links and buttons" +
-                    "  if ((tagName === 'a' || tagName === 'button') && element.textContent) {" +
-                    "    var text = element.textContent.trim();" +
-                    "    if (text) {" +
-                    "      selector += '[contains(text(),\"' + text + '\")]';" +
-                    "    }" +
-                    "  }" +
-                    "  " +
-                    "  return selector;" +
-                    "}" +
-                    
-                    // Click handler
-                    "document.addEventListener('click', function(e) {" +
-                    "  var element = e.target;" +
-                    "  var selector = getElementSelector(element);" +
-                    "  sendRecorderEvent('CLICK', selector, '');" +
-                    "}, true);" +
-                    
-                    // Input handler for text input
-                    "document.addEventListener('input', function(e) {" +
-                    "  var element = e.target;" +
-                    "  if (element.tagName && element.tagName.toLowerCase() === 'input') {" +
-                    "    var selector = getElementSelector(element);" +
-                    "    var value = element.value || '';" +
-                    "    sendRecorderEvent('TYPE', selector, value);" +
-                    "  }" +
-                    "}, true);" +
-                    
-                    // Change handler for select, checkbox, radio
-                    "document.addEventListener('change', function(e) {" +
-                    "  var element = e.target;" +
-                    "  var selector = getElementSelector(element);" +
-                    "  var tagName = element.tagName ? element.tagName.toLowerCase() : '';" +
-                    "  " +
-                    "  if (tagName === 'select') {" +
-                    "    var selectedIndex = element.selectedIndex;" +
-                    "    if (selectedIndex >= 0) {" +
-                    "      var value = element.options[selectedIndex].text;" +
-                    "      sendRecorderEvent('SELECT', selector, value);" +
-                    "    }" +
-                    "  } else if (tagName === 'input') {" +
-                    "    var type = element.type ? element.type.toLowerCase() : '';" +
-                    "    if (type === 'checkbox' || type === 'radio') {" +
-                    "      var value = element.checked ? 'checked' : 'unchecked';" +
-                    "      sendRecorderEvent('CLICK', selector, value);" +
-                    "    }" +
-                    "  }" +
-                    "}, true);" +
-                    
-                    // Submit handler for forms
-                    "document.addEventListener('submit', function(e) {" +
-                    "  var element = e.target;" +
-                    "  var selector = getElementSelector(element);" +
-                    "  sendRecorderEvent('SUBMIT', selector, '');" +
-                    "}, true);" +
-                    
-                    "console.log('CS Smart recorder activated, watching for user actions');" +
-                    "sendRecorderEvent('INITIALIZE', 'window', 'Recording started');";  // Test event
+                "  getElementSelector: function(element) {" +
+                "    if (!element) return 'unknown';" +
+                "    if (element.id) return '#' + element.id;" +
+                "    if (element.name) return '[name=\"' + element.name + '\"]';" +
+                "    var selector = element.tagName.toLowerCase();" +
+                "    if (element.className) {" +
+                "      var classes = element.className.split(' ');" +
+                "      for (var i = 0; i < classes.length; i++) {" +
+                "        if (classes[i]) {" +
+                "          selector += '.' + classes[i];" +
+                "        }" +
+                "      }" +
+                "    }" +
+                "    return selector;" +
+                "  }" +
+                "};" +
                 
-                jsExecutor.executeScript(recorderScript);
-                log.info("Recorder script injected successfully");
+                // Click handler
+                "document.addEventListener('click', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.csSmartRecorder.getElementSelector(e.target);" +
+                "  window.csSmartRecorder.sendEvent('CLICK', selector, '');" +
+                "}, true);" +
                 
-                // Add an additional execution to check if the recorder is working
-                String testScript = "return 'Recorder Status: ' + (window.csSmartRecorderSessionId ? 'Active' : 'Inactive');";
-                String status = (String) jsExecutor.executeScript(testScript);
-                log.info(status);
+                // Input handler
+                "document.addEventListener('input', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.csSmartRecorder.getElementSelector(e.target);" +
+                "  window.csSmartRecorder.sendEvent('TYPE', selector, e.target.value);" +
+                "}, true);" +
                 
-            } catch (Exception e) {
-                log.error("Failed to inject recorder script: {}", e.getMessage(), e);
-            }
-        } else {
-            log.error("Driver does not support JavaScript execution");
+                // Change handler (for select elements)
+                "document.addEventListener('change', function(e) {" +
+                "  if (!window.csSmartRecorderActive) return;" +
+                "  var selector = window.csSmartRecorder.getElementSelector(e.target);" +
+                "  if (e.target.tagName.toLowerCase() === 'select') {" +
+                "    window.csSmartRecorder.sendEvent('SELECT', selector, e.target.value);" +
+                "  }" +
+                "}, true);" +
+                
+                // Send init event to verify recorder is working
+                "window.csSmartRecorder.sendEvent('INIT', 'recorder', 'initialized');";
+            
+            // Execute the script
+            jsExecutor.executeScript(recorderScript);
+            
+            log.info("Recorder script injected successfully with session ID: {}", sessionId);
+            
+        } catch (Exception e) {
+            log.error("Failed to inject recorder script: {}", e.getMessage(), e);
         }
+    } else {
+        log.error("Driver does not support JavaScript execution");
     }
+}
     
     private void initializeBrowser(String browserType) {
         try {
