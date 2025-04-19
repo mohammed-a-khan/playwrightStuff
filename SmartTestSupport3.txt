@@ -7965,18 +7965,27 @@ public class TestRecorder {
                 case "chrome":
                     WebDriverManager.chromedriver().setup();
                     ChromeOptions chromeOptions = new ChromeOptions();
-                    chromeOptions.setHeadless(headless);
+                    // Correct syntax for headless in newer Selenium versions
+                    if (headless) {
+                        chromeOptions.addArguments("--headless=new");
+                    }
                     driver = new ChromeDriver(chromeOptions);
                     break;
                 case "firefox":
                     WebDriverManager.firefoxdriver().setup();
                     FirefoxOptions firefoxOptions = new FirefoxOptions();
-                    firefoxOptions.setHeadless(headless);
+                    if (headless) {
+                        firefoxOptions.addArguments("-headless");
+                    }
                     driver = new FirefoxDriver(firefoxOptions);
                     break;
                 case "edge":
                     WebDriverManager.edgedriver().setup();
                     EdgeOptions edgeOptions = new EdgeOptions();
+                    // Edge headless mode
+                    if (headless) {
+                        edgeOptions.addArguments("--headless");
+                    }
                     driver = new EdgeDriver(edgeOptions);
                     break;
                 case "safari":
@@ -7986,7 +7995,9 @@ public class TestRecorder {
                     log.warn("Unsupported browser type: {}. Defaulting to Chrome.", browserType);
                     WebDriverManager.chromedriver().setup();
                     ChromeOptions defaultOptions = new ChromeOptions();
-                    defaultOptions.setHeadless(headless);
+                    if (headless) {
+                        defaultOptions.addArguments("--headless=new");
+                    }
                     driver = new ChromeDriver(defaultOptions);
             }
             
@@ -8072,7 +8083,7 @@ public class TestRecorder {
                     "      if (!window.csSmartRecorderActive) return;" +
                     "      window.csSmartRecorder.debug('Form submission detected');" +
                     "      var selector = window.csSmartRecorder.getElementSelector(e.target);" +
-                    "      window.csSmartRecorder.sendEvent('SUBMIT', selector, '');" +
+                    "      window.csSmartRecorder.sendEvent('SUBMIT_FORM', selector, '');" +
                     "    }, true);" +
                     "  }" +
                     "};" +
@@ -8158,9 +8169,11 @@ public class TestRecorder {
                 return "Hover over " + element;
             case NAVIGATE:
                 return "Navigate to " + value;
-            case SUBMIT:
-                return "Submit form " + element;
+            // No SUBMIT in ActionType enum, handle it differently
             default:
+                if (actionType.toString().equals("SUBMIT_FORM")) {
+                    return "Submit form " + element;
+                }
                 return actionType + " on " + element;
         }
     }
@@ -8235,7 +8248,7 @@ public class TestRecorder {
                     .append(step.getElement()).append("\");\n");
                 code.append("        Assert.assertTrue(element.isDisplayed(), \"")
                     .append(step.getElement()).append(" should be present\");\n");
-            } else if ("SUBMIT".equals(step.getAction())) {
+            } else if ("SUBMIT_FORM".equals(step.getAction())) {
                 code.append("        WebElement form = elementFinder.findElement(\"")
                     .append(step.getElement()).append("\");\n");
                 code.append("        form.submit();\n");
