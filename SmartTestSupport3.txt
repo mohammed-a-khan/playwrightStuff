@@ -8612,104 +8612,117 @@ public class TestRecorder {
     }
     
     private String getInlineRecorderScript() {
-        // If the external script can't be loaded, use this inline version
-        return "var sessionId = arguments[0];\n" +
-            "window.csRecorder = {\n" +
-            "    sessionId: sessionId,\n" +
-            "    active: true,\n" +
-            "    \n" +
-            "    init: function() {\n" +
-            "        console.log('CS Smart Recorder initialized with session ID: ' + this.sessionId);\n" +
-            "        this.setupEventListeners();\n" +
-            "        // Send a test event to verify connection\n" +
-            "        this.sendEvent('INIT', 'page', 'initialized');\n" +
-            "    },\n" +
-            "    \n" +
-            "    sendEvent: function(type, element, value) {\n" +
-            "        if (!this.active) return;\n" +
-            "        \n" +
-            "        console.log('Recording: ' + type + ' on ' + element);\n" +
-            "        \n" +
-            "        var xhr = new XMLHttpRequest();\n" +
-            "        xhr.open('POST', '/api/recorder/event', true);\n" +
-            "        xhr.setRequestHeader('Content-Type', 'application/json');\n" +
-            "        \n" +
-            "        xhr.onreadystatechange = function() {\n" +
-            "            if (xhr.readyState === 4) {\n" +
-            "                if (xhr.status === 200) {\n" +
-            "                    console.log('Event recorded successfully');\n" +
-            "                } else {\n" +
-            "                    console.error('Failed to record event: ' + xhr.status);\n" +
-            "                }\n" +
-            "            }\n" +
-            "        };\n" +
-            "        \n" +
-            "        xhr.send(JSON.stringify({\n" +
-            "            sessionId: this.sessionId,\n" +
-            "            actionType: type,\n" +
-            "            element: element,\n" +
-            "            value: value || ''\n" +
-            "        }));\n" +
-            "    },\n" +
-            "    \n" +
-            "    getElementInfo: function(element) {\n" +
-            "        if (!element) return 'unknown';\n" +
-            "        \n" +
-            "        if (element.id) {\n" +
-            "            return '#' + element.id;\n" +
-            "        }\n" +
-            "        \n" +
-            "        if (element.name) {\n" +
-            "            return '[name=\"' + element.name + '\"]';\n" +
-            "        }\n" +
-            "        \n" +
-            "        // Try to create a more specific selector\n" +
-            "        var selector = element.tagName.toLowerCase();\n" +
-            "        \n" +
-            "        if (element.className) {\n" +
-            "            var classList = element.className.split(/\\s+/);\n" +
-            "            for (var i = 0; i < classList.length; i++) {\n" +
-            "                if (classList[i]) {\n" +
-            "                    selector += '.' + classList[i];\n" +
-            "                }\n" +
-            "            }\n" +
-            "        }\n" +
-            "        \n" +
-            "        return selector;\n" +
-            "    },\n" +
-            "    \n" +
-            "    setupEventListeners: function() {\n" +
-            "        var self = this;\n" +
-            "        \n" +
-            "        // Click events\n" +
-            "        document.addEventListener('click', function(e) {\n" +
-            "            var selector = self.getElementInfo(e.target);\n" +
-            "            self.sendEvent('CLICK', selector, '');\n" +
-            "        }, true);\n" +
-            "        \n" +
-            "        // Input events for text fields\n" +
-            "        document.addEventListener('change', function(e) {\n" +
-            "            if (e.target.tagName.toLowerCase() === 'input' ||\n" +
-            "                e.target.tagName.toLowerCase() === 'textarea') {\n" +
-            "                var selector = self.getElementInfo(e.target);\n" +
-            "                self.sendEvent('TYPE', selector, e.target.value);\n" +
-            "            } else if (e.target.tagName.toLowerCase() === 'select') {\n" +
-            "                var selector = self.getElementInfo(e.target);\n" +
-            "                self.sendEvent('SELECT', selector, e.target.value);\n" +
-            "            }\n" +
-            "        }, true);\n" +
-            "        \n" +
-            "        // Form submission\n" +
-            "        document.addEventListener('submit', function(e) {\n" +
-            "            var selector = self.getElementInfo(e.target);\n" +
-            "            self.sendEvent('SUBMIT', selector, '');\n" +
-            "        }, true);\n" +
-            "    }\n" +
-            "};\n" +
-            "\n" +
-            "// Initialize the recorder\n" +
-            "window.csRecorder.init();";
-    }
+    // Get the current URL's origin from the driver
+    String origin = ((JavascriptExecutor) driver).executeScript("return window.location.origin").toString();
+    // Use relative path if we can't determine the origin
+    String apiUrl = origin != null ? origin + "/api/recorder/event" : "/api/recorder/event";
+    
+    // If the external script can't be loaded, use this inline version
+    return "var sessionId = arguments[0];\n" +
+        "var apiUrl = '" + apiUrl + "';\n" +  // Add the API URL as a variable
+        "window.csRecorder = {\n" +
+        "    sessionId: sessionId,\n" +
+        "    active: true,\n" +
+        "    \n" +
+        "    init: function() {\n" +
+        "        console.log('CS Smart Recorder initialized with session ID: ' + this.sessionId);\n" +
+        "        console.log('Using API URL: ' + apiUrl);\n" +
+        "        this.setupEventListeners();\n" +
+        "        // Send a test event to verify connection\n" +
+        "        this.sendEvent('INIT', 'page', 'initialized');\n" +
+        "    },\n" +
+        "    \n" +
+        "    sendEvent: function(type, element, value) {\n" +
+        "        if (!this.active) return;\n" +
+        "        \n" +
+        "        console.log('Recording: ' + type + ' on ' + element);\n" +
+        "        \n" +
+        "        var xhr = new XMLHttpRequest();\n" +
+        "        xhr.open('POST', apiUrl, true);\n" +  // Use the variable instead of hardcoded path
+        "        xhr.setRequestHeader('Content-Type', 'application/json');\n" +
+        "        \n" +
+        "        xhr.onreadystatechange = function() {\n" +
+        "            if (xhr.readyState === 4) {\n" +
+        "                if (xhr.status === 200) {\n" +
+        "                    console.log('Event recorded successfully');\n" +
+        "                } else {\n" +
+        "                    console.error('Failed to record event: ' + xhr.status);\n" +
+        "                }\n" +
+        "            }\n" +
+        "        };\n" +
+        "        \n" +
+        "        xhr.send(JSON.stringify({\n" +
+        "            sessionId: this.sessionId,\n" +
+        "            actionType: type,\n" +
+        "            element: element,\n" +
+        "            value: value || ''\n" +
+        "        }));\n" +
+        "    },\n" +
+        "    \n" +
+        "    getElementInfo: function(element) {\n" +
+        "        if (!element) return 'unknown';\n" +
+        "        \n" +
+        "        if (element.id) {\n" +
+        "            return '#' + element.id;\n" +
+        "        }\n" +
+        "        \n" +
+        "        if (element.name) {\n" +
+        "            return '[name=\"' + element.name + '\"]';\n" +
+        "        }\n" +
+        "        \n" +
+        "        // Try to create a more specific selector\n" +
+        "        var selector = element.tagName.toLowerCase();\n" +
+        "        \n" +
+        "        // Fix className.split error by checking if className is a string\n" +
+        "        if (element.className && typeof element.className === 'string') {\n" +
+        "            var classList = element.className.split(/\\s+/);\n" +
+        "            for (var i = 0; i < classList.length; i++) {\n" +
+        "                if (classList[i]) {\n" +
+        "                    selector += '.' + classList[i];\n" +
+        "                }\n" +
+        "            }\n" +
+        "        } else if (element.classList && element.classList.length) {\n" +
+        "            // Alternative approach using classList\n" +
+        "            for (var i = 0; i < element.classList.length; i++) {\n" +
+        "                selector += '.' + element.classList[i];\n" +
+        "            }\n" +
+        "        }\n" +
+        "        \n" +
+        "        return selector;\n" +
+        "    },\n" +
+        "    \n" +
+        "    setupEventListeners: function() {\n" +
+        "        var self = this;\n" +
+        "        \n" +
+        "        // Click events\n" +
+        "        document.addEventListener('click', function(e) {\n" +
+        "            var selector = self.getElementInfo(e.target);\n" +
+        "            self.sendEvent('CLICK', selector, '');\n" +
+        "        }, true);\n" +
+        "        \n" +
+        "        // Input events for text fields\n" +
+        "        document.addEventListener('change', function(e) {\n" +
+        "            if (e.target.tagName.toLowerCase() === 'input' ||\n" +
+        "                e.target.tagName.toLowerCase() === 'textarea') {\n" +
+        "                var selector = self.getElementInfo(e.target);\n" +
+        "                self.sendEvent('TYPE', selector, e.target.value);\n" +
+        "            } else if (e.target.tagName.toLowerCase() === 'select') {\n" +
+        "                var selector = self.getElementInfo(e.target);\n" +
+        "                self.sendEvent('SELECT', selector, e.target.value);\n" +
+        "            }\n" +
+        "        }, true);\n" +
+        "        \n" +
+        "        // Form submission\n" +
+        "        document.addEventListener('submit', function(e) {\n" +
+        "            var selector = self.getElementInfo(e.target);\n" +
+        "            self.sendEvent('SUBMIT', selector, '');\n" +
+        "        }, true);\n" +
+        "    }\n" +
+        "};\n" +
+        "\n" +
+        "// Initialize the recorder\n" +
+        "window.csRecorder.init();";
+}
     
     public TestCase stopRecording() {
         this.isRecording = false;
