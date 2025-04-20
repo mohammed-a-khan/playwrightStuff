@@ -8432,227 +8432,6 @@ public class WebConfig implements WebMvcConfigurer {
     }
 }
 
-private void injectRecorderScript() {
-    if (driver instanceof JavascriptExecutor) {
-        try {
-            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
-            
-            // Get the current URL to determine the correct base path
-            String currentUrl = driver.getCurrentUrl();
-            String basePath = "";
-            try {
-                java.net.URL url = new java.net.URL(currentUrl);
-                basePath = url.getProtocol() + "://" + url.getAuthority();
-            } catch (Exception e) {
-                // If parsing fails, use a relative path
-                log.warn("Failed to parse URL, using relative path");
-            }
-            
-            // Full URL for sending events
-            String eventUrl = basePath + "/api/recorder/event";
-            
-            // More aggressive script that captures events in multiple ways
-            String recorderScript = 
-                "window.csSmartRecorderSessionId = '" + sessionId + "';" +
-                "window.csSmartRecorderActive = true;" +
-                
-                // Function for direct logging to help with debugging
-                "window.csDebug = function(msg) {" +
-                "  console.log('[CS RECORDER] ' + msg);" +
-                "};" +
-                
-                "csDebug('Initializing recorder with session: " + sessionId + "');" +
-                
-                // Function to send events with multiple fallbacks
-                "window.csSmartRecorder = {" +
-                "  sendEvent: function(type, element, value) {" +
-                "    csDebug('Sending event: ' + type + ' on ' + element);" +
-                "    " +
-                "    var payload = JSON.stringify({" +
-                "      sessionId: window.csSmartRecorderSessionId," +
-                "      actionType: type," +
-                "      element: element," +
-                "      value: value || ''" +
-                "    });" +
-                "    " +
-                "    // Method 1: XMLHttpRequest" +
-                "    try {" +
-                "      var xhr = new XMLHttpRequest();" +
-                "      xhr.open('POST', '" + eventUrl + "', true);" +
-                "      xhr.setRequestHeader('Content-Type', 'application/json');" +
-                "      xhr.onload = function() { csDebug('XHR response: ' + xhr.status); };" +
-                "      xhr.onerror = function(e) { csDebug('XHR error: ' + e); };" +
-                "      xhr.send(payload);" +
-                "    } catch(e) {" +
-                "      csDebug('XHR failed: ' + e.message);" +
-                "      " +
-                "      // Method 2: Fetch API fallback" +
-                "      try {" +
-                "        fetch('" + eventUrl + "', {" +
-                "          method: 'POST'," +
-                "          headers: { 'Content-Type': 'application/json' }," +
-                "          body: payload" +
-                "        }).then(function(r) {" +
-                "          csDebug('Fetch response: ' + r.status);" +
-                "        }).catch(function(e) {" +
-                "          csDebug('Fetch error: ' + e);" +
-                "        });" +
-                "      } catch(e2) {" +
-                "        csDebug('Both XHR and Fetch failed: ' + e2.message);" +
-                "      }" +
-                "    }" +
-                "  }," +
-                "  " +
-                "  // Element identification function" +
-                "  getSelector: function(el) {" +
-                "    if (!el) return 'unknown';" +
-                "    if (el.id) return '#' + el.id;" +
-                "    if (el.name) return '[name=\"' + el.name + '\"]';" +
-                "    " +
-                "    var selector = el.tagName.toLowerCase();" +
-                "    if (el.className) {" +
-                "      var classes = el.className.split(' ');" +
-                "      for (var i = 0; i < classes.length; i++) {" +
-                "        if (classes[i]) selector += '.' + classes[i];" +
-                "      }" +
-                "    }" +
-                "    return selector;" +
-                "  }" +
-                "};" +
-                
-                // Install multiple capture methods
-                
-                // 1. Direct click handler on document
-                "document.addEventListener('click', function(e) {" +
-                "  if (!window.csSmartRecorderActive) return;" +
-                "  csDebug('Click detected on: ' + e.target.tagName);" +
-                "  window.csSmartRecorder.sendEvent('CLICK', window.csSmartRecorder.getSelector(e.target), '');" +
-                "}, true);" +
-                
-                // 2. Input capture for typing
-                "document.addEventListener('input', function(e) {" +
-                "  if (!window.csSmartRecorderActive) return;" +
-                "  csDebug('Input detected on: ' + e.target.tagName);" +
-                "  window.csSmartRecorder.sendEvent('TYPE', window.csSmartRecorder.getSelector(e.target), e.target.value);" +
-                "}, true);" +
-                
-                // 3. Change handler for select elements
-                "document.addEventListener('change', function(e) {" +
-                "  if (!window.csSmartRecorderActive) return;" +
-                "  csDebug('Change detected on: ' + e.target.tagName);" +
-                "  if (e.target.tagName.toLowerCase() === 'select') {" +
-                "    window.csSmartRecorder.sendEvent('SELECT', window.csSmartRecorder.getSelector(e.target), e.target.value);" +
-                "  }" +
-                "}, true);" +
-                
-                // 4. Direct attachment to all clickable elements
-                "setTimeout(function() {" +
-                "  csDebug('Installing direct handlers on elements');" +
-                "  var clickables = document.querySelectorAll('button, a, input[type=button], input[type=submit]');" +
-                "  for (var i = 0; i < clickables.length; i++) {" +
-                "    (function(el) {" +
-                "      el.addEventListener('click', function(e) {" +
-                "        csDebug('Direct click on: ' + el.tagName);" +
-                "        window.csSmartRecorder.sendEvent('CLICK', window.csSmartRecorder.getSelector(el), '');" +
-                "      }, true);" +
-                "    })(clickables[i]);" +
-                "  }" +
-                "  " +
-                "  var inputs = document.querySelectorAll('input[type=text], input[type=password], textarea');" +
-                "  for (var j = 0; j < inputs.length; j++) {" +
-                "    (function(el) {" +
-                "      el.addEventListener('change', function(e) {" +
-                "        csDebug('Direct input on: ' + el.tagName);" +
-                "        window.csSmartRecorder.sendEvent('TYPE', window.csSmartRecorder.getSelector(el), el.value);" +
-                "      }, true);" +
-                "    })(inputs[j]);" +
-                "  }" +
-                "}, 1000);" +
-                
-                // Send a test event to verify the connection is working
-                "setTimeout(function() {" +
-                "  csDebug('Sending test event');" +
-                "  window.csSmartRecorder.sendEvent('INIT', 'test', 'Recorder initialized');" +
-                "}, 500);";
-            
-            // Execute the script
-            jsExecutor.executeScript(recorderScript);
-            
-            // Add diagnostic code to check if the recorder is working
-            jsExecutor.executeScript(
-                "console.log('DIAGNOSTICS: Recorder active: ' + window.csSmartRecorderActive);" +
-                "console.log('DIAGNOSTICS: SessionID: ' + window.csSmartRecorderSessionId);" +
-                "window.addEventListener('click', function() { " +
-                "  console.log('DIAGNOSTICS: Raw click detected'); " +
-                "});"
-            );
-            
-            log.info("Enhanced recorder script injected successfully with session ID: {}", sessionId);
-            
-        } catch (Exception e) {
-            log.error("Failed to inject recorder script: {}", e.getMessage(), e);
-        }
-    } else {
-        log.error("Driver does not support JavaScript execution");
-    }
-}
-
-// Add after browser initialization but before navigate:
-if (driver != null) {
-    try {
-        // Setup WebDriver event listener for direct capture
-        EventFiringWebDriver eventDriver = new EventFiringWebDriver(driver);
-        WebDriverListener listener = new WebDriverListener() {
-            @Override
-            public void afterClickOn(WebElement element, WebDriver driver) {
-                log.info("WebDriver detected click on: {}", element);
-                // Record the click action using the test recorder
-                Action action = new Action(ActionType.CLICK);
-                String selector = element.getTagName();
-                if (element.getAttribute("id") != null) {
-                    selector = "#" + element.getAttribute("id");
-                }
-                recordAction(action, selector, "");
-            }
-            
-            @Override
-            public void afterChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {
-                log.info("WebDriver detected input: {}", keysToSend);
-                // Record the typing action
-                Action action = new Action(ActionType.TYPE);
-                String value = keysToSend != null ? String.join("", keysToSend) : "";
-                String selector = element.getTagName();
-                if (element.getAttribute("id") != null) {
-                    selector = "#" + element.getAttribute("id");
-                }
-                recordAction(action, selector, value);
-            }
-        };
-        eventDriver.register(listener);
-        driver = eventDriver;
-        log.info("WebDriver event listener registered");
-    } catch (Exception e) {
-        log.error("Failed to register WebDriver event listener: {}", e.getMessage());
-    }
-}
-
-
-
-// Execute this after injecting the recorder script
-jsExecutor.executeScript(
-    "window.allClicks = [];" +
-    "document.addEventListener('click', function(e) {" +
-    "  window.allClicks.push({" +
-    "    time: new Date().toISOString()," +
-    "    element: e.target.tagName," +
-    "    id: e.target.id," +
-    "    text: e.target.textContent" +
-    "  });" +
-    "  console.log('Raw click captured, total: ' + window.allClicks.length);" +
-    "}, true);"
-);
-
-
 package com.cssmart.ui.recorder;
 
 import lombok.extern.slf4j.Slf4j;
@@ -8666,10 +8445,6 @@ import com.cssmart.ai.engine.model.ActionType;
 import com.cssmart.ui.recorder.model.RecordedStep;
 import com.cssmart.ui.recorder.model.TestCase;
 import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
-import org.openqa.selenium.By;
-import org.openqa.selenium.OutputType;
-import org.openqa.selenium.Alert;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.firefox.FirefoxDriver;
@@ -8677,9 +8452,6 @@ import org.openqa.selenium.firefox.FirefoxOptions;
 import org.openqa.selenium.edge.EdgeDriver;
 import org.openqa.selenium.edge.EdgeOptions;
 import org.openqa.selenium.safari.SafariDriver;
-import org.openqa.selenium.JavascriptExecutor;
-import org.openqa.selenium.support.events.EventFiringWebDriver;
-import org.openqa.selenium.support.events.WebDriverEventListener;
 import io.github.bonigarcia.wdm.WebDriverManager;
 
 @Slf4j
@@ -8707,7 +8479,7 @@ public class TestRecorder {
         this.startTime = LocalDateTime.now();
         this.sessionId = UUID.randomUUID().toString();
         
-        // Initialize and launch browser with event listener
+        // Initialize browser
         initializeBrowser(browserType, headless);
         
         // Navigate to the base URL
@@ -8723,6 +8495,15 @@ public class TestRecorder {
             steps.add(step);
             
             log.info("Recorded navigation to: {}", baseUrl);
+            
+            // Add a test step for demonstration (remove in production)
+            try {
+                Action testAction = new Action(ActionType.CLICK);
+                recordAction(testAction, "button.test", "");
+                log.info("Added test click action for debugging");
+            } catch (Exception e) {
+                log.error("Error adding test action", e);
+            }
         }
         
         log.info("Recording started with session ID: {}", sessionId);
@@ -8730,8 +8511,6 @@ public class TestRecorder {
     
     private void initializeBrowser(String browserType, boolean headless) {
         try {
-            WebDriver baseDriver;
-            
             // Set up the WebDriver based on browser type
             switch (browserType.toLowerCase()) {
                 case "chrome":
@@ -8740,7 +8519,7 @@ public class TestRecorder {
                     if (headless) {
                         chromeOptions.addArguments("--headless=new");
                     }
-                    baseDriver = new ChromeDriver(chromeOptions);
+                    driver = new ChromeDriver(chromeOptions);
                     break;
                 case "firefox":
                     WebDriverManager.firefoxdriver().setup();
@@ -8748,7 +8527,7 @@ public class TestRecorder {
                     if (headless) {
                         firefoxOptions.addArguments("-headless");
                     }
-                    baseDriver = new FirefoxDriver(firefoxOptions);
+                    driver = new FirefoxDriver(firefoxOptions);
                     break;
                 case "edge":
                     WebDriverManager.edgedriver().setup();
@@ -8756,10 +8535,10 @@ public class TestRecorder {
                     if (headless) {
                         edgeOptions.addArguments("--headless");
                     }
-                    baseDriver = new EdgeDriver(edgeOptions);
+                    driver = new EdgeDriver(edgeOptions);
                     break;
                 case "safari":
-                    baseDriver = new SafariDriver();
+                    driver = new SafariDriver();
                     break;
                 default:
                     log.warn("Unsupported browser type: {}. Defaulting to Chrome.", browserType);
@@ -8768,156 +8547,13 @@ public class TestRecorder {
                     if (headless) {
                         defaultOptions.addArguments("--headless=new");
                     }
-                    baseDriver = new ChromeDriver(defaultOptions);
+                    driver = new ChromeDriver(defaultOptions);
             }
-            
-            // Create event firing driver wrapper
-            EventFiringWebDriver eventDriver = new EventFiringWebDriver(baseDriver);
-            
-            // Register event listener to capture user interactions
-            eventDriver.register(new WebDriverEventListener() {
-                // Helper method to create element selector
-                private String getElementSelector(WebElement element) {
-                    if (element == null) return "unknown";
-                    
-                    String selector = element.getTagName().toLowerCase();
-                    
-                    try {
-                        if (element.getAttribute("id") != null && !element.getAttribute("id").isEmpty()) {
-                            selector = "#" + element.getAttribute("id");
-                        } else if (element.getAttribute("name") != null && !element.getAttribute("name").isEmpty()) {
-                            selector = "[name=\"" + element.getAttribute("name") + "\"]";
-                        } else if (element.getAttribute("class") != null && !element.getAttribute("class").isEmpty()) {
-                            selector += "." + element.getAttribute("class").replace(" ", ".");
-                        }
-                    } catch (Exception e) {
-                        log.warn("Error getting element attributes: {}", e.getMessage());
-                    }
-                    
-                    return selector;
-                }
-                
-                // Alert methods
-                @Override
-                public void beforeAlertAccept(WebDriver driver) {}
-                
-                @Override
-                public void afterAlertAccept(WebDriver driver) {}
-                
-                @Override
-                public void afterAlertDismiss(WebDriver driver) {}
-                
-                @Override
-                public void beforeAlertDismiss(WebDriver driver) {}
-                
-                // Navigation methods
-                @Override
-                public void beforeNavigateTo(String url, WebDriver driver) {}
-                
-                @Override
-                public void afterNavigateTo(String url, WebDriver driver) {}
-                
-                @Override
-                public void beforeNavigateBack(WebDriver driver) {}
-                
-                @Override
-                public void afterNavigateBack(WebDriver driver) {}
-                
-                @Override
-                public void beforeNavigateForward(WebDriver driver) {}
-                
-                @Override
-                public void afterNavigateForward(WebDriver driver) {}
-                
-                @Override
-                public void beforeNavigateRefresh(WebDriver driver) {}
-                
-                @Override
-                public void afterNavigateRefresh(WebDriver driver) {}
-                
-                // Element methods
-                @Override
-                public void beforeFindBy(By by, WebElement element, WebDriver driver) {}
-                
-                @Override
-                public void afterFindBy(By by, WebElement element, WebDriver driver) {}
-                
-                @Override
-                public void beforeClickOn(WebElement element, WebDriver driver) {}
-                
-                @Override
-                public void afterClickOn(WebElement element, WebDriver driver) {
-                    log.info("Click detected on WebElement: {}", element.getTagName());
-                    
-                    // Build a selector for the element
-                    String selector = getElementSelector(element);
-                    
-                    // Record the action
-                    Action action = new Action(ActionType.CLICK);
-                    recordAction(action, selector, "");
-                }
-                
-                @Override
-                public void beforeChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {}
-                
-                @Override
-                public void afterChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {
-                    log.info("Input detected on WebElement: {}", element.getTagName());
-                    
-                    String value = "";
-                    if (keysToSend != null) {
-                        value = String.join("", keysToSend);
-                    }
-                    
-                    // Build a selector for the element
-                    String selector = getElementSelector(element);
-                    
-                    // Record the action
-                    Action action = new Action(ActionType.TYPE);
-                    action.setValue(value);
-                    recordAction(action, selector, value);
-                }
-                
-                // Script methods
-                @Override
-                public void beforeScript(String script, WebDriver driver) {}
-                
-                @Override
-                public void afterScript(String script, WebDriver driver) {}
-                
-                // Window methods
-                @Override
-                public void beforeSwitchToWindow(String windowName, WebDriver driver) {}
-                
-                @Override
-                public void afterSwitchToWindow(String windowName, WebDriver driver) {}
-                
-                // Exception method
-                @Override
-                public void onException(Throwable throwable, WebDriver driver) {}
-                
-                // Screenshot methods
-                @Override
-                public <X> void beforeGetScreenshotAs(OutputType<X> target) {}
-                
-                @Override
-                public <X> void afterGetScreenshotAs(OutputType<X> target, X screenshot) {}
-                
-                // Text methods
-                @Override
-                public void beforeGetText(WebElement element, WebDriver driver) {}
-                
-                @Override
-                public void afterGetText(WebElement element, WebDriver driver, String text) {}
-            });
-            
-            // Set the driver to the event firing wrapper
-            driver = eventDriver;
             
             // Maximize browser window
             driver.manage().window().maximize();
             
-            log.info("Browser initialized with WebDriver event listener: {}", browserType);
+            log.info("Browser initialized: {}", browserType);
         } catch (Exception e) {
             log.error("Failed to initialize browser: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to initialize browser: " + e.getMessage(), e);
@@ -9063,10 +8699,6 @@ public class TestRecorder {
                     .append(step.getElement()).append("\");\n");
                 code.append("        Assert.assertTrue(element.isDisplayed(), \"")
                     .append(step.getElement()).append(" should be present\");\n");
-            } else if ("SUBMIT_FORM".equals(step.getAction())) {
-                code.append("        WebElement form = elementFinder.findElement(\"")
-                    .append(step.getElement()).append("\");\n");
-                code.append("        form.submit();\n");
             }
             
             code.append("\n");
@@ -9102,5 +8734,4 @@ public class TestRecorder {
         return sessionId;
     }
 }
-
 
