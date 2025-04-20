@@ -9180,7 +9180,6 @@ public class RecorderEventListener implements WebDriverListener {
     }
     
     // Handle navigation events
-
     @Override
     public void afterGet(WebDriver driver, String url) {
         log.debug("Navigation occurred to URL: {}", url);
@@ -9191,32 +9190,48 @@ public class RecorderEventListener implements WebDriverListener {
     @Override
     public void afterTo(WebDriver.Navigation navigation, URL url) {
         log.debug("Navigation occurred to URL: {}", url);
-        waitForPageLoadAndReinject(navigation.getDriver());
+        // Get the driver from our recorder instance instead of from navigation
+        WebDriver driver = recorder.getDriver();
+        if (driver != null) {
+            waitForPageLoadAndReinject(driver);
+        }
     }
     
     // For navigate().to(String)
     @Override
     public void afterTo(WebDriver.Navigation navigation, String url) {
         log.debug("Navigation occurred to URL: {}", url);
-        waitForPageLoadAndReinject(navigation.getDriver());
+        WebDriver driver = recorder.getDriver();
+        if (driver != null) {
+            waitForPageLoadAndReinject(driver);
+        }
     }
     
     @Override
     public void afterBack(WebDriver.Navigation navigation) {
         log.debug("Navigated back");
-        waitForPageLoadAndReinject(navigation.getDriver());
+        WebDriver driver = recorder.getDriver();
+        if (driver != null) {
+            waitForPageLoadAndReinject(driver);
+        }
     }
     
     @Override
     public void afterForward(WebDriver.Navigation navigation) {
         log.debug("Navigated forward");
-        waitForPageLoadAndReinject(navigation.getDriver());
+        WebDriver driver = recorder.getDriver();
+        if (driver != null) {
+            waitForPageLoadAndReinject(driver);
+        }
     }
     
     @Override
     public void afterRefresh(WebDriver.Navigation navigation) {
         log.debug("Page refreshed");
-        waitForPageLoadAndReinject(navigation.getDriver());
+        WebDriver driver = recorder.getDriver();
+        if (driver != null) {
+            waitForPageLoadAndReinject(driver);
+        }
     }
     
     @Override
