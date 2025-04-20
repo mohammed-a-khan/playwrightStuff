@@ -698,4 +698,84 @@ public class AIEngine {
         log.debug("Clearing element prediction cache");
         predictionCache.clear();
     }
+
+/**
+ * Enhance test steps for TestGenerator
+ * 
+ * @param steps Array of TestStep objects
+ * @return Enhanced array of TestStep objects
+ */
+public TestStep[] enhanceSteps(TestStep[] steps) {
+    try {
+        log.debug("Enhancing {} TestStep objects", steps.length);
+        
+        // Create a new array for the enhanced steps
+        TestStep[] enhancedSteps = new TestStep[steps.length];
+        
+        // Enhance each step
+        for (int i = 0; i < steps.length; i++) {
+            TestStep step = steps[i];
+            TestStep enhancedStep = new TestStep();
+            
+            // Copy properties
+            enhancedStep.setAction(step.getAction());
+            enhancedStep.setElement(step.getElement());
+            enhancedStep.setValue(step.getValue());
+            
+            // Enhance description if it's missing or generic
+            if (step.getDescription() == null || step.getDescription().isEmpty()) {
+                enhancedStep.setDescription(generateTestStepDescription(step));
+            } else {
+                enhancedStep.setDescription(step.getDescription());
+            }
+            
+            enhancedSteps[i] = enhancedStep;
+        }
+        
+        return enhancedSteps;
+    } catch (Exception e) {
+        log.error("Error enhancing TestStep array", e);
+        // Return original steps if enhancement fails
+        return steps;
+    }
+}
+
+/**
+ * Generate description for TestStep
+ * 
+ * @param step TestStep object
+ * @return Enhanced description
+ */
+private String generateTestStepDescription(TestStep step) {
+    String action = step.getAction();
+    String element = step.getElement();
+    String value = step.getValue();
+    
+    // Use the same logic as in generateStepDescription but for TestStep
+    switch (action) {
+        case "NAVIGATE":
+            return "Navigate to " + (value != null ? value : "page");
+            
+        case "CLICK":
+            if (element != null && element.toLowerCase().contains("button")) {
+                return "Click the " + element;
+            } else if (element != null && element.toLowerCase().contains("link")) {
+                return "Click the " + element + " link";
+            } else {
+                return "Click on " + (element != null ? element : "element");
+            }
+            
+        case "TYPE":
+            if (value != null && !value.isEmpty()) {
+                return "Enter '" + value + "' in " + (element != null ? "the " + element : "field");
+            } else {
+                return "Clear text in " + (element != null ? "the " + element : "field");
+            }
+            
+        // Add other cases similar to the RecordedStep version
+            
+        default:
+            return action + " on " + (element != null ? element : "element");
+    }
+}
 }
