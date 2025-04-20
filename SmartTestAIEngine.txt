@@ -1,0 +1,701 @@
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.ElementAnalysis;
+import com.cssmart.ai.engine.model.ElementPrediction;
+import com.cssmart.ai.engine.model.ElementProperties;
+import com.cssmart.ai.engine.model.Locator;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.engine.exceptions.AIPredictionException;
+import com.cssmart.ai.engine.exceptions.AIActionException;
+import com.cssmart.ai.engine.exceptions.AIPatternException;
+import com.cssmart.ai.patterns.PatternMatcher;
+import com.cssmart.ai.patterns.PatternRecognizer;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.core.config.ConfigurationManager;
+
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.By;
+
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.time.LocalDateTime;
+
+/**
+ * Core AI Engine that provides intelligent capabilities to the framework.
+ * Implements Singleton pattern to ensure only one instance exists.
+ */
+@Slf4j
+public class AIEngine {
+    private static AIEngine instance;
+    private final ElementPredictor elementPredictor;
+    private final ActionGenerator actionGenerator;
+    private final PatternRecognizer patternRecognizer;
+    private final PatternMatcher patternMatcher;
+    private final LocatorStrategy locatorStrategy;
+    private final Map<String, ElementPrediction> predictionCache;
+    
+    private AIEngine() {
+        this.elementPredictor = new ElementPredictor();
+        this.actionGenerator = new ActionGenerator();
+        this.patternRecognizer = new PatternRecognizer();
+        this.patternMatcher = new PatternMatcher();
+        this.locatorStrategy = new LocatorStrategy();
+        this.predictionCache = new HashMap<>();
+        log.info("AIEngine initialized");
+    }
+    
+    /**
+     * Get the singleton instance of AIEngine
+     * 
+     * @return AIEngine instance
+     */
+    public static synchronized AIEngine getInstance() {
+        if (instance == null) {
+            instance = new AIEngine();
+        }
+        return instance;
+    }
+    
+    /**
+     * Predict element locators based on natural language description
+     * 
+     * @param description Natural language description of an element
+     * @return Element prediction with locator strategies
+     */
+    public ElementPrediction predictElement(String description) {
+        try {
+            log.debug("Predicting element from description: {}", description);
+            
+            // Check cache first
+            if (predictionCache.containsKey(description)) {
+                log.debug("Cache hit for element prediction: {}", description);
+                return predictionCache.get(description);
+            }
+            
+            ElementPrediction prediction = elementPredictor.predict(description);
+            
+            // Cache the result
+            predictionCache.put(description, prediction);
+            
+            return prediction;
+        } catch (Exception e) {
+            log.error("Error predicting element: {}", description, e);
+            throw new AIPredictionException("Failed to predict element", e);
+        }
+    }
+    
+    /**
+     * Generate suggested actions for a WebElement
+     * 
+     * @param element WebElement to analyze
+     * @return List of possible actions
+     */
+    public List<Action> suggestActions(WebElement element) {
+        try {
+            log.debug("Generating actions for element: {}", element);
+            return actionGenerator.generateActions(element);
+        } catch (Exception e) {
+            log.error("Error generating actions for element", e);
+            throw new AIActionException("Failed to generate actions", e);
+        }
+    }
+    
+    /**
+     * Generate suggested actions for a WebElement with element analysis
+     * 
+     * @param element WebElement to analyze
+     * @param analyzer ElementAnalyzer instance for detailed analysis
+     * @return List of possible actions
+     */
+    public List<Action> suggestActionsWithAnalysis(WebElement element, ElementAnalyzer analyzer) {
+        try {
+            log.debug("Generating actions with detailed analysis for element: {}", element);
+            
+            // Analyze element properties
+            ElementProperties properties = analyzer.analyze(element);
+            
+            // Create appropriate actions based on properties
+            List<Action> actions = new ArrayList<>();
+            
+            if (properties.isClickable()) {
+                actions.add(new Action(ActionType.CLICK));
+            }
+            
+            if (properties.isInput()) {
+                actions.add(new Action(ActionType.TYPE));
+            }
+            
+            if (properties.isSelectable()) {
+                actions.add(new Action(ActionType.SELECT));
+            }
+            
+            if (properties.isVisible()) {
+                actions.add(new Action(ActionType.VERIFY_VISIBILITY));
+            }
+            
+            // Always add these common actions
+            actions.add(new Action(ActionType.VERIFY_PRESENCE));
+            actions.add(new Action(ActionType.WAIT));
+            
+            return actions;
+        } catch (Exception e) {
+            log.error("Error generating actions with analysis for element", e);
+            throw new AIActionException("Failed to generate actions with analysis", e);
+        }
+    }
+    
+    /**
+     * Recognize patterns in a sequence of actions
+     * 
+     * @param actions List of actions to analyze
+     * @return List of detected patterns
+     */
+    public List<Pattern> recognizePatterns(List<Action> actions) {
+        try {
+            log.debug("Recognizing patterns from {} actions", actions.size());
+            return patternRecognizer.findPatterns(actions);
+        } catch (Exception e) {
+            log.error("Error recognizing patterns", e);
+            throw new AIPatternException("Failed to recognize patterns", e);
+        }
+    }
+    
+    /**
+     * Recognize patterns from text descriptions
+     * 
+     * @param descriptions List of text descriptions
+     * @return List of detected patterns
+     */
+    public List<Pattern> recognizePatternsFromText(List<String> descriptions) {
+        try {
+            log.debug("Recognizing patterns from {} descriptions", descriptions.size());
+            return patternMatcher.findPatterns(descriptions);
+        } catch (Exception e) {
+            log.error("Error recognizing patterns from text", e);
+            throw new AIPatternException("Failed to recognize patterns from text", e);
+        }
+    }
+    
+    /**
+     * Enhance a test case with AI optimizations
+     * 
+     * @param testCase Test case to enhance
+     * @return Enhanced test case
+     */
+    public TestCase enhanceTestCase(TestCase testCase) {
+        try {
+            log.debug("Enhancing test case: {}", testCase.getName());
+            
+            // Create a copy to avoid modifying the original
+            TestCase enhancedTest = new TestCase();
+            enhancedTest.setId(testCase.getId());
+            enhancedTest.setName(testCase.getName());
+            enhancedTest.setDescription(testCase.getDescription());
+            enhancedTest.setClassName(testCase.getClassName());
+            enhancedTest.setMethodName(testCase.getMethodName());
+            enhancedTest.setStartTime(testCase.getStartTime());
+            enhancedTest.setEndTime(testCase.getEndTime());
+            enhancedTest.setCode(testCase.getCode());
+            
+            // Enhance steps if present
+            if (testCase.getSteps() != null && !testCase.getSteps().isEmpty()) {
+                List<RecordedStep> enhancedSteps = enhanceSteps(testCase.getSteps());
+                enhancedTest.setSteps(enhancedSteps);
+                
+                // Convert steps to actions for pattern recognition
+                List<Action> actions = convertStepsToActions(enhancedSteps);
+                
+                // Recognize patterns in the steps
+                if (!actions.isEmpty()) {
+                    List<Pattern> patterns = recognizePatterns(actions);
+                    
+                    // Use patterns to improve test metadata
+                    if (!patterns.isEmpty()) {
+                        Pattern bestPattern = patterns.get(0); // Highest confidence pattern
+                        
+                        // Only update name if it has a generic name
+                        if (testCase.getName() == null || testCase.getName().contains("Recorded Test")) {
+                            enhancedTest.setName(bestPattern.getName() + " Test");
+                        }
+                        
+                        // Only update description if it's generic
+                        if (testCase.getDescription() == null || 
+                            testCase.getDescription().equals("Automatically recorded test case")) {
+                            enhancedTest.setDescription(bestPattern.getDescription());
+                        }
+                        
+                        // Update class and method names if they're generic
+                        if (testCase.getClassName() == null || testCase.getClassName().startsWith("RecordedTest")) {
+                            String className = bestPattern.getName().replaceAll("[^a-zA-Z0-9]", "") + "Test";
+                            enhancedTest.setClassName(className);
+                        }
+                        
+                        if (testCase.getMethodName() == null || testCase.getMethodName().startsWith("test")) {
+                            String methodName = "test" + bestPattern.getName().replaceAll("[^a-zA-Z0-9]", "");
+                            enhancedTest.setMethodName(methodName);
+                        }
+                    }
+                }
+                
+                // Generate code if it doesn't exist
+                if (enhancedTest.getCode() == null || enhancedTest.getCode().isEmpty()) {
+                    enhancedTest.setCode(generateTestCode(enhancedTest));
+                }
+            } else {
+                enhancedTest.setSteps(new ArrayList<>());
+            }
+            
+            return enhancedTest;
+        } catch (Exception e) {
+            log.error("Error enhancing test case", e);
+            // Return original test case if enhancement fails
+            return testCase;
+        }
+    }
+    
+    /**
+     * Enhance test steps with better descriptions
+     * 
+     * @param steps List of test steps
+     * @return Enhanced steps
+     */
+    private List<RecordedStep> enhanceSteps(List<RecordedStep> steps) {
+        List<RecordedStep> enhancedSteps = new ArrayList<>();
+        
+        for (RecordedStep step : steps) {
+            RecordedStep enhancedStep = new RecordedStep();
+            enhancedStep.setAction(step.getAction());
+            enhancedStep.setElement(step.getElement());
+            enhancedStep.setValue(step.getValue());
+            enhancedStep.setTimestamp(step.getTimestamp() != null ? step.getTimestamp() : LocalDateTime.now());
+            
+            // Enhance description if it's missing or generic
+            if (step.getDescription() == null || step.getDescription().isEmpty() || 
+                step.getDescription().equals(step.getAction() + " on " + step.getElement())) {
+                enhancedStep.setDescription(generateStepDescription(step));
+            } else {
+                enhancedStep.setDescription(step.getDescription());
+            }
+            
+            enhancedSteps.add(enhancedStep);
+        }
+        
+        return enhancedSteps;
+    }
+    
+    /**
+     * Generate a better description for a test step
+     * 
+     * @param step Test step
+     * @return Enhanced description
+     */
+    private String generateStepDescription(RecordedStep step) {
+        String action = step.getAction();
+        String element = step.getElement();
+        String value = step.getValue();
+        
+        switch (action) {
+            case "NAVIGATE":
+                return "Navigate to " + (value != null ? value : "page");
+                
+            case "CLICK":
+                if (element != null && element.toLowerCase().contains("button")) {
+                    return "Click the " + element;
+                } else if (element != null && element.toLowerCase().contains("link")) {
+                    return "Click the " + element + " link";
+                } else {
+                    return "Click on " + (element != null ? element : "element");
+                }
+                
+            case "TYPE":
+                if (value != null && !value.isEmpty()) {
+                    return "Enter '" + value + "' in " + (element != null ? "the " + element : "field");
+                } else {
+                    return "Clear text in " + (element != null ? "the " + element : "field");
+                }
+                
+            case "SELECT":
+                return "Select '" + (value != null ? value : "option") + "' from " + 
+                       (element != null ? "the " + element : "dropdown");
+                
+            case "VERIFY_PRESENCE":
+                return "Verify that " + (element != null ? "the " + element : "element") + " is present";
+                
+            case "VERIFY_VISIBILITY":
+                return "Verify that " + (element != null ? "the " + element : "element") + " is visible";
+                
+            case "VERIFY_TEXT":
+                return "Verify that " + (element != null ? "the " + element : "element") + 
+                       " contains text '" + (value != null ? value : "") + "'";
+                
+            case "WAIT":
+                return "Wait for " + (element != null ? "the " + element : "element") + " to be present";
+                
+            case "HOVER":
+                return "Hover over " + (element != null ? "the " + element : "element");
+                
+            default:
+                return action + " on " + (element != null ? element : "element");
+        }
+    }
+    
+    /**
+     * Convert RecordedSteps to Actions for pattern recognition
+     * 
+     * @param steps List of recorded steps
+     * @return List of actions
+     */
+    private List<Action> convertStepsToActions(List<RecordedStep> steps) {
+        List<Action> actions = new ArrayList<>();
+        
+        for (RecordedStep step : steps) {
+            try {
+                ActionType actionType = ActionType.valueOf(step.getAction());
+                Action action = new Action(actionType);
+                action.setValue(step.getValue());
+                
+                // Set target element if available
+                if (step.getElement() != null) {
+                    action.setTarget(step.getElement());
+                }
+                
+                actions.add(action);
+            } catch (IllegalArgumentException e) {
+                log.warn("Unknown action type: {}", step.getAction());
+            }
+        }
+        
+        return actions;
+    }
+    
+    /**
+     * Generate locators for an element description
+     * 
+     * @param description Element description
+     * @return List of locator strategies
+     */
+    public List<Locator> generateLocators(ElementAnalysis analysis) {
+        log.debug("Generating locators for element analysis");
+        return locatorStrategy.generateLocators(analysis);
+    }
+    
+    /**
+     * Generate test code from a test case
+     * 
+     * @param testCase Test case to generate code for
+     * @return Generated test code
+     */
+    private String generateTestCode(TestCase testCase) {
+        StringBuilder code = new StringBuilder();
+        
+        // Add package and imports
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.testng.Assert;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        // Add class javadoc and annotations
+        code.append("/**\n");
+        code.append(" * ").append(testCase.getDescription()).append("\n");
+        code.append(" * Generated by CS Smart Test Framework\n");
+        code.append(" */\n");
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        if (testCase.getSteps() != null && !testCase.getSteps().isEmpty()) {
+            for (RecordedStep step : testCase.getSteps()) {
+                code.append("        // ").append(step.getDescription()).append("\n");
+                
+                if ("NAVIGATE".equals(step.getAction())) {
+                    code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+                    
+                } else if ("CLICK".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.click();\n");
+                    
+                } else if ("TYPE".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.clear();\n");
+                    code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+                    
+                } else if ("SELECT".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                        .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+                    
+                } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertNotNull(element, \"")
+                        .append(step.getElement()).append(" should be present\");\n");
+                    
+                } else if ("VERIFY_VISIBILITY".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                        .append(step.getElement()).append(" should be visible\");\n");
+                    
+                } else if ("VERIFY_TEXT".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        String actualText = element.getText();\n");
+                    code.append("        Assert.assertTrue(actualText.contains(\"")
+                        .append(step.getValue()).append("\"), \"Expected text '")
+                        .append(step.getValue())
+                        .append("' to be present in actual text: \" + actualText);\n");
+                    
+                } else if ("WAIT".equals(step.getAction())) {
+                    code.append("        elementFinder.waitForElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    
+                } else if ("HOVER".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        actions.moveToElement(element).perform();\n");
+                    
+                } else {
+                    code.append("        // TODO: Implement ").append(step.getAction())
+                        .append(" action for ").append(step.getElement()).append("\n");
+                }
+                
+                code.append("\n");
+            }
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    /**
+     * Generate BDD feature file from a test case
+     * 
+     * @param testCase Test case to convert to BDD
+     * @return BDD feature file content
+     */
+    public String generateBDDFeature(TestCase testCase) {
+        StringBuilder feature = new StringBuilder();
+        
+        try {
+            log.debug("Generating BDD feature for test case: {}", testCase.getName());
+            
+            // Feature header
+            feature.append("Feature: ").append(testCase.getName()).append("\n\n");
+            
+            // Description as a comment
+            if (testCase.getDescription() != null && !testCase.getDescription().isEmpty()) {
+                feature.append("  # ").append(testCase.getDescription()).append("\n\n");
+            }
+            
+            // Scenario
+            feature.append("  Scenario: ").append(testCase.getName()).append("\n");
+            
+            // Convert steps to Given/When/Then format
+            if (testCase.getSteps() != null && !testCase.getSteps().isEmpty()) {
+                boolean givenDone = false;
+                boolean whenDone = false;
+                
+                for (int i = 0; i < testCase.getSteps().size(); i++) {
+                    RecordedStep step = testCase.getSteps().get(i);
+                    String prefix;
+                    
+                    if (!givenDone && "NAVIGATE".equals(step.getAction())) {
+                        prefix = "Given ";
+                        givenDone = true;
+                    } else if (!whenDone) {
+                        prefix = givenDone ? "When " : "Given ";
+                        
+                        // Mark "when" as done for next steps if this is an action
+                        if ("CLICK".equals(step.getAction()) || "TYPE".equals(step.getAction()) || 
+                            "SELECT".equals(step.getAction())) {
+                            whenDone = true;
+                        }
+                    } else {
+                        prefix = "Then ";
+                    }
+                    
+                    // Subsequent steps of the same type use "And"
+                    if (i > 0) {
+                        RecordedStep prevStep = testCase.getSteps().get(i - 1);
+                        
+                        boolean isPrevGiven = !givenDone || ("NAVIGATE".equals(prevStep.getAction()));
+                        boolean isPrevWhen = givenDone && !whenDone;
+                        boolean isPrevThen = givenDone && whenDone;
+                        
+                        boolean isCurrentGiven = !givenDone || ("NAVIGATE".equals(step.getAction()));
+                        boolean isCurrentWhen = givenDone && !whenDone;
+                        boolean isCurrentThen = givenDone && whenDone;
+                        
+                        if ((isPrevGiven && isCurrentGiven) || 
+                            (isPrevWhen && isCurrentWhen) || 
+                            (isPrevThen && isCurrentThen)) {
+                            prefix = "And ";
+                        }
+                    }
+                    
+                    // Convert step to BDD format
+                    feature.append("    ").append(prefix).append(convertStepToBDD(step)).append("\n");
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error generating BDD feature", e);
+            feature.append("# Error generating BDD feature: ").append(e.getMessage());
+        }
+        
+        return feature.toString();
+    }
+    
+    /**
+     * Convert a test step to BDD format
+     * 
+     * @param step Test step
+     * @return BDD style step
+     */
+    private String convertStepToBDD(RecordedStep step) {
+        String action = step.getAction();
+        String element = step.getElement();
+        String value = step.getValue();
+        
+        switch (action) {
+            case "NAVIGATE":
+                return "I am on " + (value != null ? value : "the page");
+                
+            case "CLICK":
+                return "I click on " + (element != null ? "the " + element : "the element");
+                
+            case "TYPE":
+                return "I enter \"" + (value != null ? value : "") + "\" in " + 
+                       (element != null ? "the " + element : "the field");
+                
+            case "SELECT":
+                return "I select \"" + (value != null ? value : "an option") + "\" from " + 
+                       (element != null ? "the " + element : "the dropdown");
+                
+            case "VERIFY_PRESENCE":
+                return "the " + (element != null ? element : "element") + " should be present";
+                
+            case "VERIFY_VISIBILITY":
+                return "the " + (element != null ? element : "element") + " should be visible";
+                
+            case "VERIFY_TEXT":
+                return "the " + (element != null ? element : "element") + 
+                       " should contain \"" + (value != null ? value : "") + "\"";
+                
+            case "WAIT":
+                return "I wait for " + (element != null ? "the " + element : "the element") + " to appear";
+                
+            case "HOVER":
+                return "I hover over " + (element != null ? "the " + element : "the element");
+                
+            default:
+                return "I " + action.toLowerCase() + " on " + (element != null ? "the " + element : "the element");
+        }
+    }
+    
+    /**
+     * Verify text presence on a page with intelligent matching
+     * 
+     * @param driver WebDriver instance
+     * @param text Text to verify
+     * @return True if text is present
+     */
+    public boolean verifyTextPresence(WebDriver driver, String text) {
+        log.debug("Verifying text presence: {}", text);
+        
+        // Simple implementation - could be enhanced with fuzzy matching, etc.
+        String pageSource = driver.getPageSource();
+        return pageSource.contains(text);
+    }
+    
+    /**
+     * Find the best WebElement match for a natural language description
+     * 
+     * @param driver WebDriver instance
+     * @param description Natural language description
+     * @return Best matching WebElement or null if not found
+     */
+    public WebElement findBestElement(WebDriver driver, String description) {
+        try {
+            log.debug("Finding best element match for: {}", description);
+            ElementPrediction prediction = predictElement(description);
+            
+            // Convert locators to By objects
+            List<By> byLocators = new ArrayList<>();
+            
+            for (Locator locator : prediction.getLocators()) {
+                switch (locator.getType()) {
+                    case ID:
+                        byLocators.add(By.id(locator.getValue()));
+                        break;
+                    case NAME:
+                        byLocators.add(By.name(locator.getValue()));
+                        break;
+                    case CLASS_NAME:
+                        byLocators.add(By.className(locator.getValue()));
+                        break;
+                    case LINK_TEXT:
+                        byLocators.add(By.linkText(locator.getValue()));
+                        break;
+                    case PARTIAL_LINK_TEXT:
+                        byLocators.add(By.partialLinkText(locator.getValue()));
+                        break;
+                    case CSS:
+                        byLocators.add(By.cssSelector(locator.getValue()));
+                        break;
+                    case XPATH:
+                        byLocators.add(By.xpath(locator.getValue()));
+                        break;
+                    default:
+                        log.warn("Unsupported locator type: {}", locator.getType());
+                }
+            }
+            
+            // Try each locator in order
+            for (By byLocator : byLocators) {
+                try {
+                    WebElement element = driver.findElement(byLocator);
+                    if (element != null && element.isDisplayed()) {
+                        return element;
+                    }
+                } catch (Exception e) {
+                    log.debug("Locator {} failed: {}", byLocator, e.getMessage());
+                }
+            }
+            
+            return null;
+        } catch (Exception e) {
+            log.error("Error finding best element for: {}", description, e);
+            return null;
+        }
+    }
+    
+    /**
+     * Clear the prediction cache
+     */
+    public void clearCache() {
+        log.debug("Clearing element prediction cache");
+        predictionCache.clear();
+    }
+}
