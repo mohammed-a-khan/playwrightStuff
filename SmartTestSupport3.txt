@@ -9159,4 +9159,205 @@ public class TestRecorderHandler extends TextWebSocketHandler {
     }
 }
 
+package com.cssmart.ui.recorder;
 
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.support.events.WebDriverListener;
+import org.openqa.selenium.support.ui.WebDriverWait;
+import java.time.Duration;
+import lombok.extern.slf4j.Slf4j;
+import java.net.URL;
+
+@Slf4j
+public class RecorderEventListener implements WebDriverListener {
+    private final TestRecorder recorder;
+    private static final int PAGE_LOAD_TIMEOUT = 30; // seconds
+    
+    public RecorderEventListener(TestRecorder recorder) {
+        this.recorder = recorder;
+    }
+    
+    @Override
+    public void afterGet(WebDriver driver, String url) {
+        log.debug("Navigation occurred to URL: {}", url);
+        waitForPageLoadAndReinject(driver);
+    }
+    
+    @Override
+    public void afterNavigateTo(WebDriver driver, URL url) {
+        log.debug("Navigation occurred to URL: {}", url);
+        waitForPageLoadAndReinject(driver);
+    }
+    
+    @Override
+    public void afterNavigateBack(WebDriver driver) {
+        log.debug("Navigated back");
+        waitForPageLoadAndReinject(driver);
+    }
+    
+    @Override
+    public void afterNavigateForward(WebDriver driver) {
+        log.debug("Navigated forward");
+        waitForPageLoadAndReinject(driver);
+    }
+    
+    @Override
+    public void afterNavigateRefresh(WebDriver driver) {
+        log.debug("Page refreshed");
+        waitForPageLoadAndReinject(driver);
+    }
+    
+    @Override
+    public void afterClick(WebElement element) {
+        try {
+            // Small delay to allow navigation to start if it's going to happen
+            Thread.sleep(100);
+            WebDriver driver = recorder.getDriver();
+            if (driver != null) {
+                // Check if navigation is happening by monitoring the readyState
+                boolean navigationStarted = isNavigationInProgress(driver);
+                
+                if (navigationStarted) {
+                    log.debug("Navigation detected after click");
+                    waitForPageLoadAndReinject(driver);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Error checking for navigation after click: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Check if navigation is in progress
+     */
+    private boolean isNavigationInProgress(WebDriver driver) {
+        try {
+            if (driver instanceof JavascriptExecutor) {
+                JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+                Object readyState = jsExecutor.executeScript("return document.readyState");
+                
+                // If readyState is 'loading', navigation is in progress
+                return "loading".equals(readyState);
+            }
+        } catch (Exception e) {
+            log.debug("Error checking navigation state: {}", e.getMessage());
+        }
+        return false;
+    }
+    
+    /**
+     * Wait for page to fully load and then reinject the recorder script
+     */
+    private void waitForPageLoadAndReinject(WebDriver driver) {
+        if (!recorder.isRecording()) {
+            return;
+        }
+        
+        try {
+            log.debug("Waiting for page to load completely...");
+            
+            // First, wait for document ready state to be 'complete'
+            waitForDocumentReady(driver);
+            
+            // Then wait for any AJAX requests to finish
+            waitForAjaxComplete(driver);
+            
+            // Then wait for any Angular operations if present
+            waitForAngularIfPresent(driver);
+            
+            // Finally, reinject the recorder script
+            log.debug("Page loaded completely, reinjecting recorder script");
+            recorder.injectRecorderScript(driver);
+            
+        } catch (Exception e) {
+            log.error("Error waiting for page load or reinjecting script: {}", e.getMessage(), e);
+            
+            // Attempt to inject the script anyway, in case the page is usable
+            try {
+                recorder.injectRecorderScript(driver);
+            } catch (Exception ex) {
+                log.error("Failed to reinject recorder script after timeout: {}", ex.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * Wait for document.readyState to be 'complete'
+     */
+    private void waitForDocumentReady(WebDriver driver) {
+        try {
+            new WebDriverWait(driver, Duration.ofSeconds(PAGE_LOAD_TIMEOUT))
+                .until(webDriver -> {
+                    JavascriptExecutor jsExecutor = (JavascriptExecutor) webDriver;
+                    return "complete".equals(jsExecutor.executeScript("return document.readyState"));
+                });
+        } catch (Exception e) {
+            log.warn("Timeout waiting for document ready state: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Wait for jQuery/AJAX requests to complete if jQuery is present
+     */
+    private void waitForAjaxComplete(WebDriver driver) {
+        try {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Check if jQuery is available
+            Boolean jQueryDefined = (Boolean) jsExecutor.executeScript("return typeof jQuery != 'undefined'");
+            
+            if (Boolean.TRUE.equals(jQueryDefined)) {
+                new WebDriverWait(driver, Duration.ofSeconds(PAGE_LOAD_TIMEOUT))
+                    .until(webDriver -> {
+                        JavascriptExecutor js = (JavascriptExecutor) webDriver;
+                        return (Boolean) js.executeScript("return jQuery.active == 0");
+                    });
+            }
+        } catch (Exception e) {
+            log.warn("Timeout waiting for AJAX requests: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Wait for Angular to complete operations if Angular is present
+     */
+    private void waitForAngularIfPresent(WebDriver driver) {
+        try {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Check if Angular is available
+            Boolean angularDefined = (Boolean) jsExecutor.executeScript(
+                "return typeof angular !== 'undefined' || " +
+                "typeof window.getAllAngularTestabilities !== 'undefined'"
+            );
+            
+            if (Boolean.TRUE.equals(angularDefined)) {
+                String angularReadyScript = 
+                    "return (typeof window.getAllAngularTestabilities !== 'undefined') ? " +
+                    "    window.getAllAngularTestabilities().findIndex(testability => !testability.isStable()) === -1 : " +
+                    "    (typeof angular !== 'undefined' ? !angular.element(document).injector().get('$http').pendingRequests.length : true)";
+                
+                new WebDriverWait(driver, Duration.ofSeconds(PAGE_LOAD_TIMEOUT))
+                    .until(webDriver -> {
+                        JavascriptExecutor js = (JavascriptExecutor) webDriver;
+                        return Boolean.TRUE.equals(js.executeScript(angularReadyScript));
+                    });
+            }
+        } catch (Exception e) {
+            log.warn("Timeout waiting for Angular: {}", e.getMessage());
+        }
+    }
+    
+    private void reInjectRecorderScriptIfNeeded(WebDriver driver) {
+        if (recorder.isRecording()) {
+            try {
+                log.debug("Re-injecting recorder script");
+                recorder.injectRecorderScript(driver);
+            } catch (Exception e) {
+                log.error("Failed to re-inject recorder script: {}", e.getMessage(), e);
+            }
+        }
+    }
+}
