@@ -4831,5 +4831,1602 @@ public class PageObjectGenerator {
 }
 
 
+// src/main/webapp/src/components/recorder/POMTestRecorder.jsx
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import RecordedSteps from './RecordedSteps';
+import RecorderConfig from './RecorderConfig';
+import PageObjectList from './PageObjectList';
+import TestCodeViewer from './TestCodeViewer';
+import Button from '../common/Button';
+import Card from '../common/Card';
+import Alert from '../common/Alert';
+import Spinner from '../common/Spinner';
+import { useNotification } from '../../context/NotificationContext';
+
+// Import the tabs separately to avoid potential import issues
+import Tabs from '../common/Tabs';
+import { Tab } from '../common/Tabs';
+
+const POMTestRecorder = () => {
+  const navigate = useNavigate();
+  const { addNotification } = useNotification();
+  const [isRecording, setIsRecording] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [recordedSteps, setRecordedSteps] = useState([]);
+  const [testCase, setTestCase] = useState(null);
+  const [pomTestCase, setPOMTestCase] = useState(null);
+  const [pageObjects, setPageObjects] = useState([]);
+  const [activeTab, setActiveTab] = useState('steps');
+  const [error, setError] = useState(null);
+  const [successMessage, setSuccessMessage] = useState(null);
+  const [config, setConfig] = useState({
+    url: 'https://example.com',
+    browser: 'chrome',
+    headless: false,
+    generatePageObjects: true
+  });
+  const websocket = useRef(null);
+  
+  // Handle WebSocket cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      if (websocket.current) {
+        websocket.current.close();
+      }
+    };
+  }, []);
+  
+  // Connect to WebSocket when starting recording
+  const connectWebSocket = () => {
+    try {
+      setIsConnecting(true);
+      setError(null);
+      
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/recorder`;
+      
+      websocket.current = new WebSocket(wsUrl);
+      
+      websocket.current.onopen = () => {
+        console.log('WebSocket connected');
+        setIsConnecting(false);
+        
+        // Send recording configuration to the server
+        websocket.current.send(JSON.stringify({ 
+          type: 'START_RECORDING',
+          data: config
+        }));
+      };
+      
+      websocket.current.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        
+        if (message.type === 'RECORDING_STARTED') {
+          console.log('Recording started, current state:', { isRecording, recordedSteps });
+          try {
+            // Use a function form to avoid closure issues
+            setIsRecording(() => true);
+            console.log('Recording state updated');
+            // Add notification after state update
+            setTimeout(() => {
+              addNotification('Recording started successfully!', 'success');
+            }, 0);
+          } catch (e) {
+            console.error('Error updating recording state:', e);
+          }
+        } else if (message.type === 'ACTION_RECORDED') {
+          console.log('Action recorded');
+        } else if (message.type === 'STEP_RECORDED') {
+          console.log('Step recorded:', message.data);
+          setRecordedSteps(prev => [...prev, message.data]);
+        } else if (message.type === 'TEST_CASE') {
+          console.log('Test case received:', message.data);
+          setTestCase(message.data);
+          setIsRecording(false);
+          
+          // If POM mode is enabled, generate page objects
+          if (config.generatePageObjects) {
+            convertToPOMTestCase(message.data.id);
+          }
+        } else if (message.type === 'ERROR') {
+          console.error('WebSocket error:', message.data);
+          setError(`Error: ${message.data}`);
+          setIsRecording(false);
+          setIsConnecting(false);
+          addNotification(`Recording error: ${message.data}`, 'error');
+        }
+      };
+      
+      websocket.current.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setError('Failed to connect to the recording service. Please check if the server is running.');
+        setIsRecording(false);
+        setIsConnecting(false);
+        addNotification('Failed to connect to recording service', 'error');
+      };
+      
+      websocket.current.onclose = () => {
+        console.log('WebSocket disconnected');
+        if (isRecording) {
+          setIsRecording(false);
+          addNotification('Recording connection closed', 'warning');
+        }
+      };
+      
+      return true;
+    } catch (error) {
+      console.error('Error connecting to WebSocket:', error);
+      setError(`Connection error: ${error.message}`);
+      setIsRecording(false);
+      setIsConnecting(false);
+      addNotification(`Connection error: ${error.message}`, 'error');
+      return false;
+    }
+  };
+  
+  // Start recording
+  const startRecording = () => {
+    setRecordedSteps([]);
+    setTestCase(null);
+    setPOMTestCase(null);
+    setPageObjects([]);
+    setError(null);
+    setSuccessMessage(null);
+    
+    const connected = connectWebSocket();
+    if (!connected) {
+      setError('Failed to start recording. Could not connect to server.');
+    }
+  };
+  
+  // Stop recording
+  const stopRecording = () => {
+    if (websocket.current && websocket.current.readyState === WebSocket.OPEN) {
+      websocket.current.send(JSON.stringify({ type: 'STOP_RECORDING' }));
+      setIsGenerating(true);
+    } else {
+      setError('WebSocket is not connected. Cannot stop recording.');
+      addNotification('Cannot stop recording: connection lost', 'error');
+    }
+  };
+  
+  // Convert a test case to POM test case
+  const convertToPOMTestCase = async (testId) => {
+    try {
+      setIsGenerating(true);
+      
+      // Call the API to convert the test case
+      const response = await fetch(`/api/pom/convert/${testId}`);
+      
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      setPOMTestCase(data);
+      setPageObjects(data.pageObjects || []);
+      setActiveTab('pageObjects');
+      
+      setIsGenerating(false);
+      addNotification('Page Objects generated successfully!', 'success');
+      
+    } catch (error) {
+      console.error('Error generating Page Objects:', error);
+      setError(`Failed to generate Page Objects: ${error.message}`);
+      setIsGenerating(false);
+      addNotification(`Error generating Page Objects: ${error.message}`, 'error');
+    }
+  };
+  
+  // Update configuration
+  const updateConfig = (newConfig) => {
+    setConfig(newConfig);
+  };
+  
+  // Save test case
+  const saveTestCase = async () => {
+    if (!testCase) return;
+    
+    try {
+      // Depending on whether we're in POM mode or not, save different things
+      if (pomTestCase) {
+        const response = await fetch('/api/pom/save', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(pomTestCase),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        const savedPomTestCase = await response.json();
+        setPOMTestCase(savedPomTestCase);
+        setSuccessMessage('POM test case saved successfully!');
+        addNotification('POM test case saved successfully!', 'success');
+      } else {
+        const response = await fetch('/api/recorder/save', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(testCase),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        
+        const savedTestCase = await response.json();
+        setTestCase(savedTestCase);
+        setSuccessMessage('Test case saved successfully!');
+        addNotification('Test case saved successfully!', 'success');
+      }
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (error) {
+      console.error('Error saving test case:', error);
+      setError(`Failed to save test case: ${error.message}`);
+      addNotification(`Failed to save test case: ${error.message}`, 'error');
+    }
+  };
+  
+  // Run test
+  const runTest = async () => {
+    if (!testCase) {
+      setError('Please record a test first');
+      return;
+    }
+    
+    try {
+      // Determine which API to call based on whether we're in POM mode
+      const apiPath = pomTestCase ? `/api/pom/${testCase.id}/run` : `/api/tests/${testCase.id}/run`;
+      
+      const response = await fetch(apiPath, {
+        method: 'POST',
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      setSuccessMessage('Test execution started successfully!');
+      addNotification('Test execution started. Check Reports for results.', 'success');
+      
+      // Redirect to reports page after a delay
+      setTimeout(() => {
+        navigate('/reports');
+      }, 3000);
+    } catch (error) {
+      console.error('Error running test:', error);
+      setError(`Failed to run test: ${error.message}`);
+      addNotification(`Failed to run test: ${error.message}`, 'error');
+    }
+  };
+  
+  // Switch between standard mode and POM mode
+  const togglePOMMode = () => {
+    if (!testCase) {
+      setError('Please record a test first');
+      return;
+    }
+    
+    if (!pomTestCase && testCase) {
+      // If we don't have a POM test case yet, generate one
+      convertToPOMTestCase(testCase.id);
+    } else {
+      // Toggle between regular and POM modes
+      if (activeTab === 'pageObjects' || activeTab === 'pomCode') {
+        setActiveTab('steps');
+      } else {
+        setActiveTab('pageObjects');
+      }
+    }
+  };
+
+  // Render content based on active tab without using Tabs component
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'steps':
+        return (
+          <RecordedSteps 
+            steps={recordedSteps} 
+            isRecording={isRecording}
+          />
+        );
+      case 'pageObjects':
+        return pageObjects.length > 0 ? (
+          <PageObjectList 
+            pageObjects={pageObjects} 
+          />
+        ) : null;
+      case 'testCode':
+        return testCase ? (
+          <TestCodeViewer code={testCase.code} />
+        ) : null;
+      case 'pomCode':
+        return pomTestCase ? (
+          <TestCodeViewer code={pomTestCase.code} />
+        ) : null;
+      default:
+        return (
+          <RecordedSteps 
+            steps={recordedSteps} 
+            isRecording={isRecording}
+          />
+        );
+    }
+  };
+  
+  return (
+    <div className="space-y-6">
+      {/* Header with action buttons */}
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-semibold">POM Test Recorder</h1>
+        <div className="flex space-x-2">
+          {!isRecording ? (
+            <Button
+              variant="primary"
+              disabled={isConnecting}
+              onClick={startRecording}
+            >
+              {isConnecting ? (
+                <>
+                  <Spinner size="sm" color="white" className="mr-2" />
+                  Connecting...
+                </>
+              ) : (
+                'Start Recording'
+              )}
+            </Button>
+          ) : (
+            <Button
+              variant="danger"
+              onClick={stopRecording}
+            >
+              Stop Recording
+            </Button>
+          )}
+        </div>
+      </div>
+      
+      {/* Error and success messages */}
+      {error && (
+        <Alert
+          type="error"
+          title="Error"
+          onClose={() => setError(null)}
+        >
+          {error}
+        </Alert>
+      )}
+      
+      {successMessage && (
+        <Alert
+          type="success"
+          title="Success"
+          onClose={() => setSuccessMessage(null)}
+        >
+          {successMessage}
+        </Alert>
+      )}
+      
+      {/* Configuration */}
+      <RecorderConfig 
+        config={config} 
+        updateConfig={updateConfig} 
+        disabled={isRecording || isConnecting}
+        showPOMOptions={true}
+      />
+      
+      {/* Content with tabs - simplified to avoid Tabs component issue */}
+      {(testCase || isRecording) && (
+        <Card>
+          {/* Custom tab navigation */}
+          <div className="border-b mb-4">
+            <div className="flex">
+              <button
+                className={`px-4 py-2 text-sm font-medium border-b-2 ${
+                  activeTab === 'steps' 
+                    ? 'text-indigo-600 border-indigo-600' 
+                    : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-300'
+                }`}
+                onClick={() => setActiveTab('steps')}
+              >
+                Recorded Steps
+              </button>
+              
+              {pageObjects.length > 0 && (
+                <button
+                  className={`px-4 py-2 text-sm font-medium border-b-2 ${
+                    activeTab === 'pageObjects' 
+                      ? 'text-indigo-600 border-indigo-600' 
+                      : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                  onClick={() => setActiveTab('pageObjects')}
+                >
+                  Page Objects
+                </button>
+              )}
+              
+              {testCase && (
+                <button
+                  className={`px-4 py-2 text-sm font-medium border-b-2 ${
+                    activeTab === 'testCode' 
+                      ? 'text-indigo-600 border-indigo-600' 
+                      : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                  onClick={() => setActiveTab('testCode')}
+                >
+                  Test Code
+                </button>
+              )}
+              
+              {pomTestCase && (
+                <button
+                  className={`px-4 py-2 text-sm font-medium border-b-2 ${
+                    activeTab === 'pomCode' 
+                      ? 'text-indigo-600 border-indigo-600' 
+                      : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                  onClick={() => setActiveTab('pomCode')}
+                >
+                  POM Test Code
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* Tab content */}
+          <div className="py-2">
+            {renderTabContent()}
+          </div>
+          
+          {/* Action buttons */}
+          <div className="mt-6 flex justify-end space-x-2">
+            {testCase && (
+              <>
+                {config.generatePageObjects && !pomTestCase && isGenerating && (
+                  <div className="flex items-center mr-auto">
+                    <Spinner size="sm" className="mr-2" />
+                    <span>Generating Page Objects...</span>
+                  </div>
+                )}
+                
+                <Button
+                  variant={pomTestCase ? "success" : "outline"}
+                  onClick={togglePOMMode}
+                  disabled={isGenerating}
+                >
+                  {pomTestCase ? "View Regular Mode" : "Generate Page Objects"}
+                </Button>
+                
+                <Button
+                  variant="primary"
+                  onClick={saveTestCase}
+                  disabled={isGenerating}
+                >
+                  Save Test
+                </Button>
+                
+                <Button
+                  variant="secondary"
+                  onClick={runTest}
+                  disabled={isGenerating}
+                >
+                  Run Test
+                </Button>
+              </>
+            )}
+          </div>
+        </Card>
+      )}
+      
+      {/* Initial state message */}
+      {!testCase && !isRecording && !isGenerating && (
+        <Card>
+          <div className="p-6 text-center">
+            <p className="text-gray-600 mb-4">
+              Click "Start Recording" to begin capturing your test steps. The recorder will create Page Object Models automatically when you stop recording.
+            </p>
+            <p className="text-sm text-gray-500">
+              Page Object Models encapsulate page structure and behavior, making your tests more maintainable and easier to understand.
+            </p>
+          </div>
+        </Card>
+      )}
+      
+      {/* Processing state */}
+      {isGenerating && !pomTestCase && !isRecording && (
+        <Card>
+          <div className="flex flex-col items-center justify-center py-8">
+            <Spinner size="lg" className="mb-4" />
+            <p className="text-lg text-gray-700">Generating Page Objects...</p>
+            <p className="text-gray-500 text-sm mt-2">This may take a few moments as our AI analyzes your test.</p>
+          </div>
+        </Card>
+      )}
+      
+      {/* Recording indicator - rendered safely */}
+      {isRecording && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded-md shadow-lg animate-pulse">
+          Recording in progress... Actions performed in the browser are being captured.
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default POMTestRecorder;
+
+
+// src/main/webapp/src/components/recorder/PageObjectList.jsx
+import React from 'react';
+import Card from '../common/Card';
+
+const PageObjectList = ({ pageObjects }) => {
+  if (!pageObjects || pageObjects.length === 0) {
+    return (
+      <div className="text-gray-500 text-center py-8">
+        No page objects have been generated yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {pageObjects.map((pageObject, index) => (
+        <div key={index} className="border rounded-lg p-4">
+          <div className="font-medium text-lg mb-2">{pageObject.name}</div>
+          <div className="text-sm text-gray-600 mb-4">{pageObject.description || 'No description available'}</div>
+          
+          {/* Elements section */}
+          <div className="mb-4">
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Elements</h3>
+            {pageObject.elements && pageObject.elements.length > 0 ? (
+              <ul className="space-y-1">
+                {pageObject.elements.map((element, elemIndex) => (
+                  <li key={elemIndex} className="text-sm">
+                    <span className="font-mono bg-gray-100 px-1 rounded">{element.name}</span>
+                    <span className="mx-1">-</span>
+                    <span className="text-gray-600">{element.description}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500">No elements defined</p>
+            )}
+          </div>
+          
+          {/* Actions section */}
+          <div>
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Actions</h3>
+            {pageObject.actions && pageObject.actions.length > 0 ? (
+              <ul className="space-y-1">
+                {pageObject.actions.map((action, actionIndex) => (
+                  <li key={actionIndex} className="text-sm">
+                    <span className="font-mono bg-gray-100 px-1 rounded">{action.name}()</span>
+                    <span className="mx-1">-</span>
+                    <span className="text-gray-600">{action.description}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500">No actions defined</p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export default PageObjectList;
+
+
+// src/main/webapp/src/components/recorder/RecorderConfig.jsx
+import React from 'react';
+import TextField from '../common/TextField';
+import SelectField from '../common/SelectField';
+import Checkbox from '../common/Checkbox';
+import Card from '../common/Card';
+
+const RecorderConfig = ({ config, updateConfig, disabled = false, showPOMOptions = false }) => {
+  const browserOptions = [
+    { value: 'chrome', label: 'Chrome' },
+    { value: 'firefox', label: 'Firefox' },
+    { value: 'edge', label: 'Edge' },
+    { value: 'safari', label: 'Safari' }
+  ];
+  
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    updateConfig({
+      ...config,
+      [name]: type === 'checkbox' ? checked : value
+    });
+  };
+  
+  return (
+    <Card title="Recording Configuration">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <TextField 
+          label="URL to test"
+          name="url"
+          placeholder="https://example.com"
+          value={config.url}
+          onChange={handleChange}
+          disabled={disabled}
+          required
+        />
+        
+        <SelectField
+          label="Browser"
+          name="browser"
+          value={config.browser}
+          onChange={handleChange}
+          options={browserOptions}
+          disabled={disabled}
+          required
+        />
+        
+        <Checkbox
+          label="Run in headless mode"
+          name="headless"
+          checked={config.headless}
+          onChange={handleChange}
+          disabled={disabled}
+        />
+        
+        {showPOMOptions && (
+          <Checkbox
+            label="Generate Page Object Models"
+            name="generatePageObjects"
+            checked={config.generatePageObjects}
+            onChange={handleChange}
+            disabled={disabled}
+          />
+        )}
+      </div>
+      
+      <div className="text-sm text-gray-500 mt-4">
+        <p>The test recorder will open a browser window and record your actions on the specified URL.</p>
+        {showPOMOptions && config.generatePageObjects && (
+          <p className="mt-2">Page Object Models will be automatically generated when recording stops.</p>
+        )}
+      </div>
+    </Card>
+  );
+};
+
+export default RecorderConfig;
+
+
+
+package com.cssmart.ui.controller;
+
+import com.cssmart.ui.service.PageObjectGenerator;
+import com.cssmart.ui.service.TestRecordingService;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.POMTestCase;
+import com.cssmart.core.pom.PageObjectModel;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Controller for Page Object Model operations
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/pom")
+public class POMController {
+    
+    private final PageObjectGenerator pageObjectGenerator;
+    private final TestRecordingService testRecordingService;
+    
+    @Autowired
+    public POMController(PageObjectGenerator pageObjectGenerator, TestRecordingService testRecordingService) {
+        this.pageObjectGenerator = pageObjectGenerator;
+        this.testRecordingService = testRecordingService;
+    }
+    
+    /**
+     * Convert a test case to a POM test case
+     * @param id Test case ID
+     * @return POM test case
+     */
+    @GetMapping("/convert/{id}")
+    public ResponseEntity<POMTestCase> convertToPOM(@PathVariable("id") String id) {
+        log.info("Converting test case {} to POM test case", id);
+        
+        try {
+            // Get the test case from the recording service
+            TestCase testCase = testRecordingService.getRecordedTest(id);
+            
+            if (testCase == null) {
+                log.warn("Test case not found: {}", id);
+                return ResponseEntity.notFound().build();
+            }
+            
+            // Convert to POM test case
+            POMTestCase pomTestCase = pageObjectGenerator.convertToPOMTestCase(testCase);
+            
+            return ResponseEntity.ok(pomTestCase);
+        } catch (Exception e) {
+            log.error("Error converting test case to POM", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Save a POM test case
+     * @param pomTestCase POM test case to save
+     * @return Saved POM test case
+     */
+    @PostMapping("/save")
+    public ResponseEntity<POMTestCase> savePOMTestCase(@RequestBody POMTestCase pomTestCase) {
+        log.info("Saving POM test case: {}", pomTestCase.getName());
+        
+        try {
+            // Set ID if not present
+            if (pomTestCase.getId() == null || pomTestCase.getId().isEmpty()) {
+                pomTestCase.setId(UUID.randomUUID().toString());
+            }
+            
+            // Save page objects if they exist
+            if (pomTestCase.getPageObjects() != null && !pomTestCase.getPageObjects().isEmpty()) {
+                for (PageObjectModel pageObject : pomTestCase.getPageObjects()) {
+                    pageObjectGenerator.savePageObject(pageObject);
+                }
+            }
+            
+            // Save the test case
+            POMTestCase savedPomTestCase = testRecordingService.savePOMTestCase(pomTestCase);
+            
+            return ResponseEntity.ok(savedPomTestCase);
+        } catch (Exception e) {
+            log.error("Error saving POM test case", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Run a POM test
+     * @param id Test ID
+     * @return Execution result
+     */
+    @PostMapping("/{id}/run")
+    public ResponseEntity<Map<String, Object>> runPOMTest(@PathVariable("id") String id) {
+        log.info("Running POM test: {}", id);
+        
+        try {
+            // Get the POM test case
+            POMTestCase pomTestCase = testRecordingService.getPOMTestCase(id);
+            
+            if (pomTestCase == null) {
+                log.warn("POM test case not found: {}", id);
+                return ResponseEntity.notFound().build();
+            }
+            
+            // Execute the test - for now, just return a success message
+            Map<String, Object> result = new HashMap<>();
+            result.put("status", "success");
+            result.put("message", "POM Test execution started");
+            result.put("executionId", UUID.randomUUID().toString());
+            
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Error running POM test", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Get all page objects
+     * @return List of page objects
+     */
+    @GetMapping("/page-objects")
+    public ResponseEntity<List<PageObjectModel>> getAllPageObjects() {
+        log.info("Fetching all page objects");
+        
+        try {
+            List<PageObjectModel> pageObjects = pageObjectGenerator.getAllPageObjects();
+            return ResponseEntity.ok(pageObjects);
+        } catch (Exception e) {
+            log.error("Error fetching page objects", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+}
+
+
+package com.cssmart.ui.recorder.model;
+
+import com.cssmart.core.pom.PageObjectModel;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Test case with Page Object Model support
+ */
+@Data
+@EqualsAndHashCode(callSuper = true)
+@NoArgsConstructor
+public class POMTestCase extends TestCase {
+    
+    private List<PageObjectModel> pageObjects = new ArrayList<>();
+    
+    /**
+     * Create a POM test case from a regular test case
+     * @param testCase Regular test case
+     */
+    public POMTestCase(TestCase testCase) {
+        setId(testCase.getId());
+        setName(testCase.getName());
+        setDescription(testCase.getDescription());
+        setClassName(testCase.getClassName());
+        setMethodName(testCase.getMethodName());
+        setCode(testCase.getCode());
+        setSteps(testCase.getSteps());
+        setStartTime(testCase.getStartTime());
+        setEndTime(testCase.getEndTime());
+    }
+    
+    /**
+     * Add a page object to this test case
+     * @param pageObject Page object to add
+     */
+    public void addPageObject(PageObjectModel pageObject) {
+        if (pageObjects == null) {
+            pageObjects = new ArrayList<>();
+        }
+        pageObjects.add(pageObject);
+    }
+    
+    /**
+     * Generate POM-based test code
+     * @return Generated code
+     */
+    public String generatePOMCode() {
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.POMTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        
+        // Import page objects
+        if (pageObjects != null && !pageObjects.isEmpty()) {
+            for (PageObjectModel pageObject : pageObjects) {
+                code.append("import ").append(pageObject.getPackageName()).append(".")
+                    .append(pageObject.getClassName()).append(";\n");
+            }
+        }
+        
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("/**\n");
+        code.append(" * ").append(getDescription()).append("\n");
+        code.append(" * Generated with Page Object Models\n");
+        code.append(" */\n");
+        code.append("@Slf4j\n");
+        code.append("public class ").append(getClassName()).append(" extends POMTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(getDescription()).append("\")\n");
+        code.append("    public void ").append(getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(getDescription()).append("\");\n\n");
+        
+        // Initialize page objects
+        if (pageObjects != null && !pageObjects.isEmpty()) {
+            for (PageObjectModel pageObject : pageObjects) {
+                String instanceName = toLowerCamelCase(pageObject.getClassName().replace("Page", ""));
+                code.append("        // Initialize ").append(pageObject.getName()).append("\n");
+                code.append("        ").append(pageObject.getClassName()).append(" ")
+                    .append(instanceName).append(" = new ").append(pageObject.getClassName())
+                    .append("(driver);\n\n");
+            }
+        }
+        
+        // Add test steps using page objects
+        if (getSteps() != null && !getSteps().isEmpty()) {
+            // Try to generate POM-based steps
+            generatePOMBasedSteps(code);
+        } else {
+            code.append("        // TODO: Implement test steps using page objects\n\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        
+        // Add helper methods if needed
+        code.append("\n    /**\n");
+        code.append("     * Helper method to get the appropriate page object for an element\n");
+        code.append("     * @param elementName Element name\n");
+        code.append("     * @return Page object instance name as String\n");
+        code.append("     */\n");
+        code.append("    private String getPageObjectForElement(String elementName) {\n");
+        code.append("        // This would be more sophisticated in a real implementation\n");
+        if (pageObjects != null && !pageObjects.isEmpty()) {
+            code.append("        return \"").append(toLowerCamelCase(pageObjects.get(0).getClassName().replace("Page", ""))).append("\";\n");
+        } else {
+            code.append("        return \"page\";\n");
+        }
+        code.append("    }\n");
+        
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    /**
+     * Generate POM-based steps from the recorded steps
+     * @param code StringBuilder to append to
+     */
+    private void generatePOMBasedSteps(StringBuilder code) {
+        if (pageObjects == null || pageObjects.isEmpty() || getSteps() == null || getSteps().isEmpty()) {
+            code.append("        // No steps or page objects available\n\n");
+            return;
+        }
+        
+        // Default to first page object if we have one
+        PageObjectModel defaultPageObject = pageObjects.get(0);
+        String defaultInstanceName = toLowerCamelCase(defaultPageObject.getClassName().replace("Page", ""));
+        
+        for (RecordedStep step : getSteps()) {
+            if (step.getDescription() != null) {
+                code.append("        // ").append(step.getDescription()).append("\n");
+            }
+            
+            // Try to map the step to a page object action
+            if ("NAVIGATE".equals(step.getAction()) && step.getValue() != null) {
+                // Find the page object that matches this URL if possible
+                PageObjectModel matchingPage = findPageObjectForUrl(step.getValue());
+                String instanceName = matchingPage != null 
+                    ? toLowerCamelCase(matchingPage.getClassName().replace("Page", ""))
+                    : defaultInstanceName;
+                
+                code.append("        ").append(instanceName).append(".navigateToPage();\n");
+            } else if (step.getElement() != null) {
+                // Try to find which page object this element belongs to
+                PageObjectModel pageObject = findPageObjectForElement(step.getElement());
+                String instanceName = pageObject != null
+                    ? toLowerCamelCase(pageObject.getClassName().replace("Page", ""))
+                    : defaultInstanceName;
+                
+                // Generate action based on step type
+                switch (step.getAction()) {
+                    case "CLICK":
+                        code.append("        ").append(instanceName).append(".click")
+                            .append(toProperCase(step.getElement())).append("();\n");
+                        break;
+                    case "TYPE":
+                        code.append("        ").append(instanceName).append(".enter")
+                            .append(toProperCase(step.getElement())).append("(\"")
+                            .append(step.getValue()).append("\");\n");
+                        break;
+                    case "SELECT":
+                        code.append("        ").append(instanceName).append(".select")
+                            .append(toProperCase(step.getElement())).append("(\"")
+                            .append(step.getValue()).append("\");\n");
+                        break;
+                    case "VERIFY_PRESENCE":
+                        code.append("        ").append(instanceName).append(".verify")
+                            .append(toProperCase(step.getElement())).append("IsPresent();\n");
+                        break;
+                    default:
+                        code.append("        // TODO: Implement ")
+                            .append(step.getAction()).append(" for ")
+                            .append(step.getElement()).append("\n");
+                        break;
+                }
+            }
+            
+            code.append("\n");
+        }
+    }
+    
+    /**
+     * Find the page object for a URL
+     * @param url URL to match
+     * @return Matching page object or null
+     */
+    private PageObjectModel findPageObjectForUrl(String url) {
+        if (pageObjects == null || url == null) {
+            return null;
+        }
+        
+        return pageObjects.stream()
+            .filter(po -> po.getPageUrl() != null && url.contains(po.getPageUrl()))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    /**
+     * Find the page object containing a specific element
+     * @param elementName Element name to find
+     * @return Page object containing the element, or null
+     */
+    private PageObjectModel findPageObjectForElement(String elementName) {
+        if (pageObjects == null || elementName == null) {
+            return null;
+        }
+        
+        return pageObjects.stream()
+            .filter(po -> po.getElements() != null && po.getElements().stream()
+                .anyMatch(e -> e.getDescription() != null && 
+                         e.getDescription().contains(elementName)))
+            .findFirst()
+            .orElse(null);
+    }
+    
+    /**
+     * Convert a string to proper case (first letter of each word capitalized)
+     * @param input Input string
+     * @return Proper case string
+     */
+    private String toProperCase(String input) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        
+        // Replace non-alphanumeric with spaces
+        String clean = input.replaceAll("[^a-zA-Z0-9]", " ");
+        
+        // Split into words
+        String[] words = clean.trim().split("\\s+");
+        StringBuilder result = new StringBuilder();
+        
+        for (String word : words) {
+            if (word.length() > 0) {
+                // Capitalize first letter of each word
+                result.append(Character.toUpperCase(word.charAt(0)));
+                if (word.length() > 1) {
+                    result.append(word.substring(1).toLowerCase());
+                }
+            }
+        }
+        
+        return result.toString();
+    }
+    
+    /**
+     * Convert a string to lower camel case
+     * @param input Input string
+     * @return Lower camel case string
+     */
+    private String toLowerCamelCase(String input) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        
+        String properCase = toProperCase(input);
+        return Character.toLowerCase(properCase.charAt(0)) + properCase.substring(1);
+    }
+}
+
+
+package com.cssmart.core.pom;
+
+import lombok.Builder;
+import lombok.Data;
+import lombok.Singular;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Page Object Model for a web page
+ */
+@Data
+@Builder
+public class PageObjectModel {
+    
+    private String id;
+    private String name;
+    private String description;
+    private String pageUrl;
+    private String packageName;
+    private String className;
+    
+    @Singular
+    private List<PageElement> elements;
+    
+    @Singular
+    private List<PageAction> actions;
+    
+    @Singular
+    private List<PageVerification> verifications;
+    
+    /**
+     * Add an element to this page object
+     * @param element Element to add
+     */
+    public void addElement(PageElement element) {
+        if (elements == null) {
+            elements = new ArrayList<>();
+        }
+        elements.add(element);
+    }
+    
+    /**
+     * Add an action to this page object
+     * @param action Action to add
+     */
+    public void addAction(PageAction action) {
+        if (actions == null) {
+            actions = new ArrayList<>();
+        }
+        actions.add(action);
+    }
+    
+    /**
+     * Add a verification to this page object
+     * @param verification Verification to add
+     */
+    public void addVerification(PageVerification verification) {
+        if (verifications == null) {
+            verifications = new ArrayList<>();
+        }
+        verifications.add(verification);
+    }
+    
+    /**
+     * Generate code for this page object
+     * @return Generated Java code
+     */
+    public String generateCode() {
+        StringBuilder code = new StringBuilder();
+        
+        // Add package declaration
+        code.append("package ").append(packageName).append(";\n\n");
+        
+        // Add imports
+        code.append("import org.openqa.selenium.WebDriver;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.openqa.selenium.support.FindBy;\n");
+        code.append("import org.openqa.selenium.support.PageFactory;\n");
+        code.append("import com.cssmart.core.pom.BasePage;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        // Add class javadoc
+        code.append("/**\n");
+        code.append(" * Page Object Model for ").append(name).append("\n");
+        if (description != null && !description.isEmpty()) {
+            code.append(" * ").append(description).append("\n");
+        }
+        code.append(" */\n");
+        
+        // Add class declaration
+        code.append("@Slf4j\n");
+        code.append("public class ").append(className).append(" extends BasePage {\n\n");
+        
+        // Add elements
+        if (elements != null && !elements.isEmpty()) {
+            for (PageElement element : elements) {
+                // Add FindBy annotation
+                code.append("    @FindBy(").append(element.getLocatorType().name().toLowerCase())
+                    .append(" = \"").append(element.getLocatorValue()).append("\")\n");
+                
+                // Add field
+                code.append("    private WebElement ").append(element.getName()).append(";\n\n");
+            }
+        }
+        
+        // Add constructor
+        code.append("    /**\n");
+        code.append("     * Constructor\n");
+        code.append("     * @param driver WebDriver instance\n");
+        code.append("     */\n");
+        code.append("    public ").append(className).append("(WebDriver driver) {\n");
+        code.append("        super(driver);\n");
+        code.append("        PageFactory.initElements(driver, this);\n");
+        code.append("    }\n\n");
+        
+        // Add navigate method if URL is specified
+        if (pageUrl != null && !pageUrl.isEmpty()) {
+            code.append("    /**\n");
+            code.append("     * Navigate to this page\n");
+            code.append("     * @return this page object\n");
+            code.append("     */\n");
+            code.append("    public ").append(className).append(" navigateToPage() {\n");
+            code.append("        driver.get(\"").append(pageUrl).append("\");\n");
+            code.append("        log.info(\"Navigated to ").append(name).append("\");\n");
+            code.append("        return this;\n");
+            code.append("    }\n\n");
+        }
+        
+        // Add action methods
+        if (actions != null && !actions.isEmpty()) {
+            for (PageAction action : actions) {
+                // Add method javadoc
+                code.append("    /**\n");
+                code.append("     * ").append(action.getDescription()).append("\n");
+                
+                // Add parameters javadoc if any
+                if (action.getParameters() != null && !action.getParameters().isEmpty()) {
+                    for (Map.Entry<String, String> param : action.getParameters().entrySet()) {
+                        code.append("     * @param ").append(param.getKey())
+                            .append(" ").append(param.getValue()).append("\n");
+                    }
+                }
+                
+                // Add return javadoc
+                if (action.isReturnsPage()) {
+                    code.append("     * @return this page object\n");
+                }
+                
+                code.append("     */\n");
+                
+                // Add method signature
+                code.append("    public ");
+                
+                // Return type
+                if (action.isReturnsPage()) {
+                    code.append(className);
+                } else {
+                    code.append("void");
+                }
+                
+                // Method name and parameters
+                code.append(" ").append(action.getName()).append("(");
+                
+                // Add parameters if any
+                if (action.getParameters() != null && !action.getParameters().isEmpty()) {
+                    int paramCount = 0;
+                    for (String paramName : action.getParameters().keySet()) {
+                        if (paramCount > 0) {
+                            code.append(", ");
+                        }
+                        code.append("String ").append(paramName);
+                        paramCount++;
+                    }
+                }
+                
+                code.append(") {\n");
+                
+                // Method body
+                switch (action.getType()) {
+                    case CLICK:
+                        code.append("        waitForElementClickable(").append(action.getElementName()).append(");\n");
+                        code.append("        ").append(action.getElementName()).append(".click();\n");
+                        code.append("        log.info(\"Clicked on ").append(action.getElementName()).append("\");\n");
+                        break;
+                        
+                    case TYPE:
+                        code.append("        waitForElementVisible(").append(action.getElementName()).append(");\n");
+                        code.append("        ").append(action.getElementName()).append(".clear();\n");
+                        code.append("        ").append(action.getElementName()).append(".sendKeys(value);\n");
+                        code.append("        log.info(\"Entered text in ").append(action.getElementName()).append("\");\n");
+                        break;
+                        
+                    case SELECT:
+                        code.append("        waitForElementVisible(").append(action.getElementName()).append(");\n");
+                        code.append("        new org.openqa.selenium.support.ui.Select(")
+                            .append(action.getElementName()).append(").selectByVisibleText(value);\n");
+                        code.append("        log.info(\"Selected option in ").append(action.getElementName()).append("\");\n");
+                        break;
+                        
+                    case NAVIGATE:
+                        code.append("        driver.get(\"").append(pageUrl).append("\");\n");
+                        code.append("        log.info(\"Navigated to ").append(name).append("\");\n");
+                        break;
+                        
+                    case WAIT:
+                        if (action.getElementName() != null) {
+                            code.append("        waitForElementVisible(").append(action.getElementName()).append(");\n");
+                            code.append("        log.info(\"Waited for ").append(action.getElementName()).append("\");\n");
+                        } else {
+                            code.append("        try { Thread.sleep(2000); } catch (InterruptedException e) {}\n");
+                            code.append("        log.info(\"Waited for 2 seconds\");\n");
+                        }
+                        break;
+                        
+                    case HOVER:
+                        code.append("        hover(").append(action.getElementName()).append(");\n");
+                        code.append("        log.info(\"Hovered over ").append(action.getElementName()).append("\");\n");
+                        break;
+                        
+                    case CUSTOM:
+                    default:
+                        code.append("        // TODO: Implement this action\n");
+                        code.append("        log.info(\"Performed custom action\");\n");
+                        break;
+                }
+                
+                // Return statement if needed
+                if (action.isReturnsPage()) {
+                    code.append("        return this;\n");
+                }
+                
+                code.append("    }\n\n");
+            }
+        }
+        
+        // Add verification methods
+        if (verifications != null && !verifications.isEmpty()) {
+            for (PageVerification verification : verifications) {
+                // Add method javadoc
+                code.append("    /**\n");
+                code.append("     * ").append(verification.getDescription()).append("\n");
+                code.append("     * @return true if verification passes\n");
+                code.append("     */\n");
+                
+                // Add method signature
+                code.append("    public boolean ").append(verification.getName()).append("() {\n");
+                
+                // Method body
+                switch (verification.getType()) {
+                    case ELEMENT_PRESENT:
+                        code.append("        try {\n");
+                        code.append("            return ").append(verification.getElementName()).append(".isDisplayed();\n");
+                        code.append("        } catch (Exception e) {\n");
+                        code.append("            log.warn(\"Element not present: ").append(verification.getElementName()).append("\");\n");
+                        code.append("            return false;\n");
+                        code.append("        }\n");
+                        break;
+                        
+                    case ELEMENT_ENABLED:
+                        code.append("        try {\n");
+                        code.append("            return ").append(verification.getElementName()).append(".isEnabled();\n");
+                        code.append("        } catch (Exception e) {\n");
+                        code.append("            log.warn(\"Element not enabled: ").append(verification.getElementName()).append("\");\n");
+                        code.append("            return false;\n");
+                        code.append("        }\n");
+                        break;
+                        
+                    case TEXT_EQUALS:
+                        code.append("        try {\n");
+                        code.append("            return ").append(verification.getElementName())
+                            .append(".getText().equals(\"").append(verification.getExpectedValue()).append("\");\n");
+                        code.append("        } catch (Exception e) {\n");
+                        code.append("            log.warn(\"Text verification failed: ").append(verification.getElementName()).append("\");\n");
+                        code.append("            return false;\n");
+                        code.append("        }\n");
+                        break;
+                        
+                    case TEXT_CONTAINS:
+                        code.append("        try {\n");
+                        code.append("            return ").append(verification.getElementName())
+                            .append(".getText().contains(\"").append(verification.getExpectedValue()).append("\");\n");
+                        code.append("        } catch (Exception e) {\n");
+                        code.append("            log.warn(\"Text contains verification failed: ").append(verification.getElementName()).append("\");\n");
+                        code.append("            return false;\n");
+                        code.append("        }\n");
+                        break;
+                        
+                    case CUSTOM:
+                    default:
+                        code.append("        // TODO: Implement this verification\n");
+                        code.append("        return true;\n");
+                        break;
+                }
+                
+                code.append("    }\n\n");
+            }
+        }
+        
+        // Close class
+        code.append("}\n");
+        
+        return code.toString();
+    }
+}
+
+
+package com.cssmart.core.pom;
+
+import lombok.Builder;
+import lombok.Data;
+
+import java.util.Map;
+
+/**
+ * Represents an element on a page
+ */
+@Data
+@Builder
+public class PageElement {
+    
+    /**
+     * Locator types
+     */
+    public enum LocatorType {
+        ID,
+        NAME,
+        CLASS_NAME,
+        TAG_NAME,
+        XPATH,
+        CSS,
+        LINK_TEXT,
+        PARTIAL_LINK_TEXT
+    }
+    
+    private String name;
+    private String description;
+    private LocatorType locatorType;
+    private String locatorValue;
+    private boolean isList;
+}
+
+package com.cssmart.core.pom;
+
+import lombok.Builder;
+import lombok.Data;
+
+import java.util.Map;
+
+/**
+ * Represents an action that can be performed on a page
+ */
+@Data
+@Builder
+public class PageAction {
+    
+    /**
+     * Action types
+     */
+    public enum ActionType {
+        CLICK,
+        TYPE,
+        SELECT,
+        NAVIGATE,
+        WAIT,
+        HOVER,
+        CUSTOM
+    }
+    
+    private String name;
+    private String description;
+    private ActionType type;
+    private String elementName;
+    private Map<String, String> parameters;
+    private boolean returnsPage;
+}
+
+package com.cssmart.core.pom;
+
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * Represents a verification on a page
+ */
+@Data
+@Builder
+public class PageVerification {
+    
+    /**
+     * Verification types
+     */
+    public enum VerificationType {
+        ELEMENT_PRESENT,
+        ELEMENT_ENABLED,
+        TEXT_EQUALS,
+        TEXT_CONTAINS,
+        CUSTOM
+    }
+    
+    private String name;
+    private String description;
+    private VerificationType type;
+    private String elementName;
+    private String expectedValue;
+}
+
+
+package com.cssmart.core.pom;
+
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.interactions.Actions;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
+
+/**
+ * Base page class for Page Object Models
+ */
+public class BasePage {
+    
+    protected WebDriver driver;
+    protected WebDriverWait wait;
+    
+    /**
+     * Constructor
+     * @param driver WebDriver instance
+     */
+    public BasePage(WebDriver driver) {
+        this.driver = driver;
+        this.wait = new WebDriverWait(driver, 10);
+    }
+    
+    /**
+     * Wait for an element to be visible
+     * @param element WebElement to wait for
+     * @return The element when it's visible
+     */
+    protected WebElement waitForElementVisible(WebElement element) {
+        return wait.until(ExpectedConditions.visibilityOf(element));
+    }
+    
+    /**
+     * Wait for an element to be clickable
+     * @param element WebElement to wait for
+     * @return The element when it's clickable
+     */
+    protected WebElement waitForElementClickable(WebElement element) {
+        return wait.until(ExpectedConditions.elementToBeClickable(element));
+    }
+    
+    /**
+     * Hover over an element
+     * @param element WebElement to hover over
+     */
+    protected void hover(WebElement element) {
+        Actions actions = new Actions(driver);
+        actions.moveToElement(element).perform();
+    }
+}
+
+
+
+package com.cssmart.core.base;
+
+import org.openqa.selenium.WebDriver;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * Base class for Page Object Model-based tests
+ */
+@Slf4j
+public class POMTestBase {
+    
+    protected WebDriver driver;
+    
+    /**
+     * Set up before test method
+     */
+    @BeforeMethod
+    public void setUp() {
+        // Initialize WebDriver (in a real implementation, this would be more configurable)
+        driver = new org.openqa.selenium.chrome.ChromeDriver();
+        driver.manage().window().maximize();
+        log.info("WebDriver initialized for POM test");
+    }
+    
+    /**
+     * Tear down after test method
+     */
+    @AfterMethod
+    public void tearDown() {
+        if (driver != null) {
+            driver.quit();
+            log.info("WebDriver closed");
+        }
+    }
+}
+
+
+
 
 
