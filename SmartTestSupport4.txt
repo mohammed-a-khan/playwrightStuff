@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.ArrayList;
 import java.util.UUID;
 import java.time.LocalDateTime;
+import java.net.URL;
 
 @Slf4j
 public class TestRecorder {
@@ -25,16 +26,17 @@ public class TestRecorder {
     private LocalDateTime startTime;
     private String sessionId;
     private WebDriver driver;
-    private String recorderBaseUrl;
+    private final String recorderApiUrl;
+    private String currentDomain;
     
     /**
      * Constructor for TestRecorder
-     * @param recorderBaseUrl Base URL for recorder API (e.g., "http://localhost:8080")
+     * @param recorderApiUrl Base URL for recorder API (e.g., "http://localhost:8080")
      */
-    public TestRecorder(String recorderBaseUrl) {
+    public TestRecorder(String recorderApiUrl) {
         this.isRecording = false;
         this.steps = new ArrayList<>();
-        this.recorderBaseUrl = recorderBaseUrl;
+        this.recorderApiUrl = recorderApiUrl;
     }
     
     /**
@@ -51,13 +53,22 @@ public class TestRecorder {
         // Initialize and launch browser
         initializeBrowser(browserType);
         
-        // Navigate to the base URL and inject recorder script
+        // Navigate to the base URL
         if (driver != null && url != null && !url.isEmpty()) {
-            // First navigate to the URL
+            try {
+                // Extract domain for domain change detection
+                URL parsedUrl = new URL(url);
+                this.currentDomain = parsedUrl.getHost();
+            } catch (Exception e) {
+                log.warn("Could not parse URL domain: {}", e.getMessage());
+                this.currentDomain = "";
+            }
+            
+            // Navigate to the URL
             driver.get(url);
             
-            // Then inject the recorder script
-            injectRecorderScript(driver);
+            // Inject the recorder script
+            setupScriptInjection();
             
             // Add an automatic navigation step
             RecordedStep step = new RecordedStep();
@@ -77,7 +88,6 @@ public class TestRecorder {
      */
     private void initializeBrowser(String browserType) {
         try {
-            // Set up the WebDriver based on browser type
             switch (browserType.toLowerCase()) {
                 case "chrome":
                     WebDriverManager.chromedriver().setup();
@@ -85,6 +95,8 @@ public class TestRecorder {
                     ChromeOptions chromeOptions = new ChromeOptions();
                     // Allow cross-origin requests
                     chromeOptions.addArguments("--disable-web-security");
+                    chromeOptions.addArguments("--disable-notifications"); // Disable notifications
+                    
                     driver = new ChromeDriver(chromeOptions);
                     break;
                 case "firefox":
@@ -114,9 +126,270 @@ public class TestRecorder {
             driver.manage().window().maximize();
             
             log.info("Browser initialized: {}", browserType);
+            
+            // Set up page load listening
+            setupPageLoadListener();
+            
         } catch (Exception e) {
             log.error("Failed to initialize browser: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to initialize browser: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Set up a listener to detect page loads and domain changes
+     */
+    private void setupPageLoadListener() {
+        if (driver instanceof JavascriptExecutor) {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Set up a MutationObserver to detect URL changes for SPAs
+            String urlChangeDetectionScript = 
+                "var csLastUrl = location.href;\n" +
+                "var csRecorderSessionId = '" + sessionId + "';\n" +
+                "var csRecorderApiUrl = '" + recorderApiUrl + "/api/recorder/event';\n" +
+                
+                "function csCheckUrlChange() {\n" +
+                "    if (csLastUrl !== location.href) {\n" +
+                "        console.log('URL changed from ' + csLastUrl + ' to ' + location.href);\n" +
+                "        csLastUrl = location.href;\n" +
+                "        \n" +
+                "        // Send navigation event\n" +
+                "        csSendNavigationEvent(location.href);\n" +
+                "        \n" +
+                "        // Check if we need to re-inject recorder\n" +
+                "        if (!window._csRecorderData || !window._csRecorderData.active) {\n" +
+                "            console.log('Recorder not active after URL change, re-initializing');\n" +
+                "            if (typeof initCSRecorder === 'function') {\n" +
+                "                initCSRecorder();\n" +
+                "            }\n" +
+                "        }\n" +
+                "    }\n" +
+                "}\n" +
+                
+                "function csSendNavigationEvent(url) {\n" +
+                "    var xhr = new XMLHttpRequest();\n" +
+                "    xhr.open('POST', csRecorderApiUrl, true);\n" +
+                "    xhr.setRequestHeader('Content-Type', 'application/json');\n" +
+                "    xhr.send(JSON.stringify({\n" +
+                "        sessionId: csRecorderSessionId,\n" +
+                "        actionType: 'NAVIGATE',\n" +
+                "        element: 'page',\n" +
+                "        value: url\n" +
+                "    }));\n" +
+                "}\n" +
+                
+                "// Check URL change on regular interval for SPAs\n" +
+                "setInterval(csCheckUrlChange, 500);\n" +
+                
+                "// Also listen for popstate events (browser back/forward buttons)\n" +
+                "window.addEventListener('popstate', function() {\n" +
+                "    setTimeout(function() {\n" +
+                "        csCheckUrlChange();\n" +
+                "    }, 100);\n" +
+                "});\n";
+            
+            jsExecutor.executeScript(urlChangeDetectionScript);
+            log.info("URL change detection script injected");
+        }
+    }
+    
+    /**
+     * Inject recorder script to capture user interactions
+     */
+    public void setupScriptInjection() {
+        if (driver instanceof JavascriptExecutor) {
+            JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+            
+            // Check if recorder is already injected
+            Boolean isInjected = false;
+            try {
+                isInjected = (Boolean) jsExecutor.executeScript(
+                    "return typeof window._csRecorderData !== 'undefined' && window._csRecorderData.active === true;"
+                );
+            } catch (Exception e) {
+                log.debug("Could not check recorder status: {}", e.getMessage());
+            }
+            
+            if (Boolean.TRUE.equals(isInjected)) {
+                log.info("Recorder script already active on this page");
+                return;
+            }
+            
+            // Check for domain change
+            try {
+                String url = driver.getCurrentUrl();
+                URL parsedUrl = new URL(url);
+                String newDomain = parsedUrl.getHost();
+                
+                if (!newDomain.equals(currentDomain)) {
+                    log.info("Domain changed from {} to {}", currentDomain, newDomain);
+                    currentDomain = newDomain;
+                }
+            } catch (Exception e) {
+                log.warn("Could not detect domain change: {}", e.getMessage());
+            }
+            
+            // This script adds methods to detect and handle all navigation types
+            String script = 
+                // Store recorder data in a global space
+                "window._csRecorderData = {\n" +
+                "    sessionId: '" + sessionId + "',\n" +
+                "    apiUrl: '" + recorderApiUrl + "/api/recorder/event',\n" +
+                "    active: true\n" +
+                "};\n" +
+                
+                // Create an initialization function
+                "function initCSRecorder() {\n" +
+                "    console.log('Initializing CS Smart Recorder, sessionId: ' + window._csRecorderData.sessionId);\n" +
+                "    \n" +
+                "    // Setup click event recorder\n" +
+                "    document.addEventListener('click', function(e) {\n" +
+                "        var element = e.target;\n" +
+                "        var selector = getElementSelector(element);\n" +
+                "        recordEvent('CLICK', selector, '');\n" +
+                "    }, true);\n" +
+                "    \n" +
+                "    // Input events\n" +
+                "    document.addEventListener('change', function(e) {\n" +
+                "        var element = e.target;\n" +
+                "        var selector = getElementSelector(element);\n" +
+                "        \n" +
+                "        if (element.tagName.toLowerCase() === 'input' || \n" +
+                "            element.tagName.toLowerCase() === 'textarea') {\n" +
+                "            recordEvent('TYPE', selector, element.value);\n" +
+                "        } else if (element.tagName.toLowerCase() === 'select') {\n" +
+                "            recordEvent('SELECT', selector, element.value);\n" +
+                "        }\n" +
+                "    }, true);\n" +
+                "    \n" +
+                "    // Form submissions\n" +
+                "    document.addEventListener('submit', function(e) {\n" +
+                "        var form = e.target;\n" +
+                "        var selector = getElementSelector(form);\n" +
+                "        recordEvent('SUBMIT', selector, '');\n" +
+                "    }, true);\n" +
+                "    \n" +
+                "    // Record page load\n" +
+                "    recordEvent('NAVIGATE', 'page', window.location.href);\n" +
+                "}\n" +
+                
+                // Helper functions
+                "function getElementSelector(element) {\n" +
+                "    if (!element) return 'unknown';\n" +
+                "    \n" +
+                "    if (element.id) return '#' + element.id;\n" +
+                "    if (element.name) return '[name=\"' + element.name + '\"]';\n" +
+                "    \n" +
+                "    var selector = element.tagName.toLowerCase();\n" +
+                "    \n" +
+                "    if (typeof element.className === 'string') {\n" +
+                "        var classes = element.className.trim().split(/\\s+/);\n" +
+                "        for (var i = 0; i < classes.length; i++) {\n" +
+                "            if (classes[i]) selector += '.' + classes[i];\n" +
+                "        }\n" +
+                "    } else if (element.classList && element.classList.length) {\n" +
+                "        for (var i = 0; i < element.classList.length; i++) {\n" +
+                "            selector += '.' + element.classList[i];\n" +
+                "        }\n" +
+                "    }\n" +
+                "    \n" +
+                "    return selector;\n" +
+                "}\n" +
+                
+                "function recordEvent(type, element, value) {\n" +
+                "    if (!window._csRecorderData || !window._csRecorderData.active) return;\n" +
+                "    \n" +
+                "    console.log('Recording: ' + type + ' on ' + element);\n" +
+                "    \n" +
+                "    var xhr = new XMLHttpRequest();\n" +
+                "    xhr.open('POST', window._csRecorderData.apiUrl, true);\n" +
+                "    xhr.setRequestHeader('Content-Type', 'application/json');\n" +
+                "    \n" +
+                "    xhr.send(JSON.stringify({\n" +
+                "        sessionId: window._csRecorderData.sessionId,\n" +
+                "        actionType: type,\n" +
+                "        element: element,\n" +
+                "        value: value || ''\n" +
+                "    }));\n" +
+                "}\n" +
+                
+                // Initialize immediately
+                "initCSRecorder();\n" +
+                
+                // Also add to page load and beforeunload events
+                "window.addEventListener('load', function() {\n" +
+                "    setTimeout(initCSRecorder, 500);\n" +
+                "});\n" +
+                
+                // Before page unload, record navigation intent
+                "window.addEventListener('beforeunload', function() {\n" +
+                "    // This will run before navigation/reload\n" +
+                "    recordEvent('NAVIGATE_INTENT', 'page', '');\n" +
+                "});\n";
+            
+            // Inject script directly
+            jsExecutor.executeScript(script);
+            
+            // Also modify XHR to detect AJAX-based navigations
+            jsExecutor.executeScript(
+                "if (typeof window.originalXHROpen === 'undefined') {\n" +
+                "    window.originalXHROpen = XMLHttpRequest.prototype.open;\n" +
+                "    XMLHttpRequest.prototype.open = function() {\n" +
+                "        var url = arguments[1];\n" +
+                "        this.addEventListener('load', function() {\n" +
+                "            // Check if this XHR might be a page navigation\n" +
+                "            if (this.responseType === 'document' || \n" +
+                "                (this.getResponseHeader('Content-Type') && \n" +
+                "                 this.getResponseHeader('Content-Type').indexOf('html') !== -1)) {\n" +
+                "                console.log('Potential AJAX navigation detected to: ' + url);\n" +
+                "                recordEvent('XHR_NAVIGATE', 'xhr', url);\n" +
+                "            }\n" +
+                "        });\n" +
+                "        return window.originalXHROpen.apply(this, arguments);\n" +
+                "    };\n" +
+                "}\n"
+            );
+            
+            // Override form submission to detect traditional form-based navigation
+            jsExecutor.executeScript(
+                "if (typeof window.HTMLFormElement.prototype.originalSubmit === 'undefined') {\n" +
+                "    window.HTMLFormElement.prototype.originalSubmit = HTMLFormElement.prototype.submit;\n" +
+                "    HTMLFormElement.prototype.submit = function() {\n" +
+                "        var form = this;\n" +
+                "        var action = form.action || window.location.href;\n" +
+                "        var selector = getElementSelector(form);\n" +
+                "        \n" +
+                "        console.log('Form submission detected to: ' + action);\n" +
+                "        recordEvent('FORM_SUBMIT', selector, action);\n" +
+                "        \n" +
+                "        return this.originalSubmit();\n" +
+                "    };\n" +
+                "}\n"
+            );
+            
+            log.info("Recorder script injected successfully");
+        }
+    }
+    
+    /**
+     * Check for domain change and reinject recorder if needed
+     */
+    public void checkForDomainChange() {
+        if (driver == null) return;
+        
+        try {
+            String url = driver.getCurrentUrl();
+            URL parsedUrl = new URL(url);
+            String newDomain = parsedUrl.getHost();
+            
+            if (!newDomain.equals(currentDomain)) {
+                log.info("Domain changed from {} to {}, reinjecting recorder", currentDomain, newDomain);
+                currentDomain = newDomain;
+                setupScriptInjection();
+            }
+        } catch (Exception e) {
+            log.warn("Could not check for domain change: {}", e.getMessage());
         }
     }
     
@@ -162,6 +435,20 @@ public class TestRecorder {
             return;
         }
         
+        // Check if this is a navigation action and we should check for domain change
+        if ("NAVIGATE".equals(actionType) || "XHR_NAVIGATE".equals(actionType) || 
+            "FORM_SUBMIT".equals(actionType) || "NAVIGATE_INTENT".equals(actionType)) {
+            // Schedule a domain check after a short delay to allow navigation to complete
+            new Thread(() -> {
+                try {
+                    Thread.sleep(1000);
+                    checkForDomainChange();
+                } catch (Exception e) {
+                    log.warn("Error in domain change check: {}", e.getMessage());
+                }
+            }).start();
+        }
+        
         RecordedStep step = new RecordedStep();
         step.setAction(actionType);
         step.setElement(element);
@@ -173,209 +460,6 @@ public class TestRecorder {
         
         steps.add(step);
         log.debug("Recorded step: {}", step);
-    }
-    
-    /**
-     * Inject the recorder script into the web page
-     * @param driver WebDriver instance
-     */
-    public void injectRecorderScript(WebDriver driver) {
-        if (driver instanceof JavascriptExecutor) {
-            try {
-                JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
-                
-                // Check if the recorder is already initialized
-                Boolean isInitialized = (Boolean) jsExecutor.executeScript(
-                    "return window.csRecorder != null && window.csRecorder.active === true;"
-                );
-                
-                if (Boolean.TRUE.equals(isInitialized)) {
-                    log.debug("Recorder script already injected on this page");
-                    return;
-                }
-                
-                // Construct the complete API URL from the base URL
-                String apiUrl = recorderBaseUrl + "/api/recorder/event";
-                
-                // Get the recorder script with sessionId and apiUrl
-                String script = getInlineRecorderScript()
-                    .replace("${SESSION_ID}", this.sessionId)
-                    .replace("${API_URL}", apiUrl);
-                
-                jsExecutor.executeScript(script);
-                log.info("Recorder script injected successfully");
-            } catch (Exception e) {
-                log.error("Failed to inject recorder script: {}", e.getMessage(), e);
-            }
-        }
-    }
-    
-    /**
-     * Get the inline JavaScript code for the recorder
-     * @return JavaScript code as string
-     */
-    private String getInlineRecorderScript() {
-        return "// CS Smart Recorder initialization\n" +
-            "(function() {\n" +
-            "    // Store session ID in localStorage to persist across page reloads\n" +
-            "    localStorage.setItem('csRecorder_sessionId', '${SESSION_ID}');\n" +
-            "    localStorage.setItem('csRecorder_apiUrl', '${API_URL}');\n" +
-            "    \n" +
-            "    // Initialize recorder\n" +
-            "    initRecorder();\n" +
-            "    \n" +
-            "    // Function to initialize the recorder\n" +
-            "    function initRecorder() {\n" +
-            "        // Skip if already initialized\n" +
-            "        if (window.csRecorder && window.csRecorder.active) {\n" +
-            "            console.log('CS Smart Recorder already initialized');\n" +
-            "            return;\n" +
-            "        }\n" +
-            "        \n" +
-            "        // Get data from localStorage\n" +
-            "        var sessionId = localStorage.getItem('csRecorder_sessionId');\n" +
-            "        var apiUrl = localStorage.getItem('csRecorder_apiUrl');\n" +
-            "        \n" +
-            "        if (!sessionId || !apiUrl) {\n" +
-            "            console.error('CS Smart Recorder initialization failed: missing session ID or API URL');\n" +
-            "            return;\n" +
-            "        }\n" +
-            "        \n" +
-            "        console.log('Initializing CS Smart Recorder with session ID: ' + sessionId);\n" +
-            "        console.log('Using API URL: ' + apiUrl);\n" +
-            "        \n" +
-            "        // Create the recorder object\n" +
-            "        window.csRecorder = {\n" +
-            "            sessionId: sessionId,\n" +
-            "            apiUrl: apiUrl,\n" +
-            "            active: true,\n" +
-            "            \n" +
-            "            sendEvent: function(type, element, value) {\n" +
-            "                if (!this.active) return;\n" +
-            "                \n" +
-            "                console.log('Recording: ' + type + ' on ' + element);\n" +
-            "                \n" +
-            "                var xhr = new XMLHttpRequest();\n" +
-            "                xhr.open('POST', this.apiUrl, true);\n" +
-            "                xhr.setRequestHeader('Content-Type', 'application/json');\n" +
-            "                \n" +
-            "                xhr.onreadystatechange = function() {\n" +
-            "                    if (xhr.readyState === 4) {\n" +
-            "                        if (xhr.status === 200) {\n" +
-            "                            console.log('Event recorded successfully');\n" +
-            "                        } else {\n" +
-            "                            console.error('Failed to record event: ' + xhr.status);\n" +
-            "                        }\n" +
-            "                    }\n" +
-            "                };\n" +
-            "                \n" +
-            "                xhr.send(JSON.stringify({\n" +
-            "                    sessionId: this.sessionId,\n" +
-            "                    actionType: type,\n" +
-            "                    element: element,\n" +
-            "                    value: value || ''\n" +
-            "                }));\n" +
-            "            },\n" +
-            "            \n" +
-            "            getElementInfo: function(element) {\n" +
-            "                if (!element) return 'unknown';\n" +
-            "                \n" +
-            "                if (element.id) {\n" +
-            "                    return '#' + element.id;\n" +
-            "                }\n" +
-            "                \n" +
-            "                if (element.name) {\n" +
-            "                    return '[name=\"' + element.name + '\"]';\n" +
-            "                }\n" +
-            "                \n" +
-            "                // Try to create a more specific selector\n" +
-            "                var selector = element.tagName.toLowerCase();\n" +
-            "                \n" +
-            "                // Fix className.split error by checking if className is a string\n" +
-            "                if (element.className && typeof element.className === 'string') {\n" +
-            "                    var classList = element.className.split(/\\s+/);\n" +
-            "                    for (var i = 0; i < classList.length; i++) {\n" +
-            "                        if (classList[i]) {\n" +
-            "                            selector += '.' + classList[i];\n" +
-            "                        }\n" +
-            "                    }\n" +
-            "                } else if (element.classList && element.classList.length) {\n" +
-            "                    // Alternative approach using classList\n" +
-            "                    for (var i = 0; i < element.classList.length; i++) {\n" +
-            "                        selector += '.' + element.classList[i];\n" +
-            "                    }\n" +
-            "                }\n" +
-            "                \n" +
-            "                return selector;\n" +
-            "            },\n" +
-            "            \n" +
-            "            setupEventListeners: function() {\n" +
-            "                var self = this;\n" +
-            "                \n" +
-            "                // Click events\n" +
-            "                document.addEventListener('click', function(e) {\n" +
-            "                    var selector = self.getElementInfo(e.target);\n" +
-            "                    self.sendEvent('CLICK', selector, '');\n" +
-            "                }, true);\n" +
-            "                \n" +
-            "                // Input events for text fields\n" +
-            "                document.addEventListener('change', function(e) {\n" +
-            "                    if (e.target.tagName.toLowerCase() === 'input' ||\n" +
-            "                        e.target.tagName.toLowerCase() === 'textarea') {\n" +
-            "                        var selector = self.getElementInfo(e.target);\n" +
-            "                        self.sendEvent('TYPE', selector, e.target.value);\n" +
-            "                    } else if (e.target.tagName.toLowerCase() === 'select') {\n" +
-            "                        var selector = self.getElementInfo(e.target);\n" +
-            "                        self.sendEvent('SELECT', selector, e.target.value);\n" +
-            "                    }\n" +
-            "                }, true);\n" +
-            "                \n" +
-            "                // Form submission\n" +
-            "                document.addEventListener('submit', function(e) {\n" +
-            "                    var selector = self.getElementInfo(e.target);\n" +
-            "                    self.sendEvent('SUBMIT', selector, '');\n" +
-            "                }, true);\n" +
-            "                \n" +
-            "                // Record navigation - send a NAVIGATE event when page first loads\n" +
-            "                self.sendEvent('NAVIGATE', 'page', window.location.href);\n" +
-            "            }\n" +
-            "        };\n" +
-            "        \n" +
-            "        // Setup event listeners\n" +
-            "        window.csRecorder.setupEventListeners();\n" +
-            "    }\n" +
-            "    \n" +
-            "    // Add event listener for page load to automatically reinitialize\n" +
-            "    window.addEventListener('load', function() {\n" +
-            "        console.log('Page loaded, checking for recorder...');\n" +
-            "        if (!window.csRecorder || !window.csRecorder.active) {\n" +
-            "            console.log('Recorder not found after load, reinitializing...');\n" +
-            "            initRecorder();\n" +
-            "        }\n" +
-            "    });\n" +
-            "    \n" +
-            "    // Also add a mutation observer to handle SPA navigation\n" +
-            "    setTimeout(function() {\n" +
-            "        try {\n" +
-            "            var lastUrl = location.href;\n" +
-            "            new MutationObserver(function() {\n" +
-            "                if (lastUrl !== location.href) {\n" +
-            "                    console.log('URL changed:', lastUrl, '->', location.href);\n" +
-            "                    lastUrl = location.href;\n" +
-            "                    if (window.csRecorder && window.csRecorder.active) {\n" +
-            "                        // Record navigation event for SPA\n" +
-            "                        window.csRecorder.sendEvent('NAVIGATE', 'page', location.href);\n" +
-            "                    } else {\n" +
-            "                        // Reinitialize if needed\n" +
-            "                        initRecorder();\n" +
-            "                    }\n" +
-            "                }\n" +
-            "            }).observe(document, {subtree: true, childList: true});\n" +
-            "        } catch (e) {\n" +
-            "            console.error('Error setting up URL change detection:', e);\n" +
-            "        }\n" +
-            "    }, 1000);\n" +
-            "})();";
     }
     
     /**
@@ -405,6 +489,12 @@ public class TestRecorder {
                 return "Hover over " + element;
             case "NAVIGATE":
                 return "Navigate to " + value;
+            case "NAVIGATE_INTENT":
+                return "Navigating away from page";
+            case "XHR_NAVIGATE":
+                return "AJAX navigation to " + value;
+            case "FORM_SUBMIT":
+                return "Submit form " + element + " to " + value;
             case "SUBMIT":
                 return "Submit form " + element;
             default:
@@ -494,10 +584,15 @@ public class TestRecorder {
                     .append(step.getElement()).append("\");\n");
                 code.append("        Assert.assertTrue(element.isDisplayed(), \"")
                     .append(step.getElement()).append(" should be present\");\n");
-            } else if ("SUBMIT".equals(step.getAction())) {
+            } else if ("SUBMIT".equals(step.getAction()) || "FORM_SUBMIT".equals(step.getAction())) {
                 code.append("        WebElement element = elementFinder.findElement(\"")
                     .append(step.getElement()).append("\");\n");
                 code.append("        element.submit();\n");
+            }
+            // Skip internal navigation tracking events that don't require test code
+            else if ("NAVIGATE_INTENT".equals(step.getAction()) || 
+                    "XHR_NAVIGATE".equals(step.getAction())) {
+                code.append("        // Internal navigation event - no code needed\n");
             }
             
             code.append("\n");
