@@ -3883,3 +3883,953 @@ public class POMConfiguration {
     }
 }
 
+
+
+
+// POMEnhancer.java
+package com.cssmart.ai.engine;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ai.engine.model.ElementAnalysis;
+import com.cssmart.ai.engine.model.Locator;
+import com.cssmart.ai.patterns.PatternMatcher;
+import com.cssmart.ai.patterns.model.Pattern;
+import com.cssmart.core.pom.PageObjectModel;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.RecordedStep;
+
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
+import java.util.HashSet;
+
+/**
+ * Enhances the AI Engine with Page Object Model capabilities
+ */
+@Slf4j
+public class POMEnhancer {
+    
+    private final AIEngine aiEngine;
+    private final LocatorStrategy locatorStrategy;
+    private final ElementAnalyzer elementAnalyzer;
+    private final ElementPredictor elementPredictor;
+    private final ActionGenerator actionGenerator;
+    
+    public POMEnhancer(AIEngine aiEngine) {
+        this.aiEngine = aiEngine;
+        this.locatorStrategy = new LocatorStrategy();
+        this.elementAnalyzer = new ElementAnalyzer();
+        this.elementPredictor = new ElementPredictor();
+        this.actionGenerator = new ActionGenerator();
+    }
+    
+    /**
+     * Analyze a test case for Page Object Model structure
+     * @param testCase Test case to analyze
+     * @return Analysis result with page and element information
+     */
+    public POMAnalysisResult analyzeForPageObjects(TestCase testCase) {
+        POMAnalysisResult result = new POMAnalysisResult();
+        
+        if (testCase.getSteps() == null || testCase.getSteps().isEmpty()) {
+            return result;
+        }
+        
+        try {
+            // Identify pages in the test
+            List<String> pages = identifyPages(testCase);
+            result.setPages(pages);
+            
+            // Identify elements in each page
+            Map<String, List<String>> elementsPerPage = identifyElements(testCase, pages);
+            result.setElementsPerPage(elementsPerPage);
+            
+            // Identify actions in each page
+            Map<String, List<String>> actionsPerPage = identifyActions(testCase, pages, elementsPerPage);
+            result.setActionsPerPage(actionsPerPage);
+            
+            return result;
+        } catch (Exception e) {
+            log.error("Error analyzing test case for Page Object Model", e);
+            return result;
+        }
+    }
+    
+    /**
+     * Generate a Page Object Model from analysis
+     * @param testCase Test case
+     * @param analysisResult Analysis result
+     * @param pageName Optional page name
+     * @return Page Object Model
+     */
+    public PageObjectModel generatePageObjectModel(TestCase testCase, POMAnalysisResult analysisResult, String pageName) {
+        try {
+            // Extract page URL from navigation steps
+            String pageUrl = extractPageUrl(testCase);
+            
+            // Determine page name if not provided
+            String effectivePageName;
+            if (pageName != null && !pageName.isEmpty()) {
+                effectivePageName = pageName;
+            } else if (analysisResult.getPages() != null && !analysisResult.getPages().isEmpty()) {
+                effectivePageName = analysisResult.getPages().get(0);
+            } else {
+                // Extract from URL or test name
+                effectivePageName = extractPageNameFromUrl(pageUrl);
+                if (effectivePageName.isEmpty() && testCase.getName() != null) {
+                    effectivePageName = testCase.getName() + " Page";
+                }
+            }
+            
+            // Generate class name
+            String className = generateClassName(effectivePageName);
+            
+            // Create the Page Object Model
+            PageObjectModel pageObject = PageObjectModel.builder()
+                .id(java.util.UUID.randomUUID().toString())
+                .name(effectivePageName)
+                .description("Page Object Model for " + effectivePageName)
+                .pageUrl(pageUrl)
+                .packageName("com.cssmart.pom.pages")
+                .className(className)
+                .elements(new ArrayList<>())
+                .actions(new ArrayList<>())
+                .verifications(new ArrayList<>())
+                .build();
+            
+            // Add elements and actions based on analysis
+            populatePageObjectFromAnalysis(pageObject, testCase, analysisResult);
+            
+            return pageObject;
+        } catch (Exception e) {
+            log.error("Error generating Page Object Model", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Identify pages in a test case
+     * @param testCase Test case to analyze
+     * @return List of page names
+     */
+    private List<String> identifyPages(TestCase testCase) {
+        Set<String> pages = new HashSet<>();
+        
+        // Add a default page
+        String defaultPage = "MainPage";
+        pages.add(defaultPage);
+        
+        // Look for navigation steps to identify different pages
+        for (RecordedStep step : testCase.getSteps()) {
+            if ("NAVIGATE".equals(step.getAction()) && step.getValue() != null) {
+                String url = step.getValue();
+                String pageName = extractPageNameFromUrl(url);
+                if (!pageName.isEmpty()) {
+                    pages.add(pageName);
+                }
+            }
+        }
+        
+        return new ArrayList<>(pages);
+    }
+    
+    /**
+     * Identify elements in each page
+     * @param testCase Test case
+     * @param pages List of pages
+     * @return Map of page name to list of elements
+     */
+    private Map<String, List<String>> identifyElements(TestCase testCase, List<String> pages) {
+        Map<String, List<String>> elementsPerPage = new HashMap<>();
+        
+        // Initialize lists for each page
+        for (String page : pages) {
+            elementsPerPage.put(page, new ArrayList<>());
+        }
+        
+        // Default page for elements without explicit page assignment
+        String currentPage = pages.get(0);
+        
+        // Track current page based on navigation steps
+        for (RecordedStep step : testCase.getSteps()) {
+            if ("NAVIGATE".equals(step.getAction()) && step.getValue() != null) {
+                String url = step.getValue();
+                String pageName = extractPageNameFromUrl(url);
+                if (!pageName.isEmpty() && pages.contains(pageName)) {
+                    currentPage = pageName;
+                }
+            }
+            
+            // Add element to current page if present
+            if (step.getElement() != null && !step.getElement().isEmpty()) {
+                List<String> elements = elementsPerPage.get(currentPage);
+                if (!elements.contains(step.getElement())) {
+                    elements.add(step.getElement());
+                }
+            }
+        }
+        
+        return elementsPerPage;
+    }
+    
+    /**
+     * Identify actions in each page
+     * @param testCase Test case
+     * @param pages List of pages
+     * @param elementsPerPage Map of page name to list of elements
+     * @return Map of page name to list of actions
+     */
+    private Map<String, List<String>> identifyActions(TestCase testCase, List<String> pages, 
+                                                   Map<String, List<String>> elementsPerPage) {
+        Map<String, List<String>> actionsPerPage = new HashMap<>();
+        
+        // Initialize lists for each page
+        for (String page : pages) {
+            actionsPerPage.put(page, new ArrayList<>());
+        }
+        
+        // Default page for elements without explicit page assignment
+        String currentPage = pages.get(0);
+        
+        // Track current page based on navigation steps
+        for (RecordedStep step : testCase.getSteps()) {
+            if ("NAVIGATE".equals(step.getAction()) && step.getValue() != null) {
+                String url = step.getValue();
+                String pageName = extractPageNameFromUrl(url);
+                if (!pageName.isEmpty() && pages.contains(pageName)) {
+                    currentPage = pageName;
+                }
+                
+                // Add navigate action to the page
+                List<String> actions = actionsPerPage.get(currentPage);
+                if (!actions.contains("navigate")) {
+                    actions.add("navigate");
+                }
+                continue;
+            }
+            
+            // Add action based on step
+            if (step.getAction() != null && step.getElement() != null) {
+                // Create an action identifier
+                String actionId = step.getAction().toLowerCase() + "_" + step.getElement();
+                
+                List<String> actions = actionsPerPage.get(currentPage);
+                if (!actions.contains(actionId)) {
+                    actions.add(actionId);
+                }
+            }
+        }
+        
+        return actionsPerPage;
+    }
+    
+    /**
+     * Populate a Page Object Model from analysis
+     * @param pageObject Page Object Model to populate
+     * @param testCase Test case
+     * @param analysisResult Analysis result
+     */
+    private void populatePageObjectFromAnalysis(PageObjectModel pageObject, TestCase testCase, 
+                                                POMAnalysisResult analysisResult) {
+        // Determine which page in the analysis we're using
+        String pageName = pageObject.getName();
+        String usePage = analysisResult.getPages().stream()
+            .filter(p -> p.equals(pageName))
+            .findFirst()
+            .orElse(analysisResult.getPages().get(0));
+        
+        // Get elements for this page
+        List<String> pageElements = analysisResult.getElementsPerPage().get(usePage);
+        
+        // Create elements
+        for (String elementDescription : pageElements) {
+            // Generate a name for the element
+            String elementName = generateElementName(elementDescription);
+            
+            // Use ElementPredictor to generate locators
+            ElementAnalysis elementAnalysis = new ElementAnalysis();
+            elementAnalysis.setElementType(determineElementType(elementDescription));
+            
+            Map<String, String> attributes = new HashMap<>();
+            attributes.put("text", elementDescription);
+            elementAnalysis.setAttributes(attributes);
+            
+            List<Locator> locators = locatorStrategy.generateLocators(elementAnalysis);
+            
+            // Pick the best locator type and value
+            com.cssmart.core.pom.PageElement.LocatorType locatorType = determineLocatorType(elementDescription);
+            String locatorValue = "";
+            
+            if (!locators.isEmpty()) {
+                // Pick the locator with highest confidence
+                locators.sort((l1, l2) -> Double.compare(l2.getConfidence(), l1.getConfidence()));
+                Locator bestLocator = locators.get(0);
+                
+                locatorType = mapLocatorType(bestLocator.getType());
+                locatorValue = bestLocator.getValue();
+            } else {
+                // Generate a simple locator based on the element description
+                locatorValue = generateLocatorValue(elementDescription, locatorType);
+            }
+            
+            // Create the element
+            com.cssmart.core.pom.PageElement element = com.cssmart.core.pom.PageElement.builder()
+                .name(elementName)
+                .description(elementDescription)
+                .locatorType(locatorType)
+                .locatorValue(locatorValue)
+                .isList(false) // For simplicity, assume elements are not lists
+                .build();
+            
+            pageObject.addElement(element);
+        }
+        
+        // Get actions for this page
+        List<String> pageActions = analysisResult.getActionsPerPage().get(usePage);
+        
+        // Add a navigate action if page has a URL
+        if (pageObject.getPageUrl() != null && !pageObject.getPageUrl().isEmpty()) {
+            com.cssmart.core.pom.PageAction navigateAction = com.cssmart.core.pom.PageAction.builder()
+                .name("navigateToPage")
+                .description("Navigate to " + pageObject.getName())
+                .type(com.cssmart.core.pom.PageAction.ActionType.NAVIGATE)
+                .returnsPage(true)
+                .build();
+            
+            pageObject.addAction(navigateAction);
+        }
+        
+        // Create actions from test steps
+        Map<String, com.cssmart.core.pom.PageAction> actionMap = new HashMap<>();
+        
+        for (RecordedStep step : testCase.getSteps()) {
+            // Skip steps that don't have an element
+            if (step.getElement() == null || step.getElement().isEmpty()) {
+                continue;
+            }
+            
+            // Check if this element belongs to this page
+            if (!pageElements.contains(step.getElement())) {
+                continue;
+            }
+            
+            // Skip navigation steps (already handled)
+            if ("NAVIGATE".equals(step.getAction())) {
+                continue;
+            }
+            
+            String elementName = generateElementName(step.getElement());
+            String actionName = generateActionName(step);
+            
+            // Skip if we've already processed this action
+            if (actionMap.containsKey(actionName)) {
+                continue;
+            }
+            
+            // Determine action type
+            com.cssmart.core.pom.PageAction.ActionType actionType = mapActionType(step.getAction());
+            
+            // Create parameters map if needed
+            Map<String, String> parameters = null;
+            if ("TYPE".equals(step.getAction()) || "SELECT".equals(step.getAction())) {
+                parameters = new HashMap<>();
+                parameters.put("value", "Value to enter");
+            }
+            
+            // Create the action
+            com.cssmart.core.pom.PageAction action = com.cssmart.core.pom.PageAction.builder()
+                .name(actionName)
+                .description(step.getDescription() != null ? step.getDescription() : "Perform action on " + step.getElement())
+                .type(actionType)
+                .elementName(elementName)
+                .parameters(parameters)
+                .returnsPage(true) // For fluent API
+                .build();
+            
+            pageObject.addAction(action);
+            actionMap.put(actionName, action);
+        }
+        
+        // Create verifications for each element
+        for (com.cssmart.core.pom.PageElement element : pageObject.getElements()) {
+            String verificationName = "verify" + capitalizeFirstLetter(element.getName()) + "IsPresent";
+            
+            com.cssmart.core.pom.PageVerification verification = com.cssmart.core.pom.PageVerification.builder()
+                .name(verificationName)
+                .description("Verify that " + element.getDescription() + " is present")
+                .type(com.cssmart.core.pom.PageVerification.VerificationType.ELEMENT_PRESENT)
+                .elementName(element.getName())
+                .build();
+            
+            pageObject.addVerification(verification);
+        }
+    }
+    
+    /**
+     * Extract page URL from test case steps
+     * @param testCase Test case with steps
+     * @return Page URL or empty string if not found
+     */
+    private String extractPageUrl(TestCase testCase) {
+        if (testCase.getSteps() != null) {
+            for (RecordedStep step : testCase.getSteps()) {
+                if ("NAVIGATE".equals(step.getAction()) && step.getValue() != null) {
+                    return step.getValue();
+                }
+            }
+        }
+        return "";
+    }
+    
+    /**
+     * Extract page name from URL
+     * @param url URL to parse
+     * @return Page name
+     */
+    private String extractPageNameFromUrl(String url) {
+        if (url == null || url.isEmpty()) {
+            return "";
+        }
+        
+        try {
+            // Remove protocol and domain
+            String path = url.replaceAll("https?://[^/]+", "");
+            
+            // Split path into segments
+            String[] segments = path.split("/");
+            
+            // Find the last non-empty segment
+            for (int i = segments.length - 1; i >= 0; i--) {
+                if (!segments[i].isEmpty()) {
+                    // Remove any query parameters or fragments
+                    String segment = segments[i].split("[?#]")[0];
+                    
+                    // Convert to proper case
+                    if (!segment.isEmpty()) {
+                        return toProperCase(segment) + "Page";
+                    }
+                }
+            }
+            
+            // If we got here, use the domain
+            String domain = url.replaceAll("https?://([^/]+).*", "$1");
+            domain = domain.replaceAll("www\\.", "");
+            
+            return toProperCase(domain) + "Page";
+        } catch (Exception e) {
+            log.warn("Error extracting page name from URL: {}", url, e);
+            return "Page";
+        }
+    }
+    
+    /**
+     * Generate a class name from page name
+     * @param pageName Page name
+     * @return Class name
+     */
+    private String generateClassName(String pageName) {
+        // Remove "Page" suffix if present - we'll add it back
+        if (pageName.endsWith("Page")) {
+            pageName = pageName.substring(0, pageName.length() - 4);
+        }
+        
+        // Replace non-alphanumeric with spaces and split into words
+        String[] words = pageName.replaceAll("[^a-zA-Z0-9]", " ").trim().split("\\s+");
+        
+        StringBuilder className = new StringBuilder();
+        for (String word : words) {
+            if (!word.isEmpty()) {
+                className.append(Character.toUpperCase(word.charAt(0)))
+                       .append(word.substring(1).toLowerCase());
+            }
+        }
+        
+        return className.toString() + "Page";
+    }
+    
+    /**
+     * Generate an element name from element description
+     * @param elementDescription Element description
+     * @return Element name
+     */
+    private String generateElementName(String elementDescription) {
+        // Replace non-alphanumeric with spaces
+        String clean = elementDescription.replaceAll("[^a-zA-Z0-9]", " ");
+        
+        // Split into words
+        String[] words = clean.trim().split("\\s+");
+        
+        if (words.length == 0) {
+            return "element";
+        }
+        
+        // Use camel case with first word lowercase
+        StringBuilder name = new StringBuilder(words[0].toLowerCase());
+        
+        for (int i = 1; i < words.length; i++) {
+            if (words[i].length() > 0) {
+                name.append(Character.toUpperCase(words[i].charAt(0)));
+                if (words[i].length() > 1) {
+                    name.append(words[i].substring(1).toLowerCase());
+                }
+            }
+        }
+        
+        return name.toString();
+    }
+    
+    /**
+     * Determine element type based on description
+     * @param description Element description
+     * @return Element type
+     */
+    private String determineElementType(String description) {
+        String lowerDesc = description.toLowerCase();
+        
+        if (lowerDesc.contains("button")) {
+            return "button";
+        } else if (lowerDesc.contains("link")) {
+            return "a";
+        } else if (lowerDesc.contains("field") || lowerDesc.contains("input") || lowerDesc.contains("text")) {
+            return "input";
+        } else if (lowerDesc.contains("select") || lowerDesc.contains("dropdown")) {
+            return "select";
+        } else if (lowerDesc.contains("checkbox")) {
+            return "input";
+        } else if (lowerDesc.contains("radio")) {
+            return "input";
+        } else {
+            return "div";
+        }
+    }
+    
+    /**
+     * Determine locator type based on element description
+     * @param elementDescription Element description
+     * @return Locator type
+     */
+    private com.cssmart.core.pom.PageElement.LocatorType determineLocatorType(String elementDescription) {
+        String lowerDesc = elementDescription.toLowerCase();
+        
+        // Use heuristics to determine locator type
+        if (lowerDesc.contains("button")) {
+            return com.cssmart.core.pom.PageElement.LocatorType.XPATH;
+        } else if (lowerDesc.contains("link")) {
+            return com.cssmart.core.pom.PageElement.LocatorType.LINK_TEXT;
+        } else if (lowerDesc.contains("field") || lowerDesc.contains("input") || lowerDesc.contains("text")) {
+            return com.cssmart.core.pom.PageElement.LocatorType.NAME;
+        } else {
+            return com.cssmart.core.pom.PageElement.LocatorType.ID;
+        }
+    }
+    
+    /**
+     * Map LocatorType to PageElement.LocatorType
+     * @param locatorType LocatorType from AI engine
+     * @return LocatorType for Page Element
+     */
+    private com.cssmart.core.pom.PageElement.LocatorType mapLocatorType(com.cssmart.ai.engine.model.LocatorType locatorType) {
+        switch (locatorType) {
+            case ID:
+                return com.cssmart.core.pom.PageElement.LocatorType.ID;
+            case NAME:
+                return com.cssmart.core.pom.PageElement.LocatorType.NAME;
+            case CLASS_NAME:
+                return com.cssmart.core.pom.PageElement.LocatorType.CLASS_NAME;
+            case TAG_NAME:
+                return com.cssmart.core.pom.PageElement.LocatorType.TAG_NAME;
+            case XPATH:
+                return com.cssmart.core.pom.PageElement.LocatorType.XPATH;
+            case CSS:
+                return com.cssmart.core.pom.PageElement.LocatorType.CSS;
+            case LINK_TEXT:
+                return com.cssmart.core.pom.PageElement.LocatorType.LINK_TEXT;
+            case PARTIAL_LINK_TEXT:
+                return com.cssmart.core.pom.PageElement.LocatorType.PARTIAL_LINK_TEXT;
+            default:
+                return com.cssmart.core.pom.PageElement.LocatorType.ID;
+        }
+    }
+    
+    /**
+     * Generate a locator value based on element description and type
+     * @param elementDescription Element description
+     * @param locatorType Locator type
+     * @return Locator value
+     */
+    private String generateLocatorValue(String elementDescription, com.cssmart.core.pom.PageElement.LocatorType locatorType) {
+        switch (locatorType) {
+            case ID:
+                return generateElementName(elementDescription);
+                
+            case NAME:
+                return generateElementName(elementDescription);
+                
+            case CLASS_NAME:
+                return elementDescription.toLowerCase().replaceAll("[^a-z0-9]", "-");
+                
+            case TAG_NAME:
+                if (elementDescription.toLowerCase().contains("button")) {
+                    return "button";
+                } else if (elementDescription.toLowerCase().contains("link")) {
+                    return "a";
+                } else if (elementDescription.toLowerCase().contains("input") || 
+                           elementDescription.toLowerCase().contains("field")) {
+                    return "input";
+                } else {
+                    return "div";
+                }
+                
+            case XPATH:
+                // Generate a simple XPath based on text contains
+                return "//*[contains(text(),'" + elementDescription + "')]";
+                
+            case CSS:
+                return "#" + generateElementName(elementDescription);
+                
+            case LINK_TEXT:
+                return elementDescription;
+                
+            case PARTIAL_LINK_TEXT:
+                // Use the first few words
+                String[] words = elementDescription.split("\\s+");
+                if (words.length > 2) {
+                    return words[0] + " " + words[1];
+                }
+                return elementDescription;
+                
+            default:
+                return generateElementName(elementDescription);
+        }
+    }
+    
+    /**
+     * Generate an action name from a step
+     * @param step Recorded step
+     * @return Action name
+     */
+    private String generateActionName(RecordedStep step) {
+        if (step.getElement() == null || step.getElement().isEmpty()) {
+            return "performAction";
+        }
+        
+        String actionPrefix;
+        switch (step.getAction()) {
+            case "CLICK":
+                actionPrefix = "click";
+                break;
+            case "TYPE":
+                actionPrefix = "enter";
+                break;
+            case "SELECT":
+                actionPrefix = "select";
+                break;
+            case "HOVER":
+                actionPrefix = "hoverOver";
+                break;
+            case "VERIFY_PRESENCE":
+                actionPrefix = "verify";
+                return actionPrefix + toProperCase(generateElementName(step.getElement())) + "IsPresent";
+            case "VERIFY_TEXT":
+                actionPrefix = "verify";
+                return actionPrefix + toProperCase(generateElementName(step.getElement())) + "Text";
+            default:
+                actionPrefix = "interact";
+                break;
+        }
+        
+        return actionPrefix + toProperCase(generateElementName(step.getElement()));
+    }
+    
+    /**
+     * Map a recorded step action to a page action type
+     * @param stepAction Step action
+     * @return Page action type
+     */
+    private com.cssmart.core.pom.PageAction.ActionType mapActionType(String stepAction) {
+        switch (stepAction) {
+            case "CLICK":
+                return com.cssmart.core.pom.PageAction.ActionType.CLICK;
+            case "TYPE":
+                return com.cssmart.core.pom.PageAction.ActionType.TYPE;
+            case "SELECT":
+                return com.cssmart.core.pom.PageAction.ActionType.SELECT;
+            case "HOVER":
+                return com.cssmart.core.pom.PageAction.ActionType.HOVER;
+            case "NAVIGATE":
+                return com.cssmart.core.pom.PageAction.ActionType.NAVIGATE;
+            case "WAIT":
+                return com.cssmart.core.pom.PageAction.ActionType.WAIT;
+            default:
+                return com.cssmart.core.pom.PageAction.ActionType.CUSTOM;
+        }
+    }
+    
+    /**
+     * Convert a string to proper case
+     * @param input Input string
+     * @return Proper case string
+     */
+    private String toProperCase(String input) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        
+        // Replace non-alphanumeric with spaces
+        String clean = input.replaceAll("[^a-zA-Z0-9]", " ");
+        
+        // Split into words
+        String[] words = clean.trim().split("\\s+");
+        StringBuilder result = new StringBuilder();
+        
+        for (String word : words) {
+            if (word.length() > 0) {
+                // Capitalize first letter of each word
+                result.append(Character.toUpperCase(word.charAt(0)));
+                if (word.length() > 1) {
+                    result.append(word.substring(1).toLowerCase());
+                }
+            }
+        }
+        
+        return result.toString();
+    }
+    
+    /**
+     * Capitalize first letter of a string
+     * @param input Input string
+     * @return String with first letter capitalized
+     */
+    private String capitalizeFirstLetter(String input) {
+        if (input == null || input.isEmpty()) {
+            return input;
+        }
+        return Character.toUpperCase(input.charAt(0)) + input.substring(1);
+    }
+}
+
+/**
+ * Result of POM analysis
+ */
+class POMAnalysisResult {
+    private List<String> pages = new ArrayList<>();
+    private Map<String, List<String>> elementsPerPage = new HashMap<>();
+    private Map<String, List<String>> actionsPerPage = new HashMap<>();
+    
+    // Getters and setters
+    public List<String> getPages() {
+        return pages;
+    }
+    
+    public void setPages(List<String> pages) {
+        this.pages = pages;
+    }
+    
+    public Map<String, List<String>> getElementsPerPage() {
+        return elementsPerPage;
+    }
+    
+    public void setElementsPerPage(Map<String, List<String>> elementsPerPage) {
+        this.elementsPerPage = elementsPerPage;
+    }
+    
+    public Map<String, List<String>> getActionsPerPage() {
+        return actionsPerPage;
+    }
+    
+    public void setActionsPerPage(Map<String, List<String>> actionsPerPage) {
+        this.actionsPerPage = actionsPerPage;
+    }
+}
+
+// Add these methods to your AIEngine.java
+
+/**
+ * Analyze a test case for Page Object Model
+ * @param testCase Test case to analyze
+ * @return Analysis result with page structure information
+ */
+public POMAnalysisResult analyzeForPageObjects(TestCase testCase) {
+    // Create a POM enhancer and delegate the analysis
+    POMEnhancer pomEnhancer = new POMEnhancer(this);
+    return pomEnhancer.analyzeForPageObjects(testCase);
+}
+
+/**
+ * Generate a Page Object Model from a test case
+ * @param testCase Test case to analyze
+ * @param pageName Optional page name
+ * @return Generated Page Object Model
+ */
+public PageObjectModel generatePageObjectModel(TestCase testCase, String pageName) {
+    POMEnhancer pomEnhancer = new POMEnhancer(this);
+    POMAnalysisResult analysisResult = pomEnhancer.analyzeForPageObjects(testCase);
+    return pomEnhancer.generatePageObjectModel(testCase, analysisResult, pageName);
+}
+
+/**
+ * Enhance a test case with Page Object support
+ * @param testCase Test case to enhance
+ * @return Enhanced POM test case
+ */
+public POMTestCase enhanceWithPOM(TestCase testCase) {
+    if (testCase instanceof POMTestCase) {
+        return (POMTestCase) testCase;
+    }
+    
+    // Create a new POM test case from the regular one
+    POMTestCase pomTestCase = new POMTestCase(testCase);
+    
+    // Generate a page object for the test
+    PageObjectModel pageObject = generatePageObjectModel(testCase, null);
+    
+    // Add to POM test case
+    if (pageObject != null) {
+        pomTestCase.addPageObject(pageObject);
+        pomTestCase.setCode(pomTestCase.generatePOMCode());
+    }
+    
+    return pomTestCase;
+}
+
+
+// PageObjectGenerator.java - Updated to use AIEngine integration
+package com.cssmart.ui.service;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.POMAnalysisResult;
+import com.cssmart.core.pom.PageObjectModel;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.POMTestCase;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.ArrayList;
+
+/**
+ * Service for generating Page Object Models using AI
+ */
+@Slf4j
+@Service
+public class PageObjectGenerator {
+    
+    private final AIEngine aiEngine;
+    private static final String POM_DIR = "src/main/java/com/cssmart/pom/pages";
+    
+    @Autowired
+    public PageObjectGenerator(AIEngine aiEngine) {
+        this.aiEngine = aiEngine;
+        
+        // Ensure directory exists
+        File pomDir = new File(POM_DIR);
+        if (!pomDir.exists()) {
+            pomDir.mkdirs();
+        }
+    }
+    
+    /**
+     * Generate a Page Object Model from a test case
+     * @param testCase Test case to analyze
+     * @return Generated Page Object Model
+     */
+    public PageObjectModel generatePageObject(TestCase testCase) {
+        log.info("Generating Page Object Model for test case: {}", testCase.getName());
+        
+        try {
+            // Use AIEngine to generate Page Object Model
+            PageObjectModel pageObject = aiEngine.generatePageObjectModel(testCase, null);
+            
+            // Save generated code
+            savePageObjectToFile(pageObject);
+            
+            return pageObject;
+        } catch (Exception e) {
+            log.error("Error generating Page Object Model", e);
+            throw new RuntimeException("Failed to generate Page Object Model: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Convert a test case to a POM-based test case
+     * @param testCase Original test case
+     * @return POM-based test case
+     */
+    public POMTestCase convertToPOMTestCase(TestCase testCase) {
+        log.info("Converting test case to POM-based test case: {}", testCase.getName());
+        
+        try {
+            // Use AIEngine to enhance test case with POM
+            POMTestCase pomTestCase = aiEngine.enhanceWithPOM(testCase);
+            
+            // Save the POM test code
+            saveTestCode(pomTestCase);
+            
+            return pomTestCase;
+        } catch (Exception e) {
+            log.error("Error converting to POM test case", e);
+            throw new RuntimeException("Failed to convert to POM test case: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Save page object Java code to file
+     * @param pageObject Page object
+     */
+    private void savePageObjectToFile(PageObjectModel pageObject) {
+        try {
+            // Create package directories if they don't exist
+            String packagePath = pageObject.getPackageName().replace('.', '/');
+            File packageDir = new File("src/main/java", packagePath);
+            if (!packageDir.exists()) {
+                packageDir.mkdirs();
+            }
+            
+            // Save Java file
+            File javaFile = new File(packageDir, pageObject.getClassName() + ".java");
+            Files.writeString(javaFile.toPath(), pageObject.generateCode());
+            
+            log.info("Saved page object to: {}", javaFile.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Error saving page object to file", e);
+            throw new RuntimeException("Failed to save page object: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Save test code to file
+     * @param pomTestCase POM test case
+     */
+    private void saveTestCode(POMTestCase pomTestCase) {
+        try {
+            // Create package directories if they don't exist
+            String packagePath = "com/cssmart/tests/generated";
+            File packageDir = new File("src/main/java", packagePath);
+            if (!packageDir.exists()) {
+                packageDir.mkdirs();
+            }
+            
+            // Save Java file
+            File javaFile = new File(packageDir, pomTestCase.getClassName() + ".java");
+            Files.writeString(javaFile.toPath(), pomTestCase.getCode());
+            
+            log.info("Saved POM test code to: {}", javaFile.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Error saving POM test code", e);
+            throw new RuntimeException("Failed to save POM test code: " + e.getMessage(), e);
+        }
+    }
+}
+
+
+
+
