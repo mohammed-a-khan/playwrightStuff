@@ -1,0 +1,555 @@
+package com.cssmart.ui.recorder;
+
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.firefox.FirefoxOptions;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.edge.EdgeOptions;
+import org.openqa.selenium.safari.SafariDriver;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.time.LocalDateTime;
+
+@Slf4j
+public class TestRecorder {
+    private boolean isRecording;
+    private List<RecordedStep> steps;
+    private LocalDateTime startTime;
+    private String sessionId;
+    private WebDriver driver;
+    private String recorderBaseUrl;
+    
+    /**
+     * Constructor for TestRecorder
+     * @param recorderBaseUrl Base URL for recorder API (e.g., "http://localhost:8080")
+     */
+    public TestRecorder(String recorderBaseUrl) {
+        this.isRecording = false;
+        this.steps = new ArrayList<>();
+        this.recorderBaseUrl = recorderBaseUrl;
+    }
+    
+    /**
+     * Start recording a test
+     * @param browserType Type of browser to use (chrome, firefox, edge, safari)
+     * @param url Initial URL to navigate to
+     */
+    public void startRecording(String browserType, String url) {
+        this.isRecording = true;
+        this.steps.clear();
+        this.startTime = LocalDateTime.now();
+        this.sessionId = UUID.randomUUID().toString();
+        
+        // Initialize and launch browser
+        initializeBrowser(browserType);
+        
+        // Navigate to the base URL and inject recorder script
+        if (driver != null && url != null && !url.isEmpty()) {
+            // First navigate to the URL
+            driver.get(url);
+            
+            // Then inject the recorder script
+            injectRecorderScript(driver);
+            
+            // Add an automatic navigation step
+            RecordedStep step = new RecordedStep();
+            step.setAction("NAVIGATE");
+            step.setValue(url);
+            step.setTimestamp(LocalDateTime.now());
+            step.setDescription("Navigate to " + url);
+            steps.add(step);
+        }
+        
+        log.info("Recording started with session ID: {}", sessionId);
+    }
+    
+    /**
+     * Initialize the browser for testing
+     * @param browserType Type of browser to use
+     */
+    private void initializeBrowser(String browserType) {
+        try {
+            // Set up the WebDriver based on browser type
+            switch (browserType.toLowerCase()) {
+                case "chrome":
+                    WebDriverManager.chromedriver().setup();
+                    
+                    ChromeOptions chromeOptions = new ChromeOptions();
+                    // Allow cross-origin requests
+                    chromeOptions.addArguments("--disable-web-security");
+                    driver = new ChromeDriver(chromeOptions);
+                    break;
+                case "firefox":
+                    WebDriverManager.firefoxdriver().setup();
+                    
+                    FirefoxOptions firefoxOptions = new FirefoxOptions();
+                    // Configure Firefox options if needed
+                    driver = new FirefoxDriver(firefoxOptions);
+                    break;
+                case "edge":
+                    WebDriverManager.edgedriver().setup();
+                    
+                    EdgeOptions edgeOptions = new EdgeOptions();
+                    // Configure Edge options if needed
+                    driver = new EdgeDriver(edgeOptions);
+                    break;
+                case "safari":
+                    driver = new SafariDriver();
+                    break;
+                default:
+                    log.warn("Unsupported browser type: {}. Defaulting to Chrome.", browserType);
+                    WebDriverManager.chromedriver().setup();
+                    driver = new ChromeDriver();
+            }
+            
+            // Maximize browser window
+            driver.manage().window().maximize();
+            
+            log.info("Browser initialized: {}", browserType);
+        } catch (Exception e) {
+            log.error("Failed to initialize browser: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize browser: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Stop recording and return the recorded test case
+     * @return Recorded test case
+     */
+    public TestCase stopRecording() {
+        this.isRecording = false;
+        LocalDateTime endTime = LocalDateTime.now();
+        log.info("Recording stopped, captured {} steps", steps.size());
+        
+        // Close the browser
+        if (driver != null) {
+            try {
+                driver.quit();
+                log.info("Browser closed");
+            } catch (Exception e) {
+                log.error("Error closing browser: {}", e.getMessage(), e);
+            } finally {
+                driver = null;
+            }
+        }
+        
+        // Create test case from recorded steps
+        TestCase testCase = createTestCase(steps, startTime, endTime);
+        
+        // Clear steps
+        this.steps.clear();
+        
+        return testCase;
+    }
+    
+    /**
+     * Record an action performed during testing
+     * @param actionType Type of action (CLICK, TYPE, etc.)
+     * @param element Element selector or identifier
+     * @param value Value for the action (if applicable)
+     */
+    public void recordAction(String actionType, String element, String value) {
+        if (!isRecording) {
+            log.warn("Attempted to record action when not recording");
+            return;
+        }
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(actionType);
+        step.setElement(element);
+        step.setValue(value);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        step.setDescription(generateActionDescription(actionType, element, value));
+        
+        steps.add(step);
+        log.debug("Recorded step: {}", step);
+    }
+    
+    /**
+     * Inject the recorder script into the web page
+     * @param driver WebDriver instance
+     */
+    public void injectRecorderScript(WebDriver driver) {
+        if (driver instanceof JavascriptExecutor) {
+            try {
+                JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+                
+                // Check if the recorder is already initialized
+                Boolean isInitialized = (Boolean) jsExecutor.executeScript(
+                    "return window.csRecorder != null && window.csRecorder.active === true;"
+                );
+                
+                if (Boolean.TRUE.equals(isInitialized)) {
+                    log.debug("Recorder script already injected on this page");
+                    return;
+                }
+                
+                // Construct the complete API URL from the base URL
+                String apiUrl = recorderBaseUrl + "/api/recorder/event";
+                
+                // Get the recorder script with sessionId and apiUrl
+                String script = getInlineRecorderScript()
+                    .replace("${SESSION_ID}", this.sessionId)
+                    .replace("${API_URL}", apiUrl);
+                
+                jsExecutor.executeScript(script);
+                log.info("Recorder script injected successfully");
+            } catch (Exception e) {
+                log.error("Failed to inject recorder script: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Get the inline JavaScript code for the recorder
+     * @return JavaScript code as string
+     */
+    private String getInlineRecorderScript() {
+        return "// CS Smart Recorder initialization\n" +
+            "(function() {\n" +
+            "    // Store session ID in localStorage to persist across page reloads\n" +
+            "    localStorage.setItem('csRecorder_sessionId', '${SESSION_ID}');\n" +
+            "    localStorage.setItem('csRecorder_apiUrl', '${API_URL}');\n" +
+            "    \n" +
+            "    // Initialize recorder\n" +
+            "    initRecorder();\n" +
+            "    \n" +
+            "    // Function to initialize the recorder\n" +
+            "    function initRecorder() {\n" +
+            "        // Skip if already initialized\n" +
+            "        if (window.csRecorder && window.csRecorder.active) {\n" +
+            "            console.log('CS Smart Recorder already initialized');\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        \n" +
+            "        // Get data from localStorage\n" +
+            "        var sessionId = localStorage.getItem('csRecorder_sessionId');\n" +
+            "        var apiUrl = localStorage.getItem('csRecorder_apiUrl');\n" +
+            "        \n" +
+            "        if (!sessionId || !apiUrl) {\n" +
+            "            console.error('CS Smart Recorder initialization failed: missing session ID or API URL');\n" +
+            "            return;\n" +
+            "        }\n" +
+            "        \n" +
+            "        console.log('Initializing CS Smart Recorder with session ID: ' + sessionId);\n" +
+            "        console.log('Using API URL: ' + apiUrl);\n" +
+            "        \n" +
+            "        // Create the recorder object\n" +
+            "        window.csRecorder = {\n" +
+            "            sessionId: sessionId,\n" +
+            "            apiUrl: apiUrl,\n" +
+            "            active: true,\n" +
+            "            \n" +
+            "            sendEvent: function(type, element, value) {\n" +
+            "                if (!this.active) return;\n" +
+            "                \n" +
+            "                console.log('Recording: ' + type + ' on ' + element);\n" +
+            "                \n" +
+            "                var xhr = new XMLHttpRequest();\n" +
+            "                xhr.open('POST', this.apiUrl, true);\n" +
+            "                xhr.setRequestHeader('Content-Type', 'application/json');\n" +
+            "                \n" +
+            "                xhr.onreadystatechange = function() {\n" +
+            "                    if (xhr.readyState === 4) {\n" +
+            "                        if (xhr.status === 200) {\n" +
+            "                            console.log('Event recorded successfully');\n" +
+            "                        } else {\n" +
+            "                            console.error('Failed to record event: ' + xhr.status);\n" +
+            "                        }\n" +
+            "                    }\n" +
+            "                };\n" +
+            "                \n" +
+            "                xhr.send(JSON.stringify({\n" +
+            "                    sessionId: this.sessionId,\n" +
+            "                    actionType: type,\n" +
+            "                    element: element,\n" +
+            "                    value: value || ''\n" +
+            "                }));\n" +
+            "            },\n" +
+            "            \n" +
+            "            getElementInfo: function(element) {\n" +
+            "                if (!element) return 'unknown';\n" +
+            "                \n" +
+            "                if (element.id) {\n" +
+            "                    return '#' + element.id;\n" +
+            "                }\n" +
+            "                \n" +
+            "                if (element.name) {\n" +
+            "                    return '[name=\"' + element.name + '\"]';\n" +
+            "                }\n" +
+            "                \n" +
+            "                // Try to create a more specific selector\n" +
+            "                var selector = element.tagName.toLowerCase();\n" +
+            "                \n" +
+            "                // Fix className.split error by checking if className is a string\n" +
+            "                if (element.className && typeof element.className === 'string') {\n" +
+            "                    var classList = element.className.split(/\\s+/);\n" +
+            "                    for (var i = 0; i < classList.length; i++) {\n" +
+            "                        if (classList[i]) {\n" +
+            "                            selector += '.' + classList[i];\n" +
+            "                        }\n" +
+            "                    }\n" +
+            "                } else if (element.classList && element.classList.length) {\n" +
+            "                    // Alternative approach using classList\n" +
+            "                    for (var i = 0; i < element.classList.length; i++) {\n" +
+            "                        selector += '.' + element.classList[i];\n" +
+            "                    }\n" +
+            "                }\n" +
+            "                \n" +
+            "                return selector;\n" +
+            "            },\n" +
+            "            \n" +
+            "            setupEventListeners: function() {\n" +
+            "                var self = this;\n" +
+            "                \n" +
+            "                // Click events\n" +
+            "                document.addEventListener('click', function(e) {\n" +
+            "                    var selector = self.getElementInfo(e.target);\n" +
+            "                    self.sendEvent('CLICK', selector, '');\n" +
+            "                }, true);\n" +
+            "                \n" +
+            "                // Input events for text fields\n" +
+            "                document.addEventListener('change', function(e) {\n" +
+            "                    if (e.target.tagName.toLowerCase() === 'input' ||\n" +
+            "                        e.target.tagName.toLowerCase() === 'textarea') {\n" +
+            "                        var selector = self.getElementInfo(e.target);\n" +
+            "                        self.sendEvent('TYPE', selector, e.target.value);\n" +
+            "                    } else if (e.target.tagName.toLowerCase() === 'select') {\n" +
+            "                        var selector = self.getElementInfo(e.target);\n" +
+            "                        self.sendEvent('SELECT', selector, e.target.value);\n" +
+            "                    }\n" +
+            "                }, true);\n" +
+            "                \n" +
+            "                // Form submission\n" +
+            "                document.addEventListener('submit', function(e) {\n" +
+            "                    var selector = self.getElementInfo(e.target);\n" +
+            "                    self.sendEvent('SUBMIT', selector, '');\n" +
+            "                }, true);\n" +
+            "                \n" +
+            "                // Record navigation - send a NAVIGATE event when page first loads\n" +
+            "                self.sendEvent('NAVIGATE', 'page', window.location.href);\n" +
+            "            }\n" +
+            "        };\n" +
+            "        \n" +
+            "        // Setup event listeners\n" +
+            "        window.csRecorder.setupEventListeners();\n" +
+            "    }\n" +
+            "    \n" +
+            "    // Add event listener for page load to automatically reinitialize\n" +
+            "    window.addEventListener('load', function() {\n" +
+            "        console.log('Page loaded, checking for recorder...');\n" +
+            "        if (!window.csRecorder || !window.csRecorder.active) {\n" +
+            "            console.log('Recorder not found after load, reinitializing...');\n" +
+            "            initRecorder();\n" +
+            "        }\n" +
+            "    });\n" +
+            "    \n" +
+            "    // Also add a mutation observer to handle SPA navigation\n" +
+            "    setTimeout(function() {\n" +
+            "        try {\n" +
+            "            var lastUrl = location.href;\n" +
+            "            new MutationObserver(function() {\n" +
+            "                if (lastUrl !== location.href) {\n" +
+            "                    console.log('URL changed:', lastUrl, '->', location.href);\n" +
+            "                    lastUrl = location.href;\n" +
+            "                    if (window.csRecorder && window.csRecorder.active) {\n" +
+            "                        // Record navigation event for SPA\n" +
+            "                        window.csRecorder.sendEvent('NAVIGATE', 'page', location.href);\n" +
+            "                    } else {\n" +
+            "                        // Reinitialize if needed\n" +
+            "                        initRecorder();\n" +
+            "                    }\n" +
+            "                }\n" +
+            "            }).observe(document, {subtree: true, childList: true});\n" +
+            "        } catch (e) {\n" +
+            "            console.error('Error setting up URL change detection:', e);\n" +
+            "        }\n" +
+            "    }, 1000);\n" +
+            "})();";
+    }
+    
+    /**
+     * Generate a human-readable description for an action
+     * @param actionType Type of action
+     * @param element Element selector
+     * @param value Action value (if applicable)
+     * @return Human-readable description
+     */
+    private String generateActionDescription(String actionType, String element, String value) {
+        switch (actionType) {
+            case "CLICK":
+                return "Click on " + element;
+            case "TYPE":
+                return "Enter '" + value + "' in " + element;
+            case "SELECT":
+                return "Select '" + value + "' from " + element;
+            case "VERIFY_PRESENCE":
+                return "Verify " + element + " is present";
+            case "VERIFY_VISIBILITY":
+                return "Verify " + element + " is visible";
+            case "VERIFY_STATE":
+                return "Verify " + element + " state is '" + value + "'";
+            case "WAIT":
+                return "Wait for " + element;
+            case "HOVER":
+                return "Hover over " + element;
+            case "NAVIGATE":
+                return "Navigate to " + value;
+            case "SUBMIT":
+                return "Submit form " + element;
+            default:
+                return actionType + " on " + element;
+        }
+    }
+    
+    /**
+     * Create a test case from recorded steps
+     * @param steps Recorded steps
+     * @param startTime Recording start time
+     * @param endTime Recording end time
+     * @return TestCase object
+     */
+    private TestCase createTestCase(List<RecordedStep> steps, LocalDateTime startTime, LocalDateTime endTime) {
+        TestCase testCase = new TestCase();
+        testCase.setId(sessionId);
+        testCase.setName("Recorded Test " + startTime.toString());
+        testCase.setDescription("Automatically recorded test case");
+        testCase.setSteps(new ArrayList<>(steps));
+        testCase.setStartTime(startTime);
+        testCase.setEndTime(endTime);
+        
+        // Generate class and method names
+        String timestamp = startTime.toString().replaceAll("[^a-zA-Z0-9]", "");
+        testCase.setClassName("RecordedTest" + timestamp);
+        testCase.setMethodName("test" + timestamp);
+        
+        // Generate test code
+        testCase.setCode(generateTestCode(testCase));
+        
+        return testCase;
+    }
+    
+    /**
+     * Generate Java test code from the test case
+     * @param testCase Test case
+     * @return Java code as string
+     */
+    private String generateTestCode(TestCase testCase) {
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.testng.Assert;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("/**\n");
+        code.append(" * ").append(testCase.getDescription()).append("\n");
+        code.append(" * Recorded on: ").append(testCase.getStartTime()).append("\n");
+        code.append(" */\n");
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        for (RecordedStep step : testCase.getSteps()) {
+            code.append("        // ").append(step.getDescription()).append("\n");
+            
+            if ("NAVIGATE".equals(step.getAction())) {
+                code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+            } else if ("CLICK".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.click();\n");
+            } else if ("TYPE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.clear();\n");
+                code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+            } else if ("SELECT".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                    .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+            } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                    .append(step.getElement()).append(" should be present\");\n");
+            } else if ("SUBMIT".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.submit();\n");
+            }
+            
+            code.append("\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    /**
+     * Check if recording is in progress
+     * @return True if recording, false otherwise
+     */
+    public boolean isRecording() {
+        return isRecording;
+    }
+    
+    /**
+     * Get the current list of recorded steps
+     * @return List of recorded steps (copy)
+     */
+    public List<RecordedStep> getSteps() {
+        return new ArrayList<>(steps);  // Return a copy to prevent modification
+    }
+    
+    /**
+     * Get the last recorded step
+     * @return Last recorded step or null if none
+     */
+    public RecordedStep getLastRecordedStep() {
+        if (steps.isEmpty()) {
+            return null;
+        }
+        return steps.get(steps.size() - 1);
+    }
+    
+    /**
+     * Get the WebDriver instance
+     * @return Current WebDriver instance
+     */
+    public WebDriver getDriver() {
+        return driver;
+    }
+    
+    /**
+     * Get the session ID for this recording
+     * @return Recording session ID
+     */
+    public String getSessionId() {
+        return sessionId;
+    }
+}
