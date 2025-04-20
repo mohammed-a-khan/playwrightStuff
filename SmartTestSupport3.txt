@@ -8669,6 +8669,7 @@ import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.By;
 import org.openqa.selenium.OutputType;
+import org.openqa.selenium.Alert;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.firefox.FirefoxDriver;
@@ -8775,36 +8776,6 @@ public class TestRecorder {
             
             // Register event listener to capture user interactions
             eventDriver.register(new WebDriverEventListener() {
-                @Override
-                public void afterClickOn(WebElement element, WebDriver driver) {
-                    log.info("Click detected on WebElement: {}", element.getTagName());
-                    
-                    // Build a selector for the element
-                    String selector = getElementSelector(element);
-                    
-                    // Record the action
-                    Action action = new Action(ActionType.CLICK);
-                    recordAction(action, selector, "");
-                }
-                
-                @Override
-                public void afterChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {
-                    log.info("Input detected on WebElement: {}", element.getTagName());
-                    
-                    String value = "";
-                    if (keysToSend != null) {
-                        value = String.join("", keysToSend);
-                    }
-                    
-                    // Build a selector for the element
-                    String selector = getElementSelector(element);
-                    
-                    // Record the action
-                    Action action = new Action(ActionType.TYPE);
-                    action.setValue(value);
-                    recordAction(action, selector, value);
-                }
-                
                 // Helper method to create element selector
                 private String getElementSelector(WebElement element) {
                     if (element == null) return "unknown";
@@ -8826,28 +8797,118 @@ public class TestRecorder {
                     return selector;
                 }
                 
-                // Required implementation of interface methods
-                @Override public void beforeClickOn(WebElement element, WebDriver driver) {}
-                @Override public void beforeNavigateTo(String url, WebDriver driver) {}
-                @Override public void afterNavigateTo(String url, WebDriver driver) {}
-                @Override public void beforeNavigateBack(WebDriver driver) {}
-                @Override public void afterNavigateBack(WebDriver driver) {}
-                @Override public void beforeNavigateForward(WebDriver driver) {}
-                @Override public void afterNavigateForward(WebDriver driver) {}
-                @Override public void beforeNavigateRefresh(WebDriver driver) {}
-                @Override public void afterNavigateRefresh(WebDriver driver) {}
-                @Override public void beforeFindBy(By by, WebElement element, WebDriver driver) {}
-                @Override public void afterFindBy(By by, WebElement element, WebDriver driver) {}
-                @Override public void beforeChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {}
-                @Override public void beforeScript(String script, WebDriver driver) {}
-                @Override public void afterScript(String script, WebDriver driver) {}
-                @Override public void beforeSwitchToWindow(String windowName, WebDriver driver) {}
-                @Override public void afterSwitchToWindow(String windowName, WebDriver driver) {}
-                @Override public void onException(Throwable throwable, WebDriver driver) {}
-                @Override public <X> void beforeGetScreenshotAs(OutputType<X> target) {}
-                @Override public <X> void afterGetScreenshotAs(OutputType<X> target, X screenshot) {}
-                @Override public void beforeGetText(WebElement element, WebDriver driver) {}
-                @Override public void afterGetText(WebElement element, WebDriver driver, String text) {}
+                // Alert methods
+                @Override
+                public void beforeAlertAccept(WebDriver driver) {}
+                
+                @Override
+                public void afterAlertAccept(WebDriver driver) {}
+                
+                @Override
+                public void afterAlertDismiss(WebDriver driver) {}
+                
+                @Override
+                public void beforeAlertDismiss(WebDriver driver) {}
+                
+                // Navigation methods
+                @Override
+                public void beforeNavigateTo(String url, WebDriver driver) {}
+                
+                @Override
+                public void afterNavigateTo(String url, WebDriver driver) {}
+                
+                @Override
+                public void beforeNavigateBack(WebDriver driver) {}
+                
+                @Override
+                public void afterNavigateBack(WebDriver driver) {}
+                
+                @Override
+                public void beforeNavigateForward(WebDriver driver) {}
+                
+                @Override
+                public void afterNavigateForward(WebDriver driver) {}
+                
+                @Override
+                public void beforeNavigateRefresh(WebDriver driver) {}
+                
+                @Override
+                public void afterNavigateRefresh(WebDriver driver) {}
+                
+                // Element methods
+                @Override
+                public void beforeFindBy(By by, WebElement element, WebDriver driver) {}
+                
+                @Override
+                public void afterFindBy(By by, WebElement element, WebDriver driver) {}
+                
+                @Override
+                public void beforeClickOn(WebElement element, WebDriver driver) {}
+                
+                @Override
+                public void afterClickOn(WebElement element, WebDriver driver) {
+                    log.info("Click detected on WebElement: {}", element.getTagName());
+                    
+                    // Build a selector for the element
+                    String selector = getElementSelector(element);
+                    
+                    // Record the action
+                    Action action = new Action(ActionType.CLICK);
+                    recordAction(action, selector, "");
+                }
+                
+                @Override
+                public void beforeChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {}
+                
+                @Override
+                public void afterChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {
+                    log.info("Input detected on WebElement: {}", element.getTagName());
+                    
+                    String value = "";
+                    if (keysToSend != null) {
+                        value = String.join("", keysToSend);
+                    }
+                    
+                    // Build a selector for the element
+                    String selector = getElementSelector(element);
+                    
+                    // Record the action
+                    Action action = new Action(ActionType.TYPE);
+                    action.setValue(value);
+                    recordAction(action, selector, value);
+                }
+                
+                // Script methods
+                @Override
+                public void beforeScript(String script, WebDriver driver) {}
+                
+                @Override
+                public void afterScript(String script, WebDriver driver) {}
+                
+                // Window methods
+                @Override
+                public void beforeSwitchToWindow(String windowName, WebDriver driver) {}
+                
+                @Override
+                public void afterSwitchToWindow(String windowName, WebDriver driver) {}
+                
+                // Exception method
+                @Override
+                public void onException(Throwable throwable, WebDriver driver) {}
+                
+                // Screenshot methods
+                @Override
+                public <X> void beforeGetScreenshotAs(OutputType<X> target) {}
+                
+                @Override
+                public <X> void afterGetScreenshotAs(OutputType<X> target, X screenshot) {}
+                
+                // Text methods
+                @Override
+                public void beforeGetText(WebElement element, WebDriver driver) {}
+                
+                @Override
+                public void afterGetText(WebElement element, WebDriver driver, String text) {}
             });
             
             // Set the driver to the event firing wrapper
