@@ -8653,6 +8653,393 @@ jsExecutor.executeScript(
 );
 
 
+package com.cssmart.ui.recorder;
 
+import lombok.extern.slf4j.Slf4j;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.time.LocalDateTime;
+
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.By;
+import org.openqa.selenium.OutputType;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.firefox.FirefoxDriver;
+import org.openqa.selenium.firefox.FirefoxOptions;
+import org.openqa.selenium.edge.EdgeDriver;
+import org.openqa.selenium.edge.EdgeOptions;
+import org.openqa.selenium.safari.SafariDriver;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.support.events.EventFiringWebDriver;
+import org.openqa.selenium.support.events.WebDriverEventListener;
+import io.github.bonigarcia.wdm.WebDriverManager;
+
+@Slf4j
+public class TestRecorder {
+    private boolean isRecording;
+    private List<RecordedStep> steps;
+    private LocalDateTime startTime;
+    private String sessionId;
+    private WebDriver driver;
+    private String baseUrl;
+    
+    public TestRecorder() {
+        this.isRecording = false;
+        this.steps = new ArrayList<>();
+    }
+    
+    public void startRecording(String browserType, String url) {
+        startRecording(browserType, url, false);
+    }
+    
+    public void startRecording(String browserType, String url, boolean headless) {
+        this.isRecording = true;
+        this.steps = new ArrayList<>();
+        this.baseUrl = url;
+        this.startTime = LocalDateTime.now();
+        this.sessionId = UUID.randomUUID().toString();
+        
+        // Initialize and launch browser with event listener
+        initializeBrowser(browserType, headless);
+        
+        // Navigate to the base URL
+        if (driver != null && baseUrl != null && !baseUrl.isEmpty()) {
+            driver.get(baseUrl);
+            
+            // Record navigation as a step
+            RecordedStep step = new RecordedStep();
+            step.setAction("NAVIGATE");
+            step.setValue(baseUrl);
+            step.setTimestamp(LocalDateTime.now());
+            step.setDescription("Navigate to " + baseUrl);
+            steps.add(step);
+            
+            log.info("Recorded navigation to: {}", baseUrl);
+        }
+        
+        log.info("Recording started with session ID: {}", sessionId);
+    }
+    
+    private void initializeBrowser(String browserType, boolean headless) {
+        try {
+            WebDriver baseDriver;
+            
+            // Set up the WebDriver based on browser type
+            switch (browserType.toLowerCase()) {
+                case "chrome":
+                    WebDriverManager.chromedriver().setup();
+                    ChromeOptions chromeOptions = new ChromeOptions();
+                    if (headless) {
+                        chromeOptions.addArguments("--headless=new");
+                    }
+                    baseDriver = new ChromeDriver(chromeOptions);
+                    break;
+                case "firefox":
+                    WebDriverManager.firefoxdriver().setup();
+                    FirefoxOptions firefoxOptions = new FirefoxOptions();
+                    if (headless) {
+                        firefoxOptions.addArguments("-headless");
+                    }
+                    baseDriver = new FirefoxDriver(firefoxOptions);
+                    break;
+                case "edge":
+                    WebDriverManager.edgedriver().setup();
+                    EdgeOptions edgeOptions = new EdgeOptions();
+                    if (headless) {
+                        edgeOptions.addArguments("--headless");
+                    }
+                    baseDriver = new EdgeDriver(edgeOptions);
+                    break;
+                case "safari":
+                    baseDriver = new SafariDriver();
+                    break;
+                default:
+                    log.warn("Unsupported browser type: {}. Defaulting to Chrome.", browserType);
+                    WebDriverManager.chromedriver().setup();
+                    ChromeOptions defaultOptions = new ChromeOptions();
+                    if (headless) {
+                        defaultOptions.addArguments("--headless=new");
+                    }
+                    baseDriver = new ChromeDriver(defaultOptions);
+            }
+            
+            // Create event firing driver wrapper
+            EventFiringWebDriver eventDriver = new EventFiringWebDriver(baseDriver);
+            
+            // Register event listener to capture user interactions
+            eventDriver.register(new WebDriverEventListener() {
+                @Override
+                public void afterClickOn(WebElement element, WebDriver driver) {
+                    log.info("Click detected on WebElement: {}", element.getTagName());
+                    
+                    // Build a selector for the element
+                    String selector = getElementSelector(element);
+                    
+                    // Record the action
+                    Action action = new Action(ActionType.CLICK);
+                    recordAction(action, selector, "");
+                }
+                
+                @Override
+                public void afterChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {
+                    log.info("Input detected on WebElement: {}", element.getTagName());
+                    
+                    String value = "";
+                    if (keysToSend != null) {
+                        value = String.join("", keysToSend);
+                    }
+                    
+                    // Build a selector for the element
+                    String selector = getElementSelector(element);
+                    
+                    // Record the action
+                    Action action = new Action(ActionType.TYPE);
+                    action.setValue(value);
+                    recordAction(action, selector, value);
+                }
+                
+                // Helper method to create element selector
+                private String getElementSelector(WebElement element) {
+                    if (element == null) return "unknown";
+                    
+                    String selector = element.getTagName().toLowerCase();
+                    
+                    try {
+                        if (element.getAttribute("id") != null && !element.getAttribute("id").isEmpty()) {
+                            selector = "#" + element.getAttribute("id");
+                        } else if (element.getAttribute("name") != null && !element.getAttribute("name").isEmpty()) {
+                            selector = "[name=\"" + element.getAttribute("name") + "\"]";
+                        } else if (element.getAttribute("class") != null && !element.getAttribute("class").isEmpty()) {
+                            selector += "." + element.getAttribute("class").replace(" ", ".");
+                        }
+                    } catch (Exception e) {
+                        log.warn("Error getting element attributes: {}", e.getMessage());
+                    }
+                    
+                    return selector;
+                }
+                
+                // Required implementation of interface methods
+                @Override public void beforeClickOn(WebElement element, WebDriver driver) {}
+                @Override public void beforeNavigateTo(String url, WebDriver driver) {}
+                @Override public void afterNavigateTo(String url, WebDriver driver) {}
+                @Override public void beforeNavigateBack(WebDriver driver) {}
+                @Override public void afterNavigateBack(WebDriver driver) {}
+                @Override public void beforeNavigateForward(WebDriver driver) {}
+                @Override public void afterNavigateForward(WebDriver driver) {}
+                @Override public void beforeNavigateRefresh(WebDriver driver) {}
+                @Override public void afterNavigateRefresh(WebDriver driver) {}
+                @Override public void beforeFindBy(By by, WebElement element, WebDriver driver) {}
+                @Override public void afterFindBy(By by, WebElement element, WebDriver driver) {}
+                @Override public void beforeChangeValueOf(WebElement element, WebDriver driver, CharSequence[] keysToSend) {}
+                @Override public void beforeScript(String script, WebDriver driver) {}
+                @Override public void afterScript(String script, WebDriver driver) {}
+                @Override public void beforeSwitchToWindow(String windowName, WebDriver driver) {}
+                @Override public void afterSwitchToWindow(String windowName, WebDriver driver) {}
+                @Override public void onException(Throwable throwable, WebDriver driver) {}
+                @Override public <X> void beforeGetScreenshotAs(OutputType<X> target) {}
+                @Override public <X> void afterGetScreenshotAs(OutputType<X> target, X screenshot) {}
+                @Override public void beforeGetText(WebElement element, WebDriver driver) {}
+                @Override public void afterGetText(WebElement element, WebDriver driver, String text) {}
+            });
+            
+            // Set the driver to the event firing wrapper
+            driver = eventDriver;
+            
+            // Maximize browser window
+            driver.manage().window().maximize();
+            
+            log.info("Browser initialized with WebDriver event listener: {}", browserType);
+        } catch (Exception e) {
+            log.error("Failed to initialize browser: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize browser: " + e.getMessage(), e);
+        }
+    }
+    
+    public TestCase stopRecording() {
+        this.isRecording = false;
+        LocalDateTime endTime = LocalDateTime.now();
+        log.info("Recording stopped, captured {} steps", steps.size());
+        
+        // Close the browser
+        if (driver != null) {
+            try {
+                driver.quit();
+                log.info("Browser closed");
+            } catch (Exception e) {
+                log.error("Error closing browser: {}", e.getMessage(), e);
+            } finally {
+                driver = null;
+            }
+        }
+        
+        // Create test case from recorded steps
+        TestCase testCase = createTestCase(steps, startTime, endTime);
+        
+        return testCase;
+    }
+    
+    public void recordAction(Action action, String element, String value) {
+        if (!isRecording) {
+            log.warn("Attempted to record action when not recording");
+            return;
+        }
+        
+        log.info("Recording action: {} on {} with value {}", action.getType(), element, value);
+        
+        RecordedStep step = new RecordedStep();
+        step.setAction(action.getType().toString());
+        step.setElement(element);
+        step.setValue(value);
+        step.setTimestamp(LocalDateTime.now());
+        
+        // Generate description
+        step.setDescription(generateDescription(action.getType(), element, value));
+        
+        steps.add(step);
+        log.info("Recorded step: {}", step.getDescription());
+    }
+    
+    private String generateDescription(ActionType actionType, String element, String value) {
+        switch (actionType) {
+            case CLICK:
+                return "Click on " + element;
+            case TYPE:
+                return "Enter '" + value + "' in " + element;
+            case SELECT:
+                return "Select '" + value + "' from " + element;
+            case VERIFY_PRESENCE:
+                return "Verify " + element + " is present";
+            case VERIFY_VISIBILITY:
+                return "Verify " + element + " is visible";
+            case VERIFY_STATE:
+                return "Verify " + element + " state is '" + value + "'";
+            case WAIT:
+                return "Wait for " + element;
+            case HOVER:
+                return "Hover over " + element;
+            case NAVIGATE:
+                return "Navigate to " + value;
+            default:
+                return actionType + " on " + element;
+        }
+    }
+    
+    private TestCase createTestCase(List<RecordedStep> steps, LocalDateTime startTime, LocalDateTime endTime) {
+        TestCase testCase = new TestCase();
+        testCase.setId(sessionId);
+        testCase.setName("Recorded Test " + startTime.toString().replace("T", " ").substring(0, 19));
+        testCase.setDescription("Automatically recorded test case");
+        testCase.setSteps(new ArrayList<>(steps));
+        testCase.setStartTime(startTime);
+        testCase.setEndTime(endTime);
+        
+        // Generate class and method names
+        String timestamp = startTime.toString().replaceAll("[^a-zA-Z0-9]", "");
+        testCase.setClassName("RecordedTest" + timestamp);
+        testCase.setMethodName("test" + timestamp);
+        
+        // Generate test code
+        testCase.setCode(generateTestCode(testCase));
+        
+        return testCase;
+    }
+    
+    private String generateTestCode(TestCase testCase) {
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.testng.Assert;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("/**\n");
+        code.append(" * ").append(testCase.getDescription()).append("\n");
+        code.append(" * Recorded on: ").append(testCase.getStartTime()).append("\n");
+        code.append(" */\n");
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        for (RecordedStep step : testCase.getSteps()) {
+            code.append("        // ").append(step.getDescription()).append("\n");
+            
+            if ("NAVIGATE".equals(step.getAction())) {
+                code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+            } else if ("CLICK".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.click();\n");
+            } else if ("TYPE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        element.clear();\n");
+                code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+            } else if ("SELECT".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                    .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+            } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                code.append("        WebElement element = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                    .append(step.getElement()).append(" should be present\");\n");
+            } else if ("SUBMIT_FORM".equals(step.getAction())) {
+                code.append("        WebElement form = elementFinder.findElement(\"")
+                    .append(step.getElement()).append("\");\n");
+                code.append("        form.submit();\n");
+            }
+            
+            code.append("\n");
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    public boolean isRecording() {
+        return isRecording;
+    }
+    
+    public List<RecordedStep> getSteps() {
+        return new ArrayList<>(steps);  // Return a copy to prevent modification
+    }
+    
+    public RecordedStep getLastRecordedStep() {
+        if (steps.isEmpty()) {
+            return null;
+        }
+        return steps.get(steps.size() - 1);
+    }
+    
+    public WebDriver getDriver() {
+        return driver;
+    }
+    
+    public String getSessionId() {
+        return sessionId;
+    }
+}
 
 
