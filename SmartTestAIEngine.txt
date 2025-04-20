@@ -778,4 +778,165 @@ private String generateTestStepDescription(TestStep step) {
             return action + " on " + (element != null ? element : "element");
     }
 }
+
+/**
+ * Analyze an element based on description
+ * 
+ * @param description Natural language description of an element
+ * @return ElementAnalysis object with element details
+ */
+public ElementAnalysis analyzeElement(String description) {
+    try {
+        log.debug("Analyzing element from description: {}", description);
+        
+        // Create a new ElementAnalysis object
+        ElementAnalysis analysis = new ElementAnalysis();
+        
+        // Set element type based on description
+        String elementType = determineElementType(description);
+        analysis.setElementType(elementType);
+        
+        // Extract attributes from description
+        Map<String, String> attributes = extractAttributes(description);
+        analysis.setAttributes(attributes);
+        
+        return analysis;
+    } catch (Exception e) {
+        log.error("Error analyzing element from description: {}", description, e);
+        return new ElementAnalysis(); // Return empty analysis on error
+    }
+}
+
+/**
+ * Determine element type from description
+ * 
+ * @param description Element description
+ * @return Element type (tag name)
+ */
+private String determineElementType(String description) {
+    String lowerDesc = description.toLowerCase();
+    
+    // Check for common element types
+    if (lowerDesc.contains("button") || lowerDesc.contains("btn")) {
+        return "button";
+    } else if (lowerDesc.contains("link") || lowerDesc.contains("anchor")) {
+        return "a";
+    } else if (lowerDesc.contains("input") || lowerDesc.contains("field") || 
+               lowerDesc.contains("textbox") || lowerDesc.contains("text box")) {
+        return "input";
+    } else if (lowerDesc.contains("dropdown") || lowerDesc.contains("select") || 
+               lowerDesc.contains("combo") || lowerDesc.contains("combobox")) {
+        return "select";
+    } else if (lowerDesc.contains("checkbox")) {
+        return "input"; // Checkbox is an input with type="checkbox"
+    } else if (lowerDesc.contains("radio")) {
+        return "input"; // Radio is an input with type="radio"
+    } else if (lowerDesc.contains("textarea")) {
+        return "textarea";
+    } else if (lowerDesc.contains("image") || lowerDesc.contains("img") || lowerDesc.contains("picture")) {
+        return "img";
+    } else if (lowerDesc.contains("div") || lowerDesc.contains("container")) {
+        return "div";
+    } else if (lowerDesc.contains("span") || lowerDesc.contains("text")) {
+        return "span";
+    } else if (lowerDesc.contains("table")) {
+        return "table";
+    } else if (lowerDesc.contains("form")) {
+        return "form";
+    } else if (lowerDesc.contains("header") || lowerDesc.contains("heading") || 
+               lowerDesc.matches(".*\\bh[1-6]\\b.*")) {
+        // Check for h1-h6
+        if (lowerDesc.matches(".*\\bh([1-6])\\b.*")) {
+            java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\bh([1-6])\\b").matcher(lowerDesc);
+            if (matcher.find()) {
+                return "h" + matcher.group(1);
+            }
+        }
+        return "h1"; // Default to h1 if specific level not mentioned
+    }
+    
+    // Default to div if no specific type detected
+    return "div";
+}
+
+/**
+ * Extract element attributes from description
+ * 
+ * @param description Element description
+ * @return Map of attribute names and values
+ */
+private Map<String, String> extractAttributes(String description) {
+    Map<String, String> attributes = new HashMap<>();
+    String lowerDesc = description.toLowerCase();
+    
+    // Extract ID, if present
+    if (lowerDesc.contains(" id ") || lowerDesc.contains(" id=") || lowerDesc.contains(" with id")) {
+        java.util.regex.Matcher idMatcher = java.util.regex.Pattern.compile(
+            "(?:id|Id|ID)[=:]?\\s*['\"]?([\\w-]+)['\"]?").matcher(description);
+        if (idMatcher.find()) {
+            attributes.put("id", idMatcher.group(1));
+        }
+    }
+    
+    // Extract class, if present
+    if (lowerDesc.contains(" class ") || lowerDesc.contains(" class=") || lowerDesc.contains(" with class")) {
+        java.util.regex.Matcher classMatcher = java.util.regex.Pattern.compile(
+            "(?:class|Class)[=:]?\\s*['\"]?([\\w\\s-]+)['\"]?").matcher(description);
+        if (classMatcher.find()) {
+            attributes.put("class", classMatcher.group(1));
+        }
+    }
+    
+    // Extract name, if present
+    if (lowerDesc.contains(" name ") || lowerDesc.contains(" name=") || lowerDesc.contains(" with name")) {
+        java.util.regex.Matcher nameMatcher = java.util.regex.Pattern.compile(
+            "(?:name|Name)[=:]?\\s*['\"]?([\\w-]+)['\"]?").matcher(description);
+        if (nameMatcher.find()) {
+            attributes.put("name", nameMatcher.group(1));
+        }
+    }
+    
+    // Extract text content, if present
+    if (lowerDesc.contains(" text ") || lowerDesc.contains(" text=") || 
+        lowerDesc.contains(" with text") || lowerDesc.contains(" containing")) {
+        java.util.regex.Matcher textMatcher = java.util.regex.Pattern.compile(
+            "(?:text|Text|containing|contains)[=:]?\\s*['\"]?([^'\"]+)['\"]?").matcher(description);
+        if (textMatcher.find()) {
+            attributes.put("text", textMatcher.group(1));
+        } else {
+            // Try to extract any text within quotes as the element text
+            java.util.regex.Matcher quoteMatcher = java.util.regex.Pattern.compile(
+                "['\"]([^'\"]+)['\"]").matcher(description);
+            if (quoteMatcher.find()) {
+                attributes.put("text", quoteMatcher.group(1));
+            }
+        }
+    }
+    
+    // For inputs, extract type attribute if present
+    if (lowerDesc.contains("input") || lowerDesc.contains("field") || 
+        lowerDesc.contains("textbox") || lowerDesc.contains("text box")) {
+        
+        if (lowerDesc.contains("checkbox")) {
+            attributes.put("type", "checkbox");
+        } else if (lowerDesc.contains("radio")) {
+            attributes.put("type", "radio");
+        } else if (lowerDesc.contains("password")) {
+            attributes.put("type", "password");
+        } else if (lowerDesc.contains("email")) {
+            attributes.put("type", "email");
+        } else if (lowerDesc.contains("number")) {
+            attributes.put("type", "number");
+        } else if (lowerDesc.contains("search")) {
+            attributes.put("type", "search");
+        } else if (lowerDesc.contains("button") || lowerDesc.contains("submit")) {
+            attributes.put("type", "submit");
+        } else {
+            attributes.put("type", "text"); // Default to text
+        }
+    }
+    
+    return attributes;
+}
+
 }
