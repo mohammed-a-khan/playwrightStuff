@@ -1285,3 +1285,344 @@ export interface TestSuite {
   tags?: string[];
   testCases: TestCase[];
 }
+
+
+
+// Add this before setting state
+const formattedExecutions = executionsData.map(execution => ({
+  ...execution,
+  name: `Execution ${execution.id.substring(0, 8)}`,
+  totalDurationMs: new Date(execution.endTime).getTime() - new Date(execution.startTime).getTime(),
+  results: execution.testResults || [],
+  artifactDirectory: `/artifacts/${execution.id}`,
+  summary: {
+    total: execution.testResults.length,
+    passed: execution.testResults.filter(r => r.passed).length,
+    failed: execution.testResults.filter(r => !r.passed).length,
+    skipped: 0
+  }
+}));
+
+// Then set state with the formatted data
+setRecentExecutions(formattedExecutions);
+
+
+ProjectDetail.tsx
+---------------------------
+
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { 
+  FaPlus, 
+  FaSpinner, 
+  FaExclamationTriangle,
+  FaEdit,
+  FaTrash,
+  FaPlay
+} from 'react-icons/fa';
+import { Project, TestSuite } from '../../types/workspace';
+import workspaceService from '../../services/workspaceService';
+
+const ProjectDetail: React.FC = () => {
+  const { workspaceId, projectId } = useParams<{ workspaceId: string; projectId: string }>();
+  const navigate = useNavigate();
+  
+  const [project, setProject] = useState<Project | null>(null);
+  const [testSuites, setTestSuites] = useState<TestSuite[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [showNewTestSuiteModal, setShowNewTestSuiteModal] = useState<boolean>(false);
+  const [newTestSuiteName, setNewTestSuiteName] = useState<string>('');
+  const [newTestSuiteDescription, setNewTestSuiteDescription] = useState<string>('');
+  const [creatingTestSuite, setCreatingTestSuite] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!workspaceId || !projectId) return;
+    
+    const fetchProject = async () => {
+      setLoading(true);
+      try {
+        const projectData = await workspaceService.getProject(workspaceId, projectId);
+        setProject(projectData);
+        
+        const testSuitesData = await workspaceService.getTestSuitesByProject(workspaceId, projectId);
+        setTestSuites(testSuitesData);
+      } catch (error) {
+        console.error('Error fetching project:', error);
+        toast.error('Failed to load project data');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchProject();
+  }, [workspaceId, projectId]);
+
+  const handleCreateTestSuite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!newTestSuiteName.trim()) {
+      toast.error('Please enter a test suite name');
+      return;
+    }
+    
+    setCreatingTestSuite(true);
+    
+    try {
+      const newTestSuite = {
+        name: newTestSuiteName,
+        description: newTestSuiteDescription,
+        projectId: projectId as string
+      };
+      
+      const createdTestSuite = await workspaceService.createTestSuite(workspaceId as string, projectId as string, newTestSuite);
+      
+      setTestSuites([...testSuites, createdTestSuite]);
+      setShowNewTestSuiteModal(false);
+      setNewTestSuiteName('');
+      setNewTestSuiteDescription('');
+      
+      toast.success('Test suite created successfully');
+    } catch (error) {
+      console.error('Error creating test suite:', error);
+      toast.error('Failed to create test suite');
+    } finally {
+      setCreatingTestSuite(false);
+    }
+  };
+
+  const handleDeleteTestSuite = async (testSuiteId: string) => {
+    if (!window.confirm('Are you sure you want to delete this test suite?')) {
+      return;
+    }
+    
+    try {
+      await workspaceService.deleteTestSuite(workspaceId as string, projectId as string, testSuiteId);
+      
+      setTestSuites(testSuites.filter(ts => ts.id !== testSuiteId));
+      toast.success('Test suite deleted successfully');
+    } catch (error) {
+      console.error('Error deleting test suite:', error);
+      toast.error('Failed to delete test suite');
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (!project) return;
+    
+    try {
+      // Navigate to the web analyzer to start the generation process
+      navigate(`/workspaces/${workspaceId}/projects/${projectId}/analyzer`, { 
+        state: { projectUrl: project.baseUrl } 
+      });
+    } catch (error) {
+      console.error('Error navigating to generator:', error);
+      toast.error('Failed to start generation process');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading project...</p>
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="error-container">
+        <FaExclamationTriangle className="error-icon" />
+        <p>Project not found</p>
+        <Link to={`/workspaces/${workspaceId}`} className="btn btn-primary">
+          Back to Workspace
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="project-detail-container">
+      <div className="page-header">
+        <h1>{project.name}</h1>
+        <div className="header-actions">
+          <button 
+            className="btn btn-primary me-2"
+            onClick={handleGenerate}
+          >
+            <FaPlay className="me-2" /> Generate Tests
+          </button>
+          <button 
+            className="btn btn-primary"
+            onClick={() => setShowNewTestSuiteModal(true)}
+          >
+            <FaPlus className="me-2" /> New Test Suite
+          </button>
+        </div>
+      </div>
+      
+      <div className="project-info card mb-4">
+        <div className="card-body">
+          <h5 className="card-title">Project Information</h5>
+          <div className="row">
+            <div className="col-md-6">
+              <p><strong>Name:</strong> {project.name}</p>
+              <p><strong>Description:</strong> {project.description || 'No description'}</p>
+            </div>
+            <div className="col-md-6">
+              <p><strong>Base URL:</strong> {project.baseUrl}</p>
+              <p><strong>Created:</strong> {new Date(project.createdAt).toLocaleString()}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <h2>Test Suites</h2>
+      
+      {testSuites.length === 0 ? (
+        <div className="empty-state">
+          <p>No test suites found for this project.</p>
+          <p>Create a new test suite or generate tests to get started.</p>
+        </div>
+      ) : (
+        <div className="test-suites-grid">
+          {testSuites.map(testSuite => (
+            <div className="card test-suite-card" key={testSuite.id}>
+              <div className="card-body">
+                <h5 className="card-title">{testSuite.name}</h5>
+                <p className="card-text">{testSuite.description || 'No description'}</p>
+                <div className="test-counts">
+                  <span className="test-count">{testSuite.testCases?.length || 0} Test Cases</span>
+                </div>
+              </div>
+              <div className="card-footer">
+                <Link 
+                  to={`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuite.id}`} 
+                  className="btn btn-primary btn-sm"
+                >
+                  View Details
+                </Link>
+                <button 
+                  className="btn btn-icon btn-sm"
+                  onClick={() => navigate(`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuite.id}/edit`)}
+                  title="Edit test suite"
+                >
+                  <FaEdit />
+                </button>
+                <button 
+                  className="btn btn-icon btn-danger btn-sm"
+                  onClick={() => handleDeleteTestSuite(testSuite.id)}
+                  title="Delete test suite"
+                >
+                  <FaTrash />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      
+      {/* New Test Suite Modal */}
+      {showNewTestSuiteModal && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Create New Test Suite</h2>
+              <button 
+                className="btn btn-icon close-btn"
+                onClick={() => setShowNewTestSuiteModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <form onSubmit={handleCreateTestSuite}>
+              <div className="modal-body">
+                <div className="form-group">
+                  <label htmlFor="testSuiteName">Name</label>
+                  <input
+                    id="testSuiteName"
+                    type="text"
+                    className="form-control"
+                    value={newTestSuiteName}
+                    onChange={(e) => setNewTestSuiteName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="testSuiteDescription">Description</label>
+                  <textarea
+                    id="testSuiteDescription"
+                    className="form-control"
+                    value={newTestSuiteDescription}
+                    onChange={(e) => setNewTestSuiteDescription(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowNewTestSuiteModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={creatingTestSuite || !newTestSuiteName.trim()}
+                >
+                  {creatingTestSuite ? (
+                    <>
+                      <FaSpinner className="spinner me-2" />
+                      Creating...
+                    </>
+                  ) : (
+                    'Create Test Suite'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ProjectDetail;
+
+
+export interface TestExecutionSession {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  testSuiteId: string;
+  startTime: string;
+  endTime: string;
+  environment: string;
+  browser: string;
+  testResults: TestExecutionResult[];
+  // Add these for compatibility with your UI
+  name?: string;
+  totalDurationMs?: number;
+  results?: any[];
+  artifactDirectory?: string;
+  summary?: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  };
+}
+
+export interface TestExecutionResult {
+  id: string;
+  testCaseId: string;
+  testCaseName: string;
+  passed: boolean;
+  executionTime: string;
+  errorMessage?: string;
+  screenshot?: string;
+}
