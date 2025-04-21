@@ -1,0 +1,4806 @@
+package com.ctgp.service.integration;
+
+import com.ctgp.model.execution.TestExecutionResult;
+import com.ctgp.model.workspace.AzureDevOpsConfig;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import com.microsoft.azure.devops.extension.core.client.ClientFactoryV5;
+import com.microsoft.azure.devops.extension.core.credential.BuildCredentials;
+import com.microsoft.azure.devops.extension.core.credential.TestCredentials;
+import com.microsoft.azure.devops.extension.core.credential.VssCredentials;
+import com.microsoft.azure.devops.extension.client.testresults.TestResultsHttpClient;
+import com.microsoft.azure.devops.extension.client.wit.WorkItemTrackingHttpClient;
+import com.microsoft.azure.devops.extension.client.testresults.api.models.TestResultCreateModel;
+import com.microsoft.azure.devops.extension.client.testresults.api.models.TestRun;
+import com.microsoft.azure.devops.extension.client.testresults.api.models.TestRunCreateModel;
+import com.microsoft.azure.devops.extension.client.wit.api.models.JsonPatchDocument;
+import com.microsoft.azure.devops.extension.client.wit.api.models.JsonPatchOperation;
+import com.microsoft.azure.devops.extension.client.wit.api.models.WorkItem;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
+import org.springframework.stereotype.Service;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.text.SimpleDateFormat;
+import java.util.*;
+
+/**
+ * Service for integrating with Azure DevOps.
+ */
+@Service
+@Slf4j
+public class AzureDevOpsIntegrationService {
+
+    /**
+     * Upload test results to Azure DevOps.
+     *
+     * @param config The Azure DevOps configuration
+     * @param testSuite The test suite
+     * @param testResults The test execution results
+     * @param artifactsDir Directory containing test artifacts (screenshots, logs)
+     * @return The created test run ID
+     * @throws Exception If there's an error uploading results
+     */
+    public String uploadTestResults(
+            AzureDevOpsConfig config, 
+            TestSuite testSuite, 
+            List<TestExecutionResult> testResults,
+            Path artifactsDir) throws Exception {
+        
+        log.info("Uploading test results to Azure DevOps: {}", config.getOrganizationUrl());
+        
+        // Initialize Azure DevOps client
+        VssCredentials credentials = getCredentials(config);
+        ClientFactoryV5 clientFactory = new ClientFactoryV5(config.getOrganizationUrl(), credentials);
+        TestResultsHttpClient testClient = clientFactory.createTestResultsClient();
+        
+        // Create test run
+        TestRunCreateModel testRun = new TestRunCreateModel();
+        testRun.setName("Automated Tests: " + testSuite.getName());
+        testRun.setBuild(null); // Optional: Set build information if available
+        testRun.setPlan(config.getTestPlanId());
+        testRun.setStartedDate(new Date());
+        testRun.setAutomatedRun(true);
+        testRun.setErrorMessage("");
+        testRun.setController("");
+        
+        // Create the test run
+        TestRun createdRun = testClient.createTestRun(testRun, config.getProjectName());
+        String testRunId = createdRun.getId().toString();
+        
+        // Create test results
+        List<TestResultCreateModel> resultModels = new ArrayList<>();
+        
+        for (TestExecutionResult result : testResults) {
+            TestResultCreateModel resultModel = new TestResultCreateModel();
+            resultModel.setTestCaseTitle(result.getTestCase().getName());
+            resultModel.setAutomatedTestName(result.getTestCase().getName());
+            resultModel.setDateStarted(result.getStartTime());
+            resultModel.setDateCompleted(result.getEndTime());
+            resultModel.setOutcome(mapOutcome(result.getStatus()));
+            resultModel.setErrorMessage(result.getErrorMessage());
+            resultModel.setStackTrace(result.getStackTrace());
+            resultModel.setDurationInMs((long) result.getDurationMs());
+            
+            // Add result to batch
+            resultModels.add(resultModel);
+            
+            // Upload artifacts if enabled
+            if (config.isUploadArtifacts() && result.getScreenshotPath() != null) {
+                uploadTestArtifact(testClient, config.getProjectName(), testRunId, 
+                        result.getTestCase().getId(), result.getScreenshotPath());
+            }
+            
+            // Create work item if test failed and auto-create is enabled
+            if (config.isAutoCreateWorkItems() && result.getStatus() == TestExecutionResult.Status.FAILED) {
+                createWorkItem(config, clientFactory, result);
+            }
+        }
+        
+        // Upload test results in batch
+        testClient.addTestResultsToBatch(resultModels, config.getProjectName(), testRunId);
+        
+        // Complete the test run
+        createdRun.setCompletedDate(new Date());
+        testClient.updateTestRun(createdRun, config.getProjectName(), testRunId);
+        
+        log.info("Successfully uploaded test results to Azure DevOps. Test Run ID: {}", testRunId);
+        return testRunId;
+    }
+    
+    /**
+     * Upload a test artifact to Azure DevOps.
+     *
+     * @param client The test results client
+     * @param projectName The Azure DevOps project name
+     * @param testRunId The test run ID
+     * @param testCaseId The test case ID
+     * @param artifactPath The path to the artifact file
+     * @throws Exception If there's an error uploading the artifact
+     */
+    private void uploadTestArtifact(
+            TestResultsHttpClient client, 
+            String projectName, 
+            String testRunId, 
+            String testCaseId,
+            Path artifactPath) throws Exception {
+        
+        File file = artifactPath.toFile();
+        if (!file.exists()) {
+            log.warn("Artifact file not found: {}", artifactPath);
+            return;
+        }
+        
+        String fileName = file.getName();
+        byte[] fileContent = FileUtils.readFileToByteArray(file);
+        
+        // Use the Azure DevOps REST API to upload the attachment
+        // This is a simplified example and may need to be adjusted based on the specific API version
+        client.createTestRunAttachment(
+                fileContent, 
+                projectName, 
+                testRunId, 
+                testCaseId, 
+                fileName, 
+                "Test attachment: " + fileName,
+                null);
+        
+        log.info("Uploaded artifact: {} for test case: {}", fileName, testCaseId);
+    }
+    
+    /**
+     * Create a work item in Azure DevOps for a failed test.
+     *
+     * @param config The Azure DevOps configuration
+     * @param clientFactory The client factory
+     * @param result The test execution result
+     * @throws Exception If there's an error creating the work item
+     */
+    private void createWorkItem(
+            AzureDevOpsConfig config, 
+            ClientFactoryV5 clientFactory, 
+            TestExecutionResult result) throws Exception {
+        
+        WorkItemTrackingHttpClient witClient = clientFactory.createWorkItemTrackingClient();
+        
+        TestCase testCase = result.getTestCase();
+        String failureMessage = result.getErrorMessage();
+        String stackTrace = result.getStackTrace();
+        
+        // Create a JSON patch document for the work item
+        JsonPatchDocument document = new JsonPatchDocument();
+        
+        // Add fields to the document
+        document.add(new JsonPatchOperation(
+                "add", 
+                "/fields/System.Title", 
+                null, 
+                "Test Failure: " + testCase.getName()));
+        
+        document.add(new JsonPatchOperation(
+                "add", 
+                "/fields/System.Description", 
+                null, 
+                createWorkItemDescription(testCase, result)));
+        
+        document.add(new JsonPatchOperation(
+                "add", 
+                "/fields/System.AreaPath", 
+                null, 
+                config.getAreaPath()));
+        
+        document.add(new JsonPatchOperation(
+                "add", 
+                "/fields/System.IterationPath", 
+                null, 
+                config.getIterationPath()));
+        
+        document.add(new JsonPatchOperation(
+                "add", 
+                "/fields/System.Tags", 
+                null, 
+                "Automated Test, Test Failure"));
+        
+        document.add(new JsonPatchOperation(
+                "add", 
+                "/fields/Microsoft.VSTS.TCM.ReproSteps", 
+                null, 
+                createReproSteps(testCase, result)));
+        
+        // Create the work item
+        WorkItem workItem = witClient.createWorkItem(
+                document, 
+                config.getProjectName(), 
+                config.getWorkItemType(), 
+                null, 
+                null);
+        
+        log.info("Created work item: {} for test failure: {}", 
+                workItem.getId(), testCase.getName());
+    }
+    
+    /**
+     * Create a description for the work item.
+     *
+     * @param testCase The test case
+     * @param result The test execution result
+     * @return The formatted description
+     */
+    private String createWorkItemDescription(TestCase testCase, TestExecutionResult result) {
+        StringBuilder description = new StringBuilder();
+        description.append("<p><strong>Automated Test Failure</strong></p>");
+        description.append("<p>The following test has failed:</p>");
+        description.append("<ul>");
+        description.append("<li><strong>Test Name:</strong> ").append(testCase.getName()).append("</li>");
+        description.append("<li><strong>Test Type:</strong> ").append(testCase.getType()).append("</li>");
+        description.append("<li><strong>Priority:</strong> ").append(testCase.getPriority()).append("</li>");
+        description.append("<li><strong>Execution Time:</strong> ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(result.getStartTime())).append("</li>");
+        description.append("<li><strong>Duration:</strong> ").append(result.getDurationMs()).append(" ms</li>");
+        description.append("</ul>");
+        
+        description.append("<p><strong>Error Message:</strong></p>");
+        description.append("<pre>").append(result.getErrorMessage()).append("</pre>");
+        
+        if (result.getStackTrace() != null && !result.getStackTrace().isEmpty()) {
+            description.append("<p><strong>Stack Trace:</strong></p>");
+            description.append("<pre>").append(result.getStackTrace()).append("</pre>");
+        }
+        
+        return description.toString();
+    }
+    
+    /**
+     * Create reproduction steps for the work item.
+     *
+     * @param testCase The test case
+     * @param result The test execution result
+     * @return The formatted reproduction steps
+     */
+    private String createReproSteps(TestCase testCase, TestExecutionResult result) {
+        StringBuilder steps = new StringBuilder();
+        steps.append("<p><strong>Steps to Reproduce:</strong></p>");
+        steps.append("<ol>");
+        steps.append("<li>Run the automated test: ").append(testCase.getName()).append("</li>");
+        steps.append("<li>Observe the failure at step where the error occurred</li>");
+        steps.append("</ol>");
+        
+        steps.append("<p><strong>Expected Result:</strong></p>");
+        steps.append("<p>Test passes successfully</p>");
+        
+        steps.append("<p><strong>Actual Result:</strong></p>");
+        steps.append("<p>Test fails with error:</p>");
+        steps.append("<pre>").append(result.getErrorMessage()).append("</pre>");
+        
+        if (result.getScreenshotPath() != null) {
+            steps.append("<p><strong>Screenshot:</strong> See attachments</p>");
+        }
+        
+        return steps.toString();
+    }
+    
+    /**
+     * Map test result status to Azure DevOps outcome.
+     *
+     * @param status The test execution status
+     * @return The Azure DevOps outcome string
+     */
+    private String mapOutcome(TestExecutionResult.Status status) {
+        switch (status) {
+            case PASSED:
+                return "Passed";
+            case FAILED:
+                return "Failed";
+            case SKIPPED:
+                return "NotExecuted";
+            case BLOCKED:
+                return "Blocked";
+            default:
+                return "Error";
+        }
+    }
+    
+    /**
+     * Get Azure DevOps credentials.
+     *
+     * @param config The Azure DevOps configuration
+     * @return The credentials
+     */
+    private VssCredentials getCredentials(AzureDevOpsConfig config) {
+        return new VssCredentials(
+                new BuildCredentials(
+                        new TestCredentials(
+                                "", 
+                                config.getPersonalAccessToken(), 
+                                "")));
+    }
+}
+
+
+package com.ctgp.model.execution;
+
+import com.ctgp.model.workspace.TestCase;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Model representing the result of a test execution.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TestExecutionResult {
+    
+    /**
+     * The test case that was executed.
+     */
+    private TestCase testCase;
+    
+    /**
+     * The status of the test execution.
+     */
+    private Status status;
+    
+    /**
+     * The start time of the test execution.
+     */
+    private Date startTime;
+    
+    /**
+     * The end time of the test execution.
+     */
+    private Date endTime;
+    
+    /**
+     * The duration of the test execution in milliseconds.
+     */
+    private double durationMs;
+    
+    /**
+     * Error message if the test failed.
+     */
+    private String errorMessage;
+    
+    /**
+     * Stack trace if the test failed.
+     */
+    private String stackTrace;
+    
+    /**
+     * Path to the screenshot if one was taken.
+     */
+    private Path screenshotPath;
+    
+    /**
+     * Path to the video recording if one was taken.
+     */
+    private Path videoPath;
+    
+    /**
+     * Test logs output.
+     */
+    private String logs;
+    
+    /**
+     * Additional execution data.
+     */
+    private Map<String, Object> metadata;
+    
+    /**
+     * Steps executed during the test.
+     */
+    @Builder.Default
+    private List<TestStepResult> steps = new ArrayList<>();
+    
+    /**
+     * Possible test execution statuses.
+     */
+    public enum Status {
+        PASSED,
+        FAILED,
+        SKIPPED,
+        BLOCKED,
+        ERROR
+    }
+}
+
+/**
+ * Model representing the result of a test step execution.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TestStepResult {
+    
+    /**
+     * Step description.
+     */
+    private String description;
+    
+    /**
+     * Whether the step passed or failed.
+     */
+    private boolean passed;
+    
+    /**
+     * Duration of the step in milliseconds.
+     */
+    private double durationMs;
+    
+    /**
+     * Error message if the step failed.
+     */
+    private String errorMessage;
+    
+    /**
+     * Path to screenshot for this step.
+     */
+    private Path screenshotPath;
+}
+
+/**
+ * Model representing a test execution session.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TestExecutionSession {
+    
+    /**
+     * Unique identifier for the session.
+     */
+    private String id;
+    
+    /**
+     * Name of the session.
+     */
+    private String name;
+    
+    /**
+     * Start time of the session.
+     */
+    private Date startTime;
+    
+    /**
+     * End time of the session.
+     */
+    private Date endTime;
+    
+    /**
+     * Total duration of the session in milliseconds.
+     */
+    private double totalDurationMs;
+    
+    /**
+     * Results of the tests executed in this session.
+     */
+    @Builder.Default
+    private List<TestExecutionResult> results = new ArrayList<>();
+    
+    /**
+     * Directory containing artifacts for this session.
+     */
+    private Path artifactsDirectory;
+    
+    /**
+     * Summary of the test execution.
+     */
+    @Builder.Default
+    private TestExecutionSummary summary = new TestExecutionSummary();
+}
+
+/**
+ * Model representing a summary of test execution results.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TestExecutionSummary {
+    
+    /**
+     * Total number of tests.
+     */
+    private int totalTests;
+    
+    /**
+     * Number of passed tests.
+     */
+    private int passedTests;
+    
+    /**
+     * Number of failed tests.
+     */
+    private int failedTests;
+    
+    /**
+     * Number of skipped tests.
+     */
+    private int skippedTests;
+    
+    /**
+     * Number of blocked tests.
+     */
+    private int blockedTests;
+    
+    /**
+     * Number of tests with errors.
+     */
+    private int errorTests;
+    
+    /**
+     * Total duration of all tests in milliseconds.
+     */
+    private double totalDurationMs;
+    
+    /**
+     * Calculate success rate as a percentage.
+     */
+    public double getSuccessRate() {
+        if (totalTests == 0) {
+            return 0;
+        }
+        return (double) passedTests / totalTests * 100;
+    }
+}
+
+
+package com.ctgp.service.execution;
+
+import com.ctgp.model.execution.TestExecutionResult;
+import com.ctgp.model.execution.TestExecutionSession;
+import com.ctgp.model.execution.TestExecutionSummary;
+import com.ctgp.model.execution.TestStepResult;
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.model.workspace.Workspace;
+import com.microsoft.playwright.*;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
+import org.springframework.stereotype.Service;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+/**
+ * Service for executing test cases.
+ */
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class TestExecutionService {
+
+    /**
+     * Execute a test suite.
+     *
+     * @param workspace The workspace
+     * @param project The project
+     * @param testSuite The test suite to execute
+     * @return The test execution session with results
+     * @throws IOException If there's an error during execution
+     */
+    public TestExecutionSession executeTestSuite(Workspace workspace, Project project, TestSuite testSuite) 
+            throws IOException {
+        log.info("Executing test suite: {}", testSuite.getName());
+        
+        // Create a unique session ID
+        String sessionId = UUID.randomUUID().toString();
+        
+        // Create artifacts directory
+        Path artifactsDir = workspace.getLocation()
+                .resolve(project.getRelativePath())
+                .resolve("test-results")
+                .resolve(sessionId);
+        Files.createDirectories(artifactsDir);
+        
+        // Create screenshots directory
+        Path screenshotsDir = artifactsDir.resolve("screenshots");
+        Files.createDirectories(screenshotsDir);
+        
+        // Create videos directory
+        Path videosDir = artifactsDir.resolve("videos");
+        Files.createDirectories(videosDir);
+        
+        // Create logs directory
+        Path logsDir = artifactsDir.resolve("logs");
+        Files.createDirectories(logsDir);
+        
+        // Create session
+        TestExecutionSession session = TestExecutionSession.builder()
+                .id(sessionId)
+                .name(testSuite.getName() + " - " + LocalDateTime.now())
+                .startTime(new Date())
+                .artifactsDirectory(artifactsDir)
+                .results(new ArrayList<>())
+                .build();
+        
+        // Execute each test case
+        for (TestCase testCase : testSuite.getTestCases()) {
+            TestExecutionResult result = executeTestCase(
+                    workspace, 
+                    project, 
+                    testCase, 
+                    screenshotsDir, 
+                    videosDir, 
+                    logsDir);
+            session.getResults().add(result);
+        }
+        
+        // Calculate summary
+        TestExecutionSummary summary = calculateSummary(session.getResults());
+        session.setSummary(summary);
+        
+        // Set end time and total duration
+        session.setEndTime(new Date());
+        session.setTotalDurationMs(summary.getTotalDurationMs());
+        
+        // Save execution report
+        saveExecutionReport(session);
+        
+        log.info("Test suite execution completed. Success rate: {}%", summary.getSuccessRate());
+        return session;
+    }
+    
+    /**
+     * Execute a single test case.
+     *
+     * @param workspace The workspace
+     * @param project The project
+     * @param testCase The test case to execute
+     * @param screenshotsDir Directory to save screenshots
+     * @param videosDir Directory to save videos
+     * @param logsDir Directory to save logs
+     * @return The test execution result
+     */
+    private TestExecutionResult executeTestCase(
+            Workspace workspace, 
+            Project project, 
+            TestCase testCase,
+            Path screenshotsDir,
+            Path videosDir,
+            Path logsDir) {
+        log.info("Executing test case: {}", testCase.getName());
+        
+        Date startTime = new Date();
+        StringBuilder logOutput = new StringBuilder();
+        Path testScriptPath = workspace.getLocation().resolve(testCase.getScriptPath());
+        
+        // Prepare result object
+        TestExecutionResult.TestExecutionResultBuilder resultBuilder = TestExecutionResult.builder()
+                .testCase(testCase)
+                .startTime(startTime)
+                .steps(new ArrayList<>());
+        
+        try {
+            // Determine browser type from workspace config
+            String browserType = workspace.getConfig().getDefaultBrowser();
+            if (browserType == null || browserType.isEmpty()) {
+                browserType = "chromium";
+            }
+            
+            // Set up video recording path if enabled
+            Path videoPath = null;
+            if (workspace.getConfig().isRecordVideo()) {
+                videoPath = videosDir.resolve(testCase.getId() + ".webm");
+                resultBuilder.videoPath(videoPath);
+            }
+            
+            // Execute the Playwright test
+            ProcessBuilder processBuilder = new ProcessBuilder(
+                    "npx", "playwright", "test", 
+                    testScriptPath.toString(),
+                    "--browser=" + browserType,
+                    "--headed=" + !workspace.getConfig().isHeadless(),
+                    videoPath != null ? "--video=" + videoPath.toString() : ""
+            );
+            
+            // Set working directory to project root
+            processBuilder.directory(workspace.getLocation().resolve(project.getRelativePath()).toFile());
+            
+            // Redirect error stream to output stream
+            processBuilder.redirectErrorStream(true);
+            
+            // Start the process
+            Process process = processBuilder.start();
+            
+            // Read output
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    logOutput.append(line).append("\n");
+                    
+                    // Parse step results from output if they follow a specific format
+                    if (line.startsWith("[Step]")) {
+                        parseStepResult(line, resultBuilder);
+                    }
+                }
+            }
+            
+            // Wait for process to complete with timeout
+            boolean completed = process.waitFor(
+                    workspace.getConfig().getDefaultTimeout(), TimeUnit.MILLISECONDS);
+            
+            if (!completed) {
+                // Test timed out
+                process.destroyForcibly();
+                resultBuilder.status(TestExecutionResult.Status.ERROR);
+                resultBuilder.errorMessage("Test execution timed out after " + 
+                        workspace.getConfig().getDefaultTimeout() + "ms");
+            } else {
+                // Check exit code
+                int exitCode = process.exitValue();
+                if (exitCode == 0) {
+                    resultBuilder.status(TestExecutionResult.Status.PASSED);
+                } else {
+                    resultBuilder.status(TestExecutionResult.Status.FAILED);
+                    resultBuilder.errorMessage(extractErrorMessage(logOutput.toString()));
+                    resultBuilder.stackTrace(extractStackTrace(logOutput.toString()));
+                    
+                    // Take screenshot on failure if enabled
+                    if (workspace.getConfig().isScreenshotOnFailure()) {
+                        Path screenshotPath = captureFailureScreenshot(
+                                workspace, project, testCase, screenshotsDir);
+                        resultBuilder.screenshotPath(screenshotPath);
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            log.error("Error executing test case: {}", testCase.getName(), e);
+            resultBuilder.status(TestExecutionResult.Status.ERROR);
+            resultBuilder.errorMessage(e.getMessage());
+            resultBuilder.stackTrace(getStackTraceAsString(e));
+        }
+        
+        // Complete the result
+        Date endTime = new Date();
+        double durationMs = endTime.getTime() - startTime.getTime();
+        
+        // Save logs
+        Path logPath = logsDir.resolve(testCase.getId() + ".log");
+        try {
+            FileUtils.writeStringToFile(logPath.toFile(), logOutput.toString(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.error("Error saving test logs: {}", e.getMessage());
+        }
+        
+        TestExecutionResult result = resultBuilder
+                .endTime(endTime)
+                .durationMs(durationMs)
+                .logs(logOutput.toString())
+                .build();
+        
+        log.info("Test case execution completed: {} - Status: {}", 
+                testCase.getName(), result.getStatus());
+        return result;
+    }
+    
+    /**
+     * Parse a step result from log output.
+     *
+     * @param line The log line
+     * @param resultBuilder The result builder to add the step to
+     */
+    private void parseStepResult(String line, TestExecutionResult.TestExecutionResultBuilder resultBuilder) {
+        try {
+            // Example format: [Step] Login to application - PASSED (1200ms)
+            String content = line.substring("[Step]".length()).trim();
+            int statusIndex = content.lastIndexOf(" - ");
+            
+            if (statusIndex > 0) {
+                String description = content.substring(0, statusIndex);
+                String statusPart = content.substring(statusIndex + 3);
+                
+                boolean passed = statusPart.startsWith("PASSED");
+                String durationPart = statusPart.substring(statusPart.indexOf('(') + 1, 
+                        statusPart.indexOf("ms)"));
+                double duration = Double.parseDouble(durationPart);
+                
+                TestStepResult step = TestStepResult.builder()
+                        .description(description)
+                        .passed(passed)
+                        .durationMs(duration)
+                        .build();
+                
+                resultBuilder.steps(new ArrayList<>(resultBuilder.build().getSteps()));
+                resultBuilder.build().getSteps().add(step);
+            }
+        } catch (Exception e) {
+            log.warn("Error parsing step result: {}", line, e);
+        }
+    }
+    
+    /**
+     * Extract error message from log output.
+     *
+     * @param logOutput The log output
+     * @return The extracted error message
+     */
+    private String extractErrorMessage(String logOutput) {
+        // Look for "Error:" or similar patterns in the log
+        List<String> lines = Arrays.asList(logOutput.split("\n"));
+        Optional<String> errorLine = lines.stream()
+                .filter(line -> line.contains("Error:") || line.contains("Assertion failed"))
+                .findFirst();
+        
+        return errorLine.orElse("Test execution failed");
+    }
+    
+    /**
+     * Extract stack trace from log output.
+     *
+     * @param logOutput The log output
+     * @return The extracted stack trace
+     */
+    private String extractStackTrace(String logOutput) {
+        List<String> lines = Arrays.asList(logOutput.split("\n"));
+        
+        // Find the start of the stack trace
+        int startIdx = -1;
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).contains("at ") && lines.get(i).contains(".js:")) {
+                startIdx = i;
+                break;
+            }
+        }
+        
+        if (startIdx >= 0) {
+            // Find the end of the stack trace
+            int endIdx = startIdx;
+            for (int i = startIdx + 1; i < lines.size(); i++) {
+                if (lines.get(i).contains("at ") && lines.get(i).contains(".js:")) {
+                    endIdx = i;
+                } else if (endIdx > startIdx) {
+                    break;
+                }
+            }
+            
+            // Extract the stack trace
+            return lines.subList(startIdx, endIdx + 1).stream()
+                    .collect(Collectors.joining("\n"));
+        }
+        
+        return "";
+    }
+    
+    /**
+     * Capture a screenshot when a test fails.
+     *
+     * @param workspace The workspace
+     * @param project The project
+     * @param testCase The test case
+     * @param screenshotsDir Directory to save screenshots
+     * @return The path to the screenshot
+     */
+    private Path captureFailureScreenshot(
+            Workspace workspace, 
+            Project project, 
+            TestCase testCase,
+            Path screenshotsDir) {
+        Path screenshotPath = screenshotsDir.resolve(testCase.getId() + "-failure.png");
+        
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser;
+            
+            // Determine browser type from workspace config
+            String browserType = workspace.getConfig().getDefaultBrowser();
+            if (browserType == null || browserType.isEmpty() || "chromium".equalsIgnoreCase(browserType)) {
+                browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true));
+            } else if ("firefox".equalsIgnoreCase(browserType)) {
+                browser = playwright.firefox().launch(new BrowserType.LaunchOptions().setHeadless(true));
+            } else if ("webkit".equalsIgnoreCase(browserType)) {
+                browser = playwright.webkit().launch(new BrowserType.LaunchOptions().setHeadless(true));
+            } else {
+                browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true));
+            }
+            
+            try {
+                // Create a new context and page
+                BrowserContext context = browser.newContext(new Browser.NewContextOptions()
+                        .setViewportSize(
+                                workspace.getConfig().getDefaultViewportWidth(), 
+                                workspace.getConfig().getDefaultViewportHeight()));
+                
+                Page page = context.newPage();
+                
+                // Navigate to the project's base URL
+                page.navigate(project.getBaseUrl());
+                
+                // Take a screenshot
+                page.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath));
+                
+                return screenshotPath;
+            } finally {
+                browser.close();
+            }
+        } catch (Exception e) {
+            log.error("Error capturing failure screenshot: {}", e.getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Calculate execution summary from results.
+     *
+     * @param results The test execution results
+     * @return The calculated summary
+     */
+    private TestExecutionSummary calculateSummary(List<TestExecutionResult> results) {
+        int totalTests = results.size();
+        int passedTests = 0;
+        int failedTests = 0;
+        int skippedTests = 0;
+        int blockedTests = 0;
+        int errorTests = 0;
+        double totalDurationMs = 0;
+        
+        for (TestExecutionResult result : results) {
+            switch (result.getStatus()) {
+                case PASSED:
+                    passedTests++;
+                    break;
+                case FAILED:
+                    failedTests++;
+                    break;
+                case SKIPPED:
+                    skippedTests++;
+                    break;
+                case BLOCKED:
+                    blockedTests++;
+                    break;
+                case ERROR:
+                    errorTests++;
+                    break;
+            }
+            
+            totalDurationMs += result.getDurationMs();
+        }
+        
+        return TestExecutionSummary.builder()
+                .totalTests(totalTests)
+                .passedTests(passedTests)
+                .failedTests(failedTests)
+                .skippedTests(skippedTests)
+                .blockedTests(blockedTests)
+                .errorTests(errorTests)
+                .totalDurationMs(totalDurationMs)
+                .build();
+    }
+    
+    /**
+     * Save execution report to the artifacts directory.
+     *
+     * @param session The test execution session
+     * @throws IOException If there's an error saving the report
+     */
+    private void saveExecutionReport(TestExecutionSession session) throws IOException {
+        // Create report data
+        Map<String, Object> reportData = new HashMap<>();
+        reportData.put("sessionId", session.getId());
+        reportData.put("name", session.getName());
+        reportData.put("startTime", session.getStartTime());
+        reportData.put("endTime", session.getEndTime());
+        reportData.put("totalDurationMs", session.getTotalDurationMs());
+        reportData.put("summary", session.getSummary());
+        
+        List<Map<String, Object>> resultsMaps = new ArrayList<>();
+        for (TestExecutionResult result : session.getResults()) {
+            Map<String, Object> resultMap = new HashMap<>();
+            resultMap.put("testCaseId", result.getTestCase().getId());
+            resultMap.put("testCaseName", result.getTestCase().getName());
+            resultMap.put("status", result.getStatus().name());
+            resultMap.put("startTime", result.getStartTime());
+            resultMap.put("endTime", result.getEndTime());
+            resultMap.put("durationMs", result.getDurationMs());
+            resultMap.put("errorMessage", result.getErrorMessage());
+            
+            if (result.getScreenshotPath() != null) {
+                resultMap.put("screenshotPath", 
+                        session.getArtifactsDirectory().relativize(result.getScreenshotPath()).toString());
+            }
+            
+            if (result.getVideoPath() != null) {
+                resultMap.put("videoPath", 
+                        session.getArtifactsDirectory().relativize(result.getVideoPath()).toString());
+            }
+            
+            List<Map<String, Object>> stepsMaps = new ArrayList<>();
+            for (TestStepResult step : result.getSteps()) {
+                Map<String, Object> stepMap = new HashMap<>();
+                stepMap.put("description", step.getDescription());
+                stepMap.put("passed", step.isPassed());
+                stepMap.put("durationMs", step.getDurationMs());
+                stepMap.put("errorMessage", step.getErrorMessage());
+                
+                if (step.getScreenshotPath() != null) {
+                    stepMap.put("screenshotPath", 
+                            session.getArtifactsDirectory().relativize(step.getScreenshotPath()).toString());
+                }
+                
+                stepsMaps.add(stepMap);
+            }
+            
+            resultMap.put("steps", stepsMaps);
+            resultsMaps.add(resultMap);
+        }
+        
+        reportData.put("results", resultsMaps);
+        
+        // Save as JSON
+        Path reportPath = session.getArtifactsDirectory().resolve("report.json");
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        mapper.writeValue(reportPath.toFile(), reportData);
+        
+        // Save HTML report for better visualization
+        generateHtmlReport(session, reportData);
+    }
+    
+    /**
+     * Generate HTML report for better visualization.
+     *
+     * @param session The test execution session
+     * @param reportData The report data
+     * @throws IOException If there's an error generating the report
+     */
+    private void generateHtmlReport(TestExecutionSession session, Map<String, Object> reportData) 
+            throws IOException {
+        // Read HTML template
+        String template = loadReportTemplate();
+        
+        // Replace placeholders with actual data
+        TestExecutionSummary summary = session.getSummary();
+        String report = template
+                .replace("{{SESSION_NAME}}", session.getName())
+                .replace("{{START_TIME}}", formatDate(session.getStartTime()))
+                .replace("{{END_TIME}}", formatDate(session.getEndTime()))
+                .replace("{{DURATION}}", formatDuration(session.getTotalDurationMs()))
+                .replace("{{TOTAL_TESTS}}", String.valueOf(summary.getTotalTests()))
+                .replace("{{PASSED_TESTS}}", String.valueOf(summary.getPassedTests()))
+                .replace("{{FAILED_TESTS}}", String.valueOf(summary.getFailedTests()))
+                .replace("{{SKIPPED_TESTS}}", String.valueOf(summary.getSkippedTests()))
+                .replace("{{SUCCESS_RATE}}", String.format("%.1f%%", summary.getSuccessRate()))
+                .replace("{{REPORT_DATA_JSON}}", new com.fasterxml.jackson.databind.ObjectMapper()
+                        .writeValueAsString(reportData));
+        
+        // Save HTML report
+        Path reportPath = session.getArtifactsDirectory().resolve("report.html");
+        FileUtils.writeStringToFile(reportPath.toFile(), report, StandardCharsets.UTF_8);
+    }
+    
+    /**
+     * Load HTML report template.
+     *
+     * @return The template content
+     */
+    private String loadReportTemplate() {
+        // In a real implementation, this would load from a file or resource
+        // For this example, we'll return a simple HTML template
+        return "<!DOCTYPE html>\n" +
+                "<html>\n" +
+                "<head>\n" +
+                "    <title>Test Execution Report</title>\n" +
+                "    <style>\n" +
+                "        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }\n" +
+                "        .header { background-color: #4a6ee0; color: white; padding: 20px; margin-bottom: 20px; }\n" +
+                "        .summary { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 20px; }\n" +
+                "        .summary-card { background-color: #f5f5f5; padding: 15px; border-radius: 5px; flex: 1; min-width: 150px; }\n" +
+                "        .summary-card h3 { margin-top: 0; }\n" +
+                "        .test-list { margin-bottom: 20px; }\n" +
+                "        .test-item { border: 1px solid #ddd; margin-bottom: 10px; border-radius: 5px; overflow: hidden; }\n" +
+                "        .test-header { padding: 10px; display: flex; justify-content: space-between; align-items: center; background-color: #f5f5f5; cursor: pointer; }\n" +
+                "        .test-content { padding: 15px; display: none; }\n" +
+                "        .passed { border-left: 5px solid #28a745; }\n" +
+                "        .failed { border-left: 5px solid #dc3545; }\n" +
+                "        .skipped { border-left: 5px solid #ffc107; }\n" +
+                "        .error { border-left: 5px solid #6c757d; }\n" +
+                "        .step-list { margin-top: 15px; }\n" +
+                "        .step-item { padding: 8px; border-left: 3px solid #ddd; margin-bottom: 5px; }\n" +
+                "        .step-passed { border-left-color: #28a745; }\n" +
+                "        .step-failed { border-left-color: #dc3545; }\n" +
+                "        .error-message { background-color: #f8d7da; color: #721c24; padding: 10px; border-radius: 3px; margin-top: 10px; }\n" +
+                "        .status-badge { padding: 3px 8px; border-radius: 3px; font-size: 12px; }\n" +
+                "        .status-passed { background-color: #d4edda; color: #155724; }\n" +
+                "        .status-failed { background-color: #f8d7da; color: #721c24; }\n" +
+                "        .status-skipped { background-color: #fff3cd; color: #856404; }\n" +
+                "        .status-error { background-color: #e2e3e5; color: #383d41; }\n" +
+                "    </style>\n" +
+                "</head>\n" +
+                "<body>\n" +
+                "    <div class=\"header\">\n" +
+                "        <h1>Test Execution Report</h1>\n" +
+                "        <h2>{{SESSION_NAME}}</h2>\n" +
+                "        <div>Start: {{START_TIME}} | End: {{END_TIME}} | Duration: {{DURATION}}</div>\n" +
+                "    </div>\n" +
+                "    \n" +
+                "    <div class=\"summary\">\n" +
+                "        <div class=\"summary-card\">\n" +
+                "            <h3>Total Tests</h3>\n" +
+                "            <div class=\"summary-value\">{{TOTAL_TESTS}}</div>\n" +
+                "        </div>\n" +
+                "        <div class=\"summary-card\">\n" +
+                "            <h3>Passed</h3>\n" +
+                "            <div class=\"summary-value\">{{PASSED_TESTS}}</div>\n" +
+                "        </div>\n" +
+                "        <div class=\"summary-card\">\n" +
+                "            <h3>Failed</h3>\n" +
+                "            <div class=\"summary-value\">{{FAILED_TESTS}}</div>\n" +
+                "        </div>\n" +
+                "        <div class=\"summary-card\">\n" +
+                "            <h3>Skipped</h3>\n" +
+                "            <div class=\"summary-value\">{{SKIPPED_TESTS}}</div>\n" +
+                "        </div>\n" +
+                "        <div class=\"summary-card\">\n" +
+                "            <h3>Success Rate</h3>\n" +
+                "            <div class=\"summary-value\">{{SUCCESS_RATE}}</div>\n" +
+                "        </div>\n" +
+                "    </div>\n" +
+                "    \n" +
+                "    <h2>Test Results</h2>\n" +
+                "    <div id=\"test-list\" class=\"test-list\"></div>\n" +
+                "    \n" +
+                "    <script>\n" +
+                "        const reportData = {{REPORT_DATA_JSON}};\n" +
+                "        \n" +
+                "        function renderTests() {\n" +
+                "            const testList = document.getElementById('test-list');\n" +
+                "            reportData.results.forEach(result => {\n" +
+                "                const testItem = document.createElement('div');\n" +
+                "                testItem.className = `test-item ${result.status.toLowerCase()}`;\n" +
+                "                \n" +
+                "                const testHeader = document.createElement('div');\n" +
+                "                testHeader.className = 'test-header';\n" +
+                "                testHeader.innerHTML = `\n" +
+                "                    <div>\n" +
+                "                        <strong>${result.testCaseName}</strong>\n" +
+                "                    </div>\n" +
+                "                    <div>\n" +
+                "                        <span class=\"status-badge status-${result.status.toLowerCase()}\">${result.status}</span>\n" +
+                "                        <span>${formatDuration(result.durationMs)}</span>\n" +
+                "                    </div>\n" +
+                "                `;\n" +
+                "                testHeader.addEventListener('click', () => {\n" +
+                "                    const content = testItem.querySelector('.test-content');\n" +
+                "                    content.style.display = content.style.display === 'block' ? 'none' : 'block';\n" +
+                "                });\n" +
+                "                \n" +
+                "                const testContent = document.createElement('div');\n" +
+                "                testContent.className = 'test-content';\n" +
+                "                \n" +
+                "                let contentHtml = `\n" +
+                "                    <div><strong>Start:</strong> ${formatDate(result.startTime)}</div>\n" +
+                "                    <div><strong>End:</strong> ${formatDate(result.endTime)}</div>\n" +
+                "                    <div><strong>Duration:</strong> ${formatDuration(result.durationMs)}</div>\n" +
+                "                `;\n" +
+                "                \n" +
+                "                if (result.errorMessage) {\n" +
+                "                    contentHtml += `<div class=\"error-message\">${result.errorMessage}</div>`;\n" +
+                "                }\n" +
+                "                \n" +
+                "                if (result.screenshotPath) {\n" +
+                "                    contentHtml += `<div><strong>Screenshot:</strong> <a href=\"${result.screenshotPath}\" target=\"_blank\">View</a></div>`;\n" +
+                "                }\n" +
+                "                \n" +
+                "                if (result.videoPath) {\n" +
+                "                    contentHtml += `<div><strong>Video:</strong> <a href=\"${result.videoPath}\" target=\"_blank\">View</a></div>`;\n" +
+                "                }\n" +
+                "                \n" +
+                "                if (result.steps && result.steps.length > 0) {\n" +
+                "                    contentHtml += `<h4>Steps</h4><div class=\"step-list\">`;\n" +
+                "                    \n" +
+                "                    result.steps.forEach(step => {\n" +
+                "                        const stepClass = step.passed ? 'step-passed' : 'step-failed';\n" +
+                "                        contentHtml += `<div class=\"step-item ${stepClass}\">`;\n" +
+                "                        contentHtml += `<div>${step.description} - ${formatDuration(step.durationMs)}</div>`;\n" +
+                "                        \n" +
+                "                        if (step.errorMessage) {\n" +
+                "                            contentHtml += `<div class=\"error-message\">${step.errorMessage}</div>`;\n" +
+                "                        }\n" +
+                "                        \n" +
+                "                        if (step.screenshotPath) {\n" +
+                "                            contentHtml += `<div><a href=\"${step.screenshotPath}\" target=\"_blank\">View Screenshot</a></div>`;\n" +
+                "                        }\n" +
+                "                        \n" +
+                "                        contentHtml += `</div>`;\n" +
+                "                    });\n" +
+                "                    \n" +
+                "                    contentHtml += `</div>`;\n" +
+                "                }\n" +
+                "                \n" +
+                "                testContent.innerHTML = contentHtml;\n" +
+                "                \n" +
+                "                testItem.appendChild(testHeader);\n" +
+                "                testItem.appendChild(testContent);\n" +
+                "                testList.appendChild(testItem);\n" +
+                "            });\n" +
+                "        }\n" +
+                "        \n" +
+                "        function formatDate(dateString) {\n" +
+                "            const date = new Date(dateString);\n" +
+                "            return date.toLocaleString();\n" +
+                "        }\n" +
+                "        \n" +
+                "        function formatDuration(ms) {\n" +
+                "            if (ms < 1000) return ms + ' ms';\n" +
+                "            return (ms / 1000).toFixed(2) + ' s';\n" +
+                "        }\n" +
+                "        \n" +
+                "        document.addEventListener('DOMContentLoaded', renderTests);\n" +
+                "    </script>\n" +
+                "</body>\n" +
+                "</html>";
+    }
+    
+    /**
+     * Format a date for display.
+     *
+     * @param date The date to format
+     * @return The formatted date string
+     */
+    private String formatDate(Date date) {
+        return date.toInstant()
+                .atZone(ZoneId.systemDefault())
+                .toLocalDateTime()
+                .toString()
+                .replace("T", " ");
+    }
+    
+    /**
+     * Format duration for display.
+     *
+     * @param durationMs Duration in milliseconds
+     * @return The formatted duration string
+     */
+    private String formatDuration(double durationMs) {
+        if (durationMs < 1000) {
+            return String.format("%.0f ms", durationMs);
+        } else {
+            return String.format("%.2f s", durationMs / 1000);
+        }
+    }
+    
+    /**
+     * Convert exception stack trace to string.
+     *
+     * @param e The exception
+     * @return The stack trace as string
+     */
+    private String getStackTraceAsString(Exception e) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(e.toString()).append("\n");
+        
+        for (StackTraceElement element : e.getStackTrace()) {
+            sb.append("\tat ").append(element.toString()).append("\n");
+        }
+        
+        return sb.toString();
+    }
+}
+
+
+package com.ctgp.controller;
+
+import com.ctgp.model.execution.TestExecutionSession;
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.model.workspace.Workspace;
+import com.ctgp.service.execution.TestExecutionService;
+import com.ctgp.service.integration.AzureDevOpsIntegrationService;
+import com.ctgp.service.workspace.WorkspaceService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.io.IOException;
+
+/**
+ * Controller for test execution operations.
+ */
+@RestController
+@RequestMapping("/api/execution")
+@RequiredArgsConstructor
+@Slf4j
+public class ExecutionController {
+
+    private final TestExecutionService testExecutionService;
+    private final WorkspaceService workspaceService;
+    private final AzureDevOpsIntegrationService azureDevOpsIntegrationService;
+
+    /**
+     * Execute a test suite.
+     *
+     * @param workspaceId The workspace ID
+     * @param projectId The project ID
+     * @param testSuiteId The test suite ID
+     * @param uploadToAzureDevOps Whether to upload results to Azure DevOps
+     * @return The test execution session result
+     */
+    @PostMapping("/run/{workspaceId}/{projectId}/{testSuiteId}")
+    public ResponseEntity<TestExecutionSession> executeTestSuite(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @PathVariable String testSuiteId,
+            @RequestParam(defaultValue = "false") boolean uploadToAzureDevOps) {
+        
+        try {
+            // Load workspace
+            Workspace workspace = workspaceService.loadWorkspace(workspaceId);
+            
+            // Find project
+            Project project = workspace.getProjects().stream()
+                    .filter(p -> p.getId().equals(projectId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Project not found: " + projectId));
+            
+            // Find test suite
+            TestSuite testSuite = project.getTestSuites().stream()
+                    .filter(ts -> ts.getId().equals(testSuiteId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Test suite not found: " + testSuiteId));
+            
+            // Execute test suite
+            TestExecutionSession session = testExecutionService.executeTestSuite(workspace, project, testSuite);
+            
+            // Upload results to Azure DevOps if requested
+            if (uploadToAzureDevOps && project.getAzureDevOpsConfig() != null) {
+                try {
+                    String testRunId = azureDevOpsIntegrationService.uploadTestResults(
+                            project.getAzureDevOpsConfig(), 
+                            testSuite, 
+                            session.getResults(), 
+                            session.getArtifactsDirectory());
+                    log.info("Uploaded test results to Azure DevOps. Test Run ID: {}", testRunId);
+                } catch (Exception e) {
+                    log.error("Error uploading test results to Azure DevOps", e);
+                }
+            }
+            
+            return ResponseEntity.ok(session);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Workspace, project, or test suite not found: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Error executing test suite: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get test execution session details.
+     *
+     * @param workspaceId The workspace ID
+     * @param projectId The project ID
+     * @param sessionId The session ID
+     * @return The test execution session
+     */
+    @GetMapping("/sessions/{workspaceId}/{projectId}/{sessionId}")
+    public ResponseEntity<TestExecutionSession> getExecutionSession(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @PathVariable String sessionId) {
+        
+        try {
+            // Load workspace
+            Workspace workspace = workspaceService.loadWorkspace(workspaceId);
+            
+            // Find project
+            Project project = workspace.getProjects().stream()
+                    .filter(p -> p.getId().equals(projectId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Project not found: " + projectId));
+            
+            // Load session data
+            // In a real implementation, this would load the session from the file system
+            // For now, we'll just return a placeholder
+            return ResponseEntity.ok().build();
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Workspace or project not found: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Error retrieving execution session: " + e.getMessage(), e);
+        }
+    }
+}
+
+
+// src/services/workspaceService.ts
+import { Workspace, Project } from '../types/workspace';
+import api from './api';
+
+/**
+ * Service for workspace-related API calls
+ */
+const workspaceService = {
+  /**
+   * Get a list of all workspaces
+   */
+  async listWorkspaces(): Promise<Workspace[]> {
+    const response = await api.get('/api/workspaces');
+    return response.data;
+  },
+
+  /**
+   * Get a workspace by ID
+   * @param id Workspace ID
+   */
+  async getWorkspace(id: string): Promise<Workspace> {
+    const response = await api.get(`/api/workspaces/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Create a new workspace
+   * @param name Workspace name
+   * @param description Workspace description
+   */
+  async createWorkspace(name: string, description: string): Promise<Workspace> {
+    const response = await api.post('/api/workspaces', { name, description });
+    return response.data;
+  },
+
+  /**
+   * Delete a workspace
+   * @param id Workspace ID
+   */
+  async deleteWorkspace(id: string): Promise<void> {
+    await api.delete(`/api/workspaces/${id}`);
+  },
+
+  /**
+   * Create a new project in a workspace
+   * @param workspaceId Workspace ID
+   * @param name Project name
+   * @param description Project description
+   * @param baseUrl Base URL of the application under test
+   */
+  async createProject(
+    workspaceId: string,
+    name: string,
+    description: string,
+    baseUrl: string
+  ): Promise<Project> {
+
+    const response = await api.post(`/api/workspaces/${workspaceId}/projects`, {
+      name,
+      description,
+      baseUrl
+    });
+    return response.data;
+  }
+};
+
+export default workspaceService;
+
+
+// src/pages/reporting/ReportingDashboard.tsx
+import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
+import { 
+  FaSpinner, 
+  FaChartBar, 
+  FaCheck, 
+  FaTimes, 
+  FaChartLine, 
+  FaCalendarAlt, 
+  FaClock, 
+  FaExclamationTriangle 
+} from 'react-icons/fa';
+import { TestExecutionSession, TestExecutionSummary } from '../../types/execution';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import executionService from '../../services/executionService';
+
+interface ExecutionTrend {
+  date: string;
+  passed: number;
+  failed: number;
+  skipped: number;
+  success_rate: number;
+}
+
+const ReportingDashboard: React.FC = () => {
+  const { workspaceId, projectId } = useParams<{ workspaceId: string; projectId: string }>();
+  
+  const [loading, setLoading] = useState<boolean>(true);
+  const [recentExecutions, setRecentExecutions] = useState<TestExecutionSession[]>([]);
+  const [executionTrends, setExecutionTrends] = useState<ExecutionTrend[]>([]);
+  const [testDurationTrends, setTestDurationTrends] = useState<any[]>([]);
+  const [topFailingTests, setTopFailingTests] = useState<any[]>([]);
+  
+  // Fetch execution data
+  useEffect(() => {
+    if (!workspaceId || !projectId) return;
+    
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        // Fetch recent executions
+        const executionsData = await executionService.getRecentExecutions(workspaceId, projectId);
+        setRecentExecutions(executionsData);
+        
+        // Generate trend data from the executions
+        generateTrendData(executionsData);
+        
+        // Generate top failing tests
+        generateTopFailingTests(executionsData);
+      } catch (error) {
+        console.error('Error fetching execution data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, [workspaceId, projectId]);
+  
+  // Generate trend data from executions
+  const generateTrendData = (executions: TestExecutionSession[]) => {
+    // Sort by date
+    const sortedExecutions = [...executions].sort((a, b) => 
+      new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+    );
+    
+    // Create execution trends
+    const trends: ExecutionTrend[] = sortedExecutions.map(session => {
+      const date = new Date(session.startTime).toLocaleDateString();
+      return {
+        date,
+        passed: session.summary.passedTests,
+        failed: session.summary.failedTests,
+        skipped: session.summary.skippedTests + session.summary.blockedTests,
+        success_rate: session.summary.getSuccessRate()
+      };
+    });
+    
+    // Create duration trends
+    const durationTrends = sortedExecutions.map(session => {
+      return {
+        date: new Date(session.startTime).toLocaleDateString(),
+        duration: session.totalDurationMs / 1000 // Convert to seconds
+      };
+    });
+    
+    setExecutionTrends(trends);
+    setTestDurationTrends(durationTrends);
+  };
+  
+  // Generate top failing tests
+  const generateTopFailingTests = (executions: TestExecutionSession[]) => {
+    // Count failures for each test
+    const failureCounts = new Map<string, { name: string; failures: number }>();
+    
+    executions.forEach(session => {
+      session.results.forEach(result => {
+        if (result.status === 'FAILED') {
+          const testId = result.testCase.id;
+          const testName = result.testCase.name;
+          
+          if (failureCounts.has(testId)) {
+            failureCounts.get(testId)!.failures += 1;
+          } else {
+            failureCounts.set(testId, { name: testName, failures: 1 });
+          }
+        }
+      });
+    });
+    
+    // Convert to array and sort by failure count
+    const failingTests = Array.from(failureCounts.entries())
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.failures - a.failures)
+      .slice(0, 5); // Get top 5
+    
+    setTopFailingTests(failingTests);
+  };
+  
+  // Calculate overall success rate from recent executions
+  const calculateOverallSuccessRate = (): number => {
+    if (recentExecutions.length === 0) return 0;
+    
+    let totalTests = 0;
+    let totalPassed = 0;
+    
+    recentExecutions.forEach(session => {
+      totalTests += session.summary.totalTests;
+      totalPassed += session.summary.passedTests;
+    });
+    
+    return totalTests > 0 ? (totalPassed / totalTests) * 100 : 0;
+  };
+  
+  // Get the latest execution summary
+  const getLatestExecutionSummary = (): TestExecutionSummary | null => {
+    if (recentExecutions.length === 0) return null;
+    
+    // Sort by date (newest first)
+    const sortedExecutions = [...recentExecutions].sort((a, b) => 
+      new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+    );
+    
+    return sortedExecutions[0].summary;
+  };
+  
+  // Format duration from milliseconds
+  const formatDuration = (ms: number): string => {
+    if (ms < 1000) return `${ms.toFixed(0)} ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(2)} s`;
+    
+    const minutes = Math.floor(ms / 60000);
+    const seconds = ((ms % 60000) / 1000).toFixed(2);
+    return `${minutes} min ${seconds} s`;
+  };
+  
+  const latestSummary = getLatestExecutionSummary();
+  const overallSuccessRate = calculateOverallSuccessRate();
+  
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading reporting data...</p>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="reporting-dashboard">
+      <div className="page-header">
+        <h1>Test Execution Reports</h1>
+      </div>
+      
+      <div className="dashboard-grid">
+        {/* Summary Cards */}
+        <div className="summary-cards">
+          <div className="summary-card">
+            <div className="card-icon success-rate-icon">
+              <FaChartBar />
+            </div>
+            <div className="card-content">
+              <h3>Overall Success Rate</h3>
+              <div className="card-value">{overallSuccessRate.toFixed(1)}%</div>
+            </div>
+          </div>
+          
+          {latestSummary && (
+            <>
+              <div className="summary-card">
+                <div className="card-icon passed-icon">
+                  <FaCheck />
+                </div>
+                <div className="card-content">
+                  <h3>Latest Passed</h3>
+                  <div className="card-value">{latestSummary.passedTests}</div>
+                </div>
+              </div>
+              
+              <div className="summary-card">
+                <div className="card-icon failed-icon">
+                  <FaTimes />
+                </div>
+                <div className="card-content">
+                  <h3>Latest Failed</h3>
+                  <div className="card-value">{latestSummary.failedTests}</div>
+                </div>
+              </div>
+              
+              <div className="summary-card">
+                <div className="card-icon duration-icon">
+                  <FaClock />
+                </div>
+                <div className="card-content">
+                  <h3>Average Duration</h3>
+                  <div className="card-value">{formatDuration(latestSummary.totalDurationMs / latestSummary.totalTests)}</div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        
+        {/* Success Rate Trend Chart */}
+        <div className="chart-container">
+          <h2>Success Rate Trend</h2>
+          {executionTrends.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={executionTrends}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis domain={[0, 100]} />
+                <Tooltip formatter={(value) => [`${value}%`, 'Success Rate']} />
+                <Legend />
+                <Line 
+                  type="monotone" 
+                  dataKey="success_rate" 
+                  name="Success Rate (%)" 
+                  stroke="#8884d8" 
+                  activeDot={{ r: 8 }} 
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="no-data-message">
+              <p>No trend data available yet</p>
+            </div>
+          )}
+        </div>
+        
+        {/* Test Results Breakdown Chart */}
+        <div className="chart-container">
+          <h2>Test Results Breakdown</h2>
+          {executionTrends.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={executionTrends}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="passed" name="Passed" stackId="a" fill="#28a745" />
+                <Bar dataKey="failed" name="Failed" stackId="a" fill="#dc3545" />
+                <Bar dataKey="skipped" name="Skipped" stackId="a" fill="#ffc107" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="no-data-message">
+              <p>No result data available yet</p>
+            </div>
+          )}
+        </div>
+        
+        {/* Duration Trend Chart */}
+        <div className="chart-container">
+          <h2>Execution Duration Trend</h2>
+          {testDurationTrends.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={testDurationTrends}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis />
+                <Tooltip formatter={(value) => [`${value.toFixed(2)} s`, 'Duration']} />
+                <Legend />
+                <Line 
+                  type="monotone" 
+                  dataKey="duration" 
+                  name="Duration (seconds)" 
+                  stroke="#17a2b8" 
+                  activeDot={{ r: 8 }} 
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="no-data-message">
+              <p>No duration data available yet</p>
+            </div>
+          )}
+        </div>
+        
+        {/* Top Failing Tests */}
+        <div className="top-failing-tests">
+          <h2>Top Failing Tests</h2>
+          {topFailingTests.length > 0 ? (
+            <div className="failing-tests-list">
+              {topFailingTests.map(test => (
+                <div key={test.id} className="failing-test-item">
+                  <div className="test-failure-count">{test.failures}</div>
+                  <div className="test-name">{test.name}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="no-data-message">
+              <p>No failing tests data available</p>
+            </div>
+          )}
+        </div>
+        
+        {/* Recent Executions */}
+        <div className="recent-executions">
+          <h2>Recent Test Executions</h2>
+          {recentExecutions.length > 0 ? (
+            <div className="executions-list">
+              {recentExecutions.slice(0, 5).map(session => (
+                <div key={session.id} className="execution-item">
+                  <div className="execution-icon">
+                    {session.summary.failedTests > 0 ? (
+                      <FaExclamationTriangle className="failed-icon" />
+                    ) : (
+                      <FaCheck className="passed-icon" />
+                    )}
+                  </div>
+                  <div className="execution-details">
+                    <div className="execution-name">{session.name}</div>
+                    <div className="execution-time">
+                      {new Date(session.startTime).toLocaleString()}
+                    </div>
+                    <div className="execution-stats">
+                      <span className="passed">{session.summary.passedTests} passed</span>
+                      <span className="failed">{session.summary.failedTests} failed</span>
+                      <span className="duration">{formatDuration(session.totalDurationMs)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="no-data-message">
+              <p>No recent executions available</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ReportingDashboard;
+
+
+// src/services/executionService.ts
+import { TestExecutionSession, TestExecutionResult } from '../types/execution';
+import api from './api';
+
+/**
+ * Service for test execution-related API calls
+ */
+const executionService = {
+  /**
+   * Execute a test suite
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param testSuiteId Test suite ID
+   * @param uploadToAzureDevOps Whether to upload results to Azure DevOps
+   */
+  async executeTestSuite(
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    uploadToAzureDevOps: boolean = false
+  ): Promise<TestExecutionSession> {
+    const response = await api.post(
+      `/api/execution/run/${workspaceId}/${projectId}/${testSuiteId}`,
+      null,
+      { params: { uploadToAzureDevOps } }
+    );
+    return response.data;
+  },
+
+  /**
+   * Get details of a test execution session
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param sessionId Session ID
+   */
+  async getExecutionSession(
+    workspaceId: string,
+    projectId: string,
+    sessionId: string
+  ): Promise<TestExecutionSession> {
+    const response = await api.get(
+      `/api/execution/sessions/${workspaceId}/${projectId}/${sessionId}`
+    );
+    return response.data;
+  },
+
+  /**
+   * Get recent test executions for a project
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param limit Maximum number of executions to return
+   */
+  async getRecentExecutions(
+    workspaceId: string,
+    projectId: string,
+    limit: number = 10
+  ): Promise<TestExecutionSession[]> {
+    const response = await api.get(
+      `/api/execution/recent/${workspaceId}/${projectId}`,
+      { params: { limit } }
+    );
+    return response.data;
+  },
+
+  /**
+   * Get test execution report as HTML
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param sessionId Session ID
+   */
+  async getExecutionReport(
+    workspaceId: string,
+    projectId: string,
+    sessionId: string
+  ): Promise<string> {
+    const response = await api.get(
+      `/api/execution/report/${workspaceId}/${projectId}/${sessionId}`,
+      { responseType: 'text' }
+    );
+    return response.data;
+  },
+
+  /**
+   * Get execution trends for a project
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param days Number of days to include in trends
+   */
+  async getExecutionTrends(
+    workspaceId: string,
+    projectId: string,
+    days: number = 30
+  ): Promise<any> {
+    const response = await api.get(
+      `/api/execution/trends/${workspaceId}/${projectId}`,
+      { params: { days } }
+    );
+    return response.data;
+  }
+};
+
+export default executionService;
+
+
+// src/types/execution.ts
+import { TestCase } from './workspace';
+
+/**
+ * Possible test execution statuses
+ */
+export enum TestStatus {
+  PASSED = 'PASSED',
+  FAILED = 'FAILED',
+  SKIPPED = 'SKIPPED',
+  BLOCKED = 'BLOCKED',
+  ERROR = 'ERROR'
+}
+
+/**
+ * Test step result
+ */
+export interface TestStepResult {
+  description: string;
+  passed: boolean;
+  durationMs: number;
+  errorMessage?: string;
+  screenshotPath?: string;
+}
+
+/**
+ * Test execution result
+ */
+export interface TestExecutionResult {
+  testCase: TestCase;
+  status: TestStatus;
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+  errorMessage?: string;
+  stackTrace?: string;
+  screenshotPath?: string;
+  videoPath?: string;
+  logs?: string;
+  metadata?: Record<string, any>;
+  steps: TestStepResult[];
+}
+
+/**
+ * Test execution summary
+ */
+export interface TestExecutionSummary {
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  skippedTests: number;
+  blockedTests: number;
+  errorTests: number;
+  totalDurationMs: number;
+  getSuccessRate: () => number;
+}
+
+/**
+ * Test execution session
+ */
+export interface TestExecutionSession {
+  id: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+  totalDurationMs: number;
+  results: TestExecutionResult[];
+  artifactsDirectory: string;
+  summary: TestExecutionSummary;
+}
+
+/**
+ * Test execution trend data point
+ */
+export interface ExecutionTrendData {
+  date: string;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  skippedTests: number;
+  successRate: number;
+  avgDurationMs: number;
+}
+
+
+package com.ctgp.controller;
+
+import com.ctgp.model.execution.TestExecutionSession;
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.model.workspace.Workspace;
+import com.ctgp.service.execution.TestExecutionService;
+import com.ctgp.service.integration.AzureDevOpsIntegrationService;
+import com.ctgp.service.workspace.WorkspaceService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.io.IOException;
+
+/**
+ * Controller for test execution operations.
+ */
+@RestController
+@RequestMapping("/api/execution")
+@RequiredArgsConstructor
+@Slf4j
+public class ExecutionController {
+
+    private final TestExecutionService testExecutionService;
+    private final WorkspaceService workspaceService;
+    private final AzureDevOpsIntegrationService azureDevOpsIntegrationService;
+
+    /**
+     * Execute a test suite.
+     *
+     * @param workspaceId The workspace ID
+     * @param projectId The project ID
+     * @param testSuiteId The test suite ID
+     * @param uploadToAzureDevOps Whether to upload results to Azure DevOps
+     * @return The test execution session result
+     */
+    @PostMapping("/run/{workspaceId}/{projectId}/{testSuiteId}")
+    public ResponseEntity<TestExecutionSession> executeTestSuite(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @PathVariable String testSuiteId,
+            @RequestParam(defaultValue = "false") boolean uploadToAzureDevOps) {
+        
+        try {
+            // Load workspace
+            Workspace workspace = workspaceService.loadWorkspace(workspaceId);
+            
+            // Find project
+            Project project = workspace.getProjects().stream()
+                    .filter(p -> p.getId().equals(projectId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Project not found: " + projectId));
+            
+            // Find test suite
+            TestSuite testSuite = project.getTestSuites().stream()
+                    .filter(ts -> ts.getId().equals(testSuiteId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Test suite not found: " + testSuiteId));
+            
+            // Execute test suite
+            TestExecutionSession session = testExecutionService.executeTestSuite(workspace, project, testSuite);
+            
+            // Upload results to Azure DevOps if requested
+            if (uploadToAzureDevOps && project.getAzureDevOpsConfig() != null) {
+                try {
+                    String testRunId = azureDevOpsIntegrationService.uploadTestResults(
+                            project.getAzureDevOpsConfig(), 
+                            testSuite, 
+                            session.getResults(), 
+                            session.getArtifactsDirectory());
+                    log.info("Uploaded test results to Azure DevOps. Test Run ID: {}", testRunId);
+                } catch (Exception e) {
+                    log.error("Error uploading test results to Azure DevOps", e);
+                }
+            }
+            
+            return ResponseEntity.ok(session);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Workspace, project, or test suite not found: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Error executing test suite: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get recent test execution sessions.
+     *
+     * @param workspaceId The workspace ID
+     * @param projectId The project ID
+     * @param limit Maximum number of sessions to return
+     * @return The test execution sessions
+     */
+    @GetMapping("/recent/{workspaceId}/{projectId}")
+    public ResponseEntity<List<TestExecutionSession>> getRecentExecutions(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @RequestParam(defaultValue = "10") int limit) {
+        
+        try {
+            // Load workspace
+            Workspace workspace = workspaceService.loadWorkspace(workspaceId);
+            
+            // Find project
+            Project project = workspace.getProjects().stream()
+                    .filter(p -> p.getId().equals(projectId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Project not found: " + projectId));
+            
+            // Get the test results directory
+            Path testResultsDir = workspace.getLocation()
+                    .resolve(project.getRelativePath())
+                    .resolve("test-results");
+            
+            if (!Files.exists(testResultsDir)) {
+                return ResponseEntity.ok(Collections.emptyList());
+            }
+            
+            // Find all session directories
+            List<Path> sessionDirs = Files.list(testResultsDir)
+                    .filter(Files::isDirectory)
+                    .collect(Collectors.toList());
+            
+            // Load sessions
+            List<TestExecutionSession> sessions = new ArrayList<>();
+            for (Path sessionDir : sessionDirs) {
+                Path reportPath = sessionDir.resolve("report.json");
+                if (Files.exists(reportPath)) {
+                    try {
+                        // Read the report file
+                        String reportJson = Files.readString(reportPath);
+                        ObjectMapper mapper = new ObjectMapper();
+                        JsonNode reportNode = mapper.readTree(reportJson);
+                        
+                        // Create a TestExecutionSession from the report data
+                        TestExecutionSession session = TestExecutionSession.builder()
+                                .id(reportNode.get("sessionId").asText())
+                                .name(reportNode.get("name").asText())
+                                .startTime(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS")
+                                        .parse(reportNode.get("startTime").asText()))
+                                .endTime(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS")
+                                        .parse(reportNode.get("endTime").asText()))
+                                .totalDurationMs(reportNode.get("totalDurationMs").asDouble())
+                                .artifactsDirectory(sessionDir)
+                                .build();
+                        
+                        // Load summary
+                        JsonNode summaryNode = reportNode.get("summary");
+                        TestExecutionSummary summary = TestExecutionSummary.builder()
+                                .totalTests(summaryNode.get("totalTests").asInt())
+                                .passedTests(summaryNode.get("passedTests").asInt())
+                                .failedTests(summaryNode.get("failedTests").asInt())
+                                .skippedTests(summaryNode.get("skippedTests").asInt())
+                                .blockedTests(summaryNode.get("blockedTests").asInt())
+                                .errorTests(summaryNode.get("errorTests").asInt())
+                                .totalDurationMs(summaryNode.get("totalDurationMs").asDouble())
+                                .build();
+                        session.setSummary(summary);
+                        
+                        // Load results (simplified for response size)
+                        List<TestExecutionResult> results = new ArrayList<>();
+                        JsonNode resultsNode = reportNode.get("results");
+                        for (JsonNode resultNode : resultsNode) {
+                            String testCaseId = resultNode.get("testCaseId").asText();
+                            String testCaseName = resultNode.get("testCaseName").asText();
+                            
+                            // Find the test case
+                            TestCase testCase = findTestCase(project, testCaseId);
+                            if (testCase == null) {
+                                // Create a stub test case if not found
+                                testCase = TestCase.builder()
+                                        .id(testCaseId)
+                                        .name(testCaseName)
+                                        .build();
+                            }
+                            
+                            TestExecutionResult result = TestExecutionResult.builder()
+                                    .testCase(testCase)
+                                    .status(TestExecutionResult.Status.valueOf(resultNode.get("status").asText()))
+                                    .startTime(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS")
+                                            .parse(resultNode.get("startTime").asText()))
+                                    .endTime(new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS")
+                                            .parse(resultNode.get("endTime").asText()))
+                                    .durationMs(resultNode.get("durationMs").asDouble())
+                                    .errorMessage(resultNode.has("errorMessage") ? 
+                                            resultNode.get("errorMessage").asText() : null)
+                                    .build();
+                            
+                            results.add(result);
+                        }
+                        
+                        session.setResults(results);
+                        sessions.add(session);
+                    } catch (Exception e) {
+                        log.error("Error loading execution session: {}", reportPath, e);
+                    }
+                }
+            }
+            
+            // Sort by date (newest first) and limit the results
+            sessions.sort((a, b) -> b.getStartTime().compareTo(a.getStartTime()));
+            if (sessions.size() > limit) {
+                sessions = sessions.subList(0, limit);
+            }
+            
+            return ResponseEntity.ok(sessions);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Workspace or project not found: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Error retrieving recent executions: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get execution trends for a project.
+     *
+     * @param workspaceId The workspace ID
+     * @param projectId The project ID
+     * @param days Number of days to include in trends
+     * @return The execution trends
+     */
+    @GetMapping("/trends/{workspaceId}/{projectId}")
+    public ResponseEntity<List<Map<String, Object>>> getExecutionTrends(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @RequestParam(defaultValue = "30") int days) {
+        
+        try {
+            // Get recent executions
+            ResponseEntity<List<TestExecutionSession>> sessionsResponse = 
+                    getRecentExecutions(workspaceId, projectId, 100); // Get a large sample
+            
+            List<TestExecutionSession> sessions = sessionsResponse.getBody();
+            if (sessions == null || sessions.isEmpty()) {
+                return ResponseEntity.ok(Collections.emptyList());
+            }
+            
+            // Calculate date threshold
+            Calendar calendar = Calendar.getInstance();
+            calendar.add(Calendar.DAY_OF_MONTH, -days);
+            Date threshold = calendar.getTime();
+            
+            // Filter by date and group by day
+            Map<String, List<TestExecutionSession>> sessionsByDay = sessions.stream()
+                    .filter(session -> session.getStartTime().after(threshold))
+                    .collect(Collectors.groupingBy(session -> {
+                        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+                        return dateFormat.format(session.getStartTime());
+                    }));
+            
+            // Calculate trends
+            List<Map<String, Object>> trends = new ArrayList<>();
+            
+            for (Map.Entry<String, List<TestExecutionSession>> entry : sessionsByDay.entrySet()) {
+                String date = entry.getKey();
+                List<TestExecutionSession> daySessions = entry.getValue();
+                
+                int totalTests = 0;
+                int passedTests = 0;
+                int failedTests = 0;
+                int skippedTests = 0;
+                double totalDuration = 0;
+                
+                for (TestExecutionSession session : daySessions) {
+                    totalTests += session.getSummary().getTotalTests();
+                    passedTests += session.getSummary().getPassedTests();
+                    failedTests += session.getSummary().getFailedTests();
+                    skippedTests += session.getSummary().getSkippedTests() + 
+                            session.getSummary().getBlockedTests();
+                    totalDuration += session.getTotalDurationMs();
+                }
+                
+                double successRate = totalTests > 0 ? 
+                        (double) passedTests / totalTests * 100 : 0;
+                double avgDuration = totalTests > 0 ? 
+                        totalDuration / totalTests : 0;
+                
+                Map<String, Object> trend = new HashMap<>();
+                trend.put("date", date);
+                trend.put("totalTests", totalTests);
+                trend.put("passedTests", passedTests);
+                trend.put("failedTests", failedTests);
+                trend.put("skippedTests", skippedTests);
+                trend.put("successRate", successRate);
+                trend.put("avgDurationMs", avgDuration);
+                
+                trends.add(trend);
+            }
+            
+            // Sort by date
+            trends.sort(Comparator.comparing(trend -> (String) trend.get("date")));
+            
+            return ResponseEntity.ok(trends);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Error retrieving execution trends: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Find a test case in a project by ID.
+     *
+     * @param project The project
+     * @param testCaseId The test case ID
+     * @return The test case, or null if not found
+     */
+    private TestCase findTestCase(Project project, String testCaseId) {
+        for (TestSuite testSuite : project.getTestSuites()) {
+            for (TestCase testCase : testSuite.getTestCases()) {
+                if (testCase.getId().equals(testCaseId)) {
+                    return testCase;
+                }
+            }
+        }
+        return null;
+    }
+}
+
+
+Application Styles:
+-----------------------
+
+/* Reporting Dashboard */
+.reporting-dashboard {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  gap: 1.5rem;
+}
+
+.summary-cards {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.summary-card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  padding: 1.25rem;
+  display: flex;
+  align-items: center;
+}
+
+.card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-right: 1rem;
+}
+
+.success-rate-icon {
+  background-color: #e3f2fd;
+  color: #0d47a1;
+}
+
+.passed-icon {
+  background-color: #e8f5e9;
+  color: #2e7d32;
+}
+
+.failed-icon {
+  background-color: #ffebee;
+  color: #c62828;
+}
+
+.duration-icon {
+  background-color: #ede7f6;
+  color: #4527a0;
+}
+
+.card-content h3 {
+  font-size: 0.875rem;
+  color: #6c757d;
+  margin-bottom: 0.5rem;
+}
+
+.card-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.chart-container {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  padding: 1.25rem;
+}
+
+.chart-container h2 {
+  font-size: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.no-data-message {
+  padding: 3rem;
+  text-align: center;
+  color: #6c757d;
+}
+
+.top-failing-tests {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  padding: 1.25rem;
+}
+
+.top-failing-tests h2 {
+  font-size: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.failing-tests-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.failing-test-item {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem;
+  background-color: #f8f9fa;
+  border-left: 4px solid #dc3545;
+  border-radius: 0.25rem;
+}
+
+.test-failure-count {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: #dc3545;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  margin-right: 1rem;
+}
+
+.test-name {
+  flex: 1;
+}
+
+.recent-executions {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  padding: 1.25rem;
+}
+
+.recent-executions h2 {
+  font-size: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.executions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.execution-item {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem;
+  background-color: #f8f9fa;
+  border-radius: 0.25rem;
+}
+
+.execution-icon {
+  font-size: 1.5rem;
+  margin-right: 1rem;
+}
+
+.passed-icon {
+  color: #28a745;
+}
+
+.failed-icon {
+  color: #dc3545;
+}
+
+.execution-details {
+  flex: 1;
+}
+
+.execution-name {
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.execution-time {
+  color: #6c757d;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.execution-stats {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.875rem;
+}
+
+.execution-stats .passed {
+  color: #28a745;
+}
+
+.execution-stats .failed {
+  color: #dc3545;
+}
+
+.execution-stats .duration {
+  color: #6c757d;
+}/* src/styles/App.css */
+
+/* Global Styles */
+:root {
+  --primary-color: #4a6ee0;
+  --primary-hover: #3a5ecc;
+  --secondary-color: #6c757d;
+  --secondary-hover: #5a6268;
+  --success-color: #28a745;
+  --danger-color: #dc3545;
+  --warning-color: #ffc107;
+  --info-color: #17a2b8;
+  --light-color: #f8f9fa;
+  --dark-color: #343a40;
+  --border-color: #dee2e6;
+  --box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  --transition: all 0.2s ease-in-out;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.6;
+  color: #333;
+  background-color: #f5f7fb;
+}
+
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.main-container {
+  display: flex;
+  flex: 1;
+}
+
+.content {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+/* Navbar */
+.navbar {
+  display: flex;
+  align-items: center;
+  background-color: var(--primary-color);
+  color: white;
+  padding: 0 1.5rem;
+  height: 60px;
+  box-shadow: var(--box-shadow);
+}
+
+.navbar-brand {
+  font-size: 1.25rem;
+  font-weight: bold;
+  margin-right: 2rem;
+  color: white;
+  text-decoration: none;
+}
+
+.navbar-nav {
+  display: flex;
+  list-style: none;
+}
+
+.nav-item {
+  margin-right: 1rem;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
+  padding: 0.5rem;
+}
+
+.nav-link:hover {
+  color: white;
+  text-decoration: none;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 250px;
+  background-color: white;
+  border-right: 1px solid var(--border-color);
+  padding: 1.5rem 0;
+}
+
+.sidebar-menu {
+  list-style: none;
+}
+
+.sidebar-item {
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  color: var(--secondary-color);
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.sidebar-link:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  text-decoration: none;
+}
+
+.sidebar-link.active {
+  color: var(--primary-color);
+  background-color: rgba(74, 110, 224, 0.1);
+  border-left: 3px solid var(--primary-color);
+  font-weight: bold;
+}
+
+.sidebar-link svg {
+  margin-right: 0.75rem;
+}
+
+/* Page Headers */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+}
+
+.page-header h1 {
+  font-size: 1.75rem;
+  color: var(--dark-color);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  border-radius: 0.25rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn svg {
+  margin-right: 0.5rem;
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.btn-secondary {
+  background-color: var(--secondary-color);
+  color: white;
+  border-color: var(--secondary-color);
+}
+
+.btn-secondary:hover {
+  background-color: var(--secondary-hover);
+  border-color: var(--secondary-hover);
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  color: white;
+  border-color: var(--danger-color);
+}
+
+.btn-danger:hover {
+  background-color: #c82333;
+  border-color: #bd2130;
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+/* Forms */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+input, select, textarea {
+  display: block;
+  width: 100%;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #495057;
+  background-color: #fff;
+  background-clip: padding-box;
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--primary-color);
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(74, 110, 224, 0.25);
+}
+
+.input-with-button {
+  display: flex;
+}
+
+.input-with-button input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.input-with-button .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Cards */
+.card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  margin-bottom: 1.5rem;
+}
+
+.card-header {
+  padding: 1rem 1.25rem;
+  background-color: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.card-body {
+  padding: 1.25rem;
+}
+
+/* Workspace Grid */
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.workspace-card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  transition: var(--transition);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.workspace-card-header {
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.workspace-card-content {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.workspace-card-content h3 {
+  font-size: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: var(--dark-color);
+}
+
+.workspace-description {
+  flex: 1;
+  margin-bottom: 1rem;
+  color: var(--secondary-color);
+}
+
+.workspace-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--secondary-color);
+  font-size: 0.875rem;
+}
+
+.delete-btn {
+  color: var(--danger-color);
+  background-color: transparent;
+  border: none;
+}
+
+.delete-btn:hover {
+  background-color: rgba(220, 53, 69, 0.1);
+}
+
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background-color: white;
+  border-radius: 0.3rem;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  width: 500px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.close-btn {
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--secondary-color);
+  background-color: transparent;
+  border: none;
+}
+
+.modal-body {
+  padding: 1rem;
+}
+
+.modal-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+}
+
+.empty-state svg {
+  color: var(--secondary-color);
+  margin-bottom: 1rem;
+}
+
+.empty-state h2 {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.empty-state p {
+  color: var(--secondary-color);
+  margin-bottom: 1.5rem;
+}
+
+/* Loading */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+  font-size: 2rem;
+  color: var(--primary-color);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Web Analyzer */
+.analyzer-form {
+  background-color: white;
+  padding: 1.5rem;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  margin-bottom: 2rem;
+}
+
+.form-row {
+  display: flex;
+  margin-bottom: 1rem;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+/* Analysis Results */
+.analysis-results {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  overflow: hidden;
+}
+
+.results-header {
+  padding: 1rem 1.5rem;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.results-header h2 {
+  margin-bottom: 1rem;
+}
+
+.tab-navigation {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tab-button {
+  padding: 0.75rem 1.5rem;
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--secondary-color);
+  border-bottom: 3px solid transparent;
+}
+
+.tab-button.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+}
+
+.results-content {
+  padding: 1.5rem;
+}
+
+.summary-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-item {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.stat-label {
+  font-weight: 500;
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--secondary-color);
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.page-screenshot {
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  margin-top: 1rem;
+}
+
+.page-list {
+  list-style: none;
+}
+
+.page-item {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.page-title {
+  font-weight: 500;
+  flex: 1;
+}
+
+.page-url {
+  color: var(--secondary-color);
+  margin: 0 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.page-elements-count, .page-forms-count {
+  background-color: #f8f9fa;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  margin-left: 0.5rem;
+}
+
+/* Tables */
+.elements-table-container, .forms-table-container {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background-color: #f8f9fa;
+  font-weight: 600;
+}
+
+tr:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.selectors-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.selector-item {
+  margin-bottom: 0.25rem;
+}
+
+.selector-type {
+  font-weight: 500;
+  margin-right: 0.5rem;
+}
+
+.form-details {
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.form-details h4 {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.form-action, .form-method {
+  font-size: 0.875rem;
+  font-weight: normal;
+  color: var(--secondary-color);
+  margin-left: 1rem;
+}
+
+.form-fields-table {
+  margin-bottom: 1rem;
+}
+
+.submit-button-info {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.button-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.button-text {
+  font-weight: 500;
+}
+
+.button-selector {
+  color: var(--secondary-color);
+  font-size: 0.875rem;
+}
+
+/* Accordion */
+.accordion-item {
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.accordion-header {
+  background-color: #f8f9fa;
+  padding: 1rem 1.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.accordion-header h4 {
+  margin: 0;
+  margin-right: auto;
+}
+
+.accordion-header span {
+  margin-left: 1rem;
+  color: var(--secondary-color);
+}
+
+.accordion-content {
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+
+package com.ctgp.service.generator;
+
+import com.ctgp.model.analyzer.*;
+import com.ctgp.model.workspace.*;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Utility class with additional methods needed for AdvancedTestGeneratorService
+ */
+@Slf4j
+public class TestGeneratorUtils {
+
+    /**
+     * Generate a Playwright test script for a navigation sequence test.
+     *
+     * @param project      The project
+     * @param sequenceName Name of the sequence
+     * @param sequence     List of pages in the sequence
+     * @return The test script content
+     */
+    public static String generateNavigationSequenceTestScript(
+            Project project, String sequenceName, List<WebAnalysisResult> sequence) {
+        StringBuilder scriptBuilder = new StringBuilder();
+        
+        scriptBuilder.append("import { test, expect } from '@playwright/test';\n\n");
+        scriptBuilder.append("test('Navigation Sequence: ").append(escapeString(sequenceName)).append("', async ({ page }) => {\n");
+        scriptBuilder.append("  // Start the navigation sequence test\n");
+        scriptBuilder.append("  console.log('[Step] Starting navigation sequence: ").append(escapeString(sequenceName)).append("');\n\n");
+        
+        // For each page in the sequence, add navigation and verification steps
+        for (int i = 0; i < sequence.size(); i++) {
+            WebAnalysisResult currentPage = sequence.get(i);
+            String stepName = "Page " + (i + 1);
+            String pageTitle = currentPage.getTitle() != null && !currentPage.getTitle().isEmpty() 
+                    ? currentPage.getTitle() : stepName;
+            
+            scriptBuilder.append("  // Navigate to ").append(pageTitle).append("\n");
+            scriptBuilder.append("  console.log('[Step] Navigating to ").append(escapeString(pageTitle)).append("');\n");
+            scriptBuilder.append("  await page.goto('").append(escapeString(currentPage.getUrl())).append("');\n");
+            scriptBuilder.append("  await page.waitForLoadState('networkidle');\n\n");
+            
+            // Add assertions for key elements on the page
+            scriptBuilder.append("  // Verify key elements are present\n");
+            List<WebElement> keyElements = currentPage.getElements().stream()
+                    .filter(WebElement::isVisible)
+                    .limit(3)  // Limit to 3 key elements
+                    .collect(Collectors.toList());
+            
+            for (WebElement element : keyElements) {
+                String selector = getBestSelector(element);
+                if (selector != null) {
+                    scriptBuilder.append("  await expect(page.locator('").append(escapeString(selector)).append("')).toBeVisible();\n");
+                }
+            }
+            
+            scriptBuilder.append("\n  console.log('[Step] Verified ").append(escapeString(pageTitle)).append("');\n\n");
+            
+            // If there's a next page, find a link to click to navigate there
+            if (i < sequence.size() - 1) {
+                WebAnalysisResult nextPage = sequence.get(i + 1);
+                
+                // Find a potential link that might lead to the next page
+                Optional<WebElement> navigationLink = findPotentialNavigationLink(currentPage, nextPage);
+                
+                if (navigationLink.isPresent()) {
+                    WebElement link = navigationLink.get();
+                    String selector = getBestSelector(link);
+                    
+                    if (selector != null) {
+                        scriptBuilder.append("  // Click link to navigate to next page\n");
+                        scriptBuilder.append("  console.log('[Step] Clicking link to navigate to next page');\n");
+                        scriptBuilder.append("  await page.click('").append(escapeString(selector)).append("');\n");
+                        scriptBuilder.append("  await page.waitForLoadState('networkidle');\n\n");
+                    } else {
+                        // Fallback to direct navigation if can't find a good link
+                        scriptBuilder.append("  // No suitable link found to next page, navigating directly\n");
+                    }
+                } else {
+                    // No link found, will navigate directly in the next iteration
+                    scriptBuilder.append("  // No link found to next page, will navigate directly\n\n");
+                }
+            }
+        }
+        
+        scriptBuilder.append("  // Navigation sequence test completed\n");
+        scriptBuilder.append("  console.log('[Step] Navigation sequence completed: ").append(escapeString(sequenceName)).append("');\n");
+        scriptBuilder.append("});\n");
+        
+        return scriptBuilder.toString();
+    }
+    
+    /**
+     * Generate a Playwright test script for a visual regression test.
+     *
+     * @param project  The project
+     * @param pageName Name of the page
+     * @param page     The page to test
+     * @return The test script content
+     */
+    public static String generateVisualRegressionTestScript(
+            Project project, String pageName, WebAnalysisResult page) {
+        StringBuilder scriptBuilder = new StringBuilder();
+        
+        scriptBuilder.append("import { test, expect } from '@playwright/test';\n\n");
+        scriptBuilder.append("test('Visual Regression: ").append(escapeString(pageName)).append("', async ({ page }) => {\n");
+        scriptBuilder.append("  // Navigate to the page\n");
+        scriptBuilder.append("  await page.goto('").append(escapeString(page.getUrl())).append("');\n");
+        scriptBuilder.append("  await page.waitForLoadState('networkidle');\n\n");
+        
+        // Take full page screenshot for comparison
+        scriptBuilder.append("  // Take a screenshot for visual comparison\n");
+        scriptBuilder.append("  await page.screenshot({ path: 'screenshots/").append(sanitizeFileName(pageName))
+                .append("-full.png', fullPage: true });\n\n");
+        
+        // Take screenshots of important UI components
+        scriptBuilder.append("  // Take screenshots of important UI components\n");
+        
+        // Find significant elements to capture
+        List<WebElement> significantElements = findSignificantElements(page);
+        
+        for (int i = 0; i < significantElements.size(); i++) {
+            WebElement element = significantElements.get(i);
+            String selector = getBestSelector(element);
+            if (selector != null) {
+                String elementName = element.getTagName() + (i + 1);
+                
+                scriptBuilder.append("  try {\n");
+                scriptBuilder.append("    await page.locator('").append(escapeString(selector)).append("').screenshot({ \n");
+                scriptBuilder.append("      path: 'screenshots/").append(sanitizeFileName(pageName))
+                        .append("-").append(sanitizeFileName(elementName)).append(".png' \n");
+                scriptBuilder.append("    });\n");
+                scriptBuilder.append("  } catch (e) {\n");
+                scriptBuilder.append("    console.log('Could not capture element: ").append(escapeString(selector))
+                        .append("', e);\n");
+                scriptBuilder.append("  }\n\n");
+            }
+        }
+        
+        // Verify key layout properties
+        scriptBuilder.append("  // Verify key layout properties\n");
+        
+        // Add viewport size check
+        scriptBuilder.append("  const viewport = page.viewportSize();\n");
+        scriptBuilder.append("  console.log(`Viewport size: ${viewport.width}x${viewport.height}`);\n\n");
+        
+        // Add accessibility checks
+        scriptBuilder.append("  // Basic accessibility checks\n");
+        scriptBuilder.append("  // Check for alt text on images\n");
+        scriptBuilder.append("  const images = await page.locator('img').all();\n");
+        scriptBuilder.append("  for (const img of images) {\n");
+        scriptBuilder.append("    const altText = await img.getAttribute('alt');\n");
+        scriptBuilder.append("    console.log(`Image alt text: ${altText || 'Missing'}`);\n");
+        scriptBuilder.append("  }\n\n");
+        
+        // Add comparison logic placeholder
+        scriptBuilder.append("  // TODO: Add comparison with baseline images\n");
+        scriptBuilder.append("  // This would typically compare current screenshots with stored baseline images\n");
+        scriptBuilder.append("  // using image comparison libraries\n");
+        
+        scriptBuilder.append("});\n");
+        
+        return scriptBuilder.toString();
+    }
+    
+    /**
+     * Find a potential navigation link from one page to another.
+     *
+     * @param currentPage The current page
+     * @param targetPage  The target page
+     * @return Optional containing a link element, if found
+     */
+    public static Optional<WebElement> findPotentialNavigationLink(WebAnalysisResult currentPage, WebAnalysisResult targetPage) {
+        // Look for links that might lead to the target page
+        return currentPage.getElements().stream()
+                .filter(e -> e.getType() == ElementType.LINK)
+                .filter(WebElement::isVisible)
+                .filter(e -> {
+                    String href = e.getAttributes().get("href");
+                    if (href == null) return false;
+                    
+                    // Check if the href points to the target page
+                    if (href.equals(targetPage.getUrl())) return true;
+                    
+                    // Check if the text of the link matches the title of the target page
+                    String linkText = e.getText();
+                    String targetTitle = targetPage.getTitle();
+                    if (linkText != null && targetTitle != null) {
+                        return linkText.contains(targetTitle) || targetTitle.contains(linkText);
+                    }
+                    
+                    return false;
+                })
+                .findFirst();
+    }
+    
+    /**
+     * Find significant elements for visual regression testing.
+     *
+     * @param page The page to analyze
+     * @return List of significant elements
+     */
+    public static List<WebElement> findSignificantElements(WebAnalysisResult page) {
+        List<WebElement> significant = new ArrayList<>();
+        
+        // Find headers and navigation elements
+        significant.addAll(page.getElements().stream()
+                .filter(WebElement::isVisible)
+                .filter(e -> e.getTagName().matches("h[1-3]|nav|header|footer"))
+                .limit(5)
+                .collect(Collectors.toList()));
+        
+        // Find buttons
+        significant.addAll(page.getElements().stream()
+                .filter(WebElement::isVisible)
+                .filter(e -> e.getType() == ElementType.BUTTON)
+                .limit(3)
+                .collect(Collectors.toList()));
+        
+        // Find forms
+        page.getForms().stream()
+                .filter(f -> f.getFields().size() > 0)
+                .limit(2)
+                .forEach(form -> {
+                    // For each form, find a suitable container element
+                    Optional<WebElement> formElement = page.getElements().stream()
+                            .filter(WebElement::isVisible)
+                            .filter(e -> e.getTagName().equals("form"))
+                            .filter(e -> e.getId() != null && e.getId().equals(form.getId()))
+                            .findFirst();
+                    
+                    formElement.ifPresent(significant::add);
+                });
+        
+        return significant;
+    }
+    
+    /**
+     * Get the best selector for an element.
+     *
+     * @param element The web element
+     * @return The best selector, or null if no good selector is available
+     */
+    public static String getBestSelector(WebElement element) {
+        Map<SelectorType, String> selectors = element.getSelectors();
+        
+        // Try ID selector first (most reliable)
+        if (selectors.containsKey(SelectorType.ID)) {
+            return selectors.get(SelectorType.ID);
+        }
+        
+        // Then try CSS selector
+        if (selectors.containsKey(SelectorType.CSS)) {
+            return selectors.get(SelectorType.CSS);
+        }
+        
+        // Then try text selector for buttons and links
+        if (selectors.containsKey(SelectorType.TEXT) && 
+                (element.getType() == ElementType.BUTTON || element.getType() == ElementType.LINK)) {
+            return "text=" + selectors.get(SelectorType.TEXT);
+        }
+        
+        // Finally, try XPath selector
+        if (selectors.containsKey(SelectorType.XPATH)) {
+            return selectors.get(SelectorType.XPATH);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Escape a string for inclusion in JavaScript.
+     *
+     * @param input The input string
+     * @return The escaped string
+     */
+    public static String escapeString(String input) {
+        if (input == null) {
+            return "";
+        }
+        return input.replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
+    }
+    
+    /**
+     * Sanitize a string for use in a file name.
+     *
+     * @param input The input string
+     * @return The sanitized string
+     */
+    public static String sanitizeFileName(String input) {
+        if (input == null) {
+            return "unnamed";
+        }
+        return input.replaceAll("[^a-zA-Z0-9-_.]", "_").toLowerCase();
+    }
+}
+
+
+package com.ctgp.service.generator;
+
+import com.ctgp.model.analyzer.*;
+import com.ctgp.model.workspace.*;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Advanced service for generating test cases with sophisticated algorithms.
+ */
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class AdvancedTestGeneratorService {
+
+    private final TestGeneratorService basicTestGenerator;
+
+    /**
+     * Generate advanced test suites from web application analysis.
+     *
+     * @param project            The project to create the test suite in
+     * @param workspacePath      Path to the workspace
+     * @param applicationAnalysis The application analysis
+     * @return The generated test suites
+     * @throws IOException If there's an error creating test files
+     */
+    public List<TestSuite> generateAdvancedTestSuites(
+            Project project, Path workspacePath, WebApplicationAnalysis applicationAnalysis) 
+            throws IOException {
+        log.info("Generating advanced test suites for project: {}", project.getName());
+        
+        List<TestSuite> testSuites = new ArrayList<>();
+        
+        // Generate basic test suite
+        TestSuite basicTestSuite = basicTestGenerator.generateTestSuite(project, workspacePath, applicationAnalysis);
+        testSuites.add(basicTestSuite);
+        
+        // Generate workflow test suite
+        TestSuite workflowTestSuite = generateWorkflowTestSuite(project, workspacePath, applicationAnalysis);
+        testSuites.add(workflowTestSuite);
+        
+        // Generate data-driven test suite
+        TestSuite dataTestSuite = generateDataDrivenTestSuite(project, workspacePath, applicationAnalysis);
+        testSuites.add(dataTestSuite);
+        
+        // Generate visual regression test suite
+        TestSuite visualTestSuite = generateVisualRegressionTestSuite(project, workspacePath, applicationAnalysis);
+        testSuites.add(visualTestSuite);
+        
+        return testSuites;
+    }
+    
+    /**
+     * Generate workflow-based test suite that detects and tests user flows.
+     *
+     * @param project            The project
+     * @param workspacePath      The workspace path
+     * @param applicationAnalysis The application analysis
+     * @return The generated test suite
+     * @throws IOException If there's an error creating test files
+     */
+    private TestSuite generateWorkflowTestSuite(
+            Project project, Path workspacePath, WebApplicationAnalysis applicationAnalysis) 
+            throws IOException {
+        log.info("Generating workflow test suite for project: {}", project.getName());
+        
+        // Create a unique test suite ID
+        String testSuiteId = UUID.randomUUID().toString();
+        
+        // Create test suite directory
+        Path projectPath = workspacePath.resolve(project.getRelativePath());
+        Path testSuitePath = projectPath.resolve("test-suites").resolve(testSuiteId);
+        Files.createDirectories(testSuitePath);
+        
+        // Test suite metadata
+        String testSuiteName = "Workflow Test Suite - " + LocalDateTime.now();
+        String description = "Automatically generated workflow tests based on detected user flows";
+        
+        // Generate workflow test cases
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // Find all forms in the application
+        List<FormPagePair> allForms = extractAllForms(applicationAnalysis);
+        
+        // Group forms by similarity and potential workflow steps
+        List<List<FormPagePair>> workflows = identifyWorkflows(allForms);
+        
+        // For each workflow, create a test
+        for (int i = 0; i < workflows.size(); i++) {
+            List<FormPagePair> workflow = workflows.get(i);
+            String workflowName = "Workflow " + (i + 1);
+            
+            TestCase workflowTest = generateWorkflowTest(project, testSuitePath, workflowName, workflow);
+            testCases.add(workflowTest);
+        }
+        
+        // Generate page navigation sequences
+        List<List<WebAnalysisResult>> navigationSequences = identifyNavigationSequences(applicationAnalysis);
+        
+        // Create tests for navigation sequences
+        for (int i = 0; i < navigationSequences.size(); i++) {
+            List<WebAnalysisResult> sequence = navigationSequences.get(i);
+            String sequenceName = "Navigation Sequence " + (i + 1);
+            
+            TestCase navigationTest = generateNavigationSequenceTest(project, testSuitePath, sequenceName, sequence);
+            testCases.add(navigationTest);
+        }
+        
+        // Create test suite object
+        TestSuite testSuite = TestSuite.builder()
+                .id(testSuiteId)
+                .name(testSuiteName)
+                .description(description)
+                .relativePath(projectPath.relativize(testSuitePath))
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .testCases(testCases)
+                .tags(List.of("auto-generated", "workflow", "advanced"))
+                .build();
+        
+        // Save test suite metadata
+        saveTestSuiteMetadata(testSuite, testSuitePath);
+        
+        return testSuite;
+    }
+    
+    /**
+     * Generate a data-driven test suite that creates variations of tests with different input data.
+     *
+     * @param project            The project
+     * @param workspacePath      The workspace path
+     * @param applicationAnalysis The application analysis
+     * @return The generated test suite
+     * @throws IOException If there's an error creating test files
+     */
+    private TestSuite generateDataDrivenTestSuite(
+            Project project, Path workspacePath, WebApplicationAnalysis applicationAnalysis) 
+            throws IOException {
+        log.info("Generating data-driven test suite for project: {}", project.getName());
+        
+        // Create a unique test suite ID
+        String testSuiteId = UUID.randomUUID().toString();
+        
+        // Create test suite directory
+        Path projectPath = workspacePath.resolve(project.getRelativePath());
+        Path testSuitePath = projectPath.resolve("test-suites").resolve(testSuiteId);
+        Files.createDirectories(testSuitePath);
+        
+        // Test suite metadata
+        String testSuiteName = "Data-Driven Test Suite - " + LocalDateTime.now();
+        String description = "Automatically generated data-driven tests with various input combinations";
+        
+        // Generate data-driven test cases
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // Find all forms with input fields
+        List<FormPagePair> allForms = extractAllForms(applicationAnalysis);
+        
+        // Filter forms with substantial input fields (at least 2)
+        List<FormPagePair> formsWithInputs = allForms.stream()
+                .filter(pair -> pair.form.getFields().size() >= 2)
+                .collect(Collectors.toList());
+        
+        // For each suitable form, create data-driven tests
+        for (int i = 0; i < formsWithInputs.size(); i++) {
+            FormPagePair formPair = formsWithInputs.get(i);
+            String formName = formPair.form.getName() != null && !formPair.form.getName().isEmpty() 
+                    ? formPair.form.getName() : "Form " + (i + 1);
+            
+            // Generate valid input test
+            TestCase validInputTest = generateDataDrivenTest(
+                    project, testSuitePath, formName + " Valid Input", formPair, DataVariationType.VALID);
+            testCases.add(validInputTest);
+            
+            // Generate boundary value test
+            TestCase boundaryValueTest = generateDataDrivenTest(
+                    project, testSuitePath, formName + " Boundary Values", formPair, DataVariationType.BOUNDARY);
+            testCases.add(boundaryValueTest);
+            
+            // Generate invalid input test
+            TestCase invalidInputTest = generateDataDrivenTest(
+                    project, testSuitePath, formName + " Invalid Input", formPair, DataVariationType.INVALID);
+            testCases.add(invalidInputTest);
+        }
+        
+        // Create test suite object
+        TestSuite testSuite = TestSuite.builder()
+                .id(testSuiteId)
+                .name(testSuiteName)
+                .description(description)
+                .relativePath(projectPath.relativize(testSuitePath))
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .testCases(testCases)
+                .tags(List.of("auto-generated", "data-driven", "advanced"))
+                .build();
+        
+        // Save test suite metadata
+        saveTestSuiteMetadata(testSuite, testSuitePath);
+        
+        return testSuite;
+    }
+    
+    /**
+     * Generate visual regression test suite for comparing visual elements across sessions.
+     *
+     * @param project            The project
+     * @param workspacePath      The workspace path
+     * @param applicationAnalysis The application analysis
+     * @return The generated test suite
+     * @throws IOException If there's an error creating test files
+     */
+    private TestSuite generateVisualRegressionTestSuite(
+            Project project, Path workspacePath, WebApplicationAnalysis applicationAnalysis) 
+            throws IOException {
+        log.info("Generating visual regression test suite for project: {}", project.getName());
+        
+        // Create a unique test suite ID
+        String testSuiteId = UUID.randomUUID().toString();
+        
+        // Create test suite directory
+        Path projectPath = workspacePath.resolve(project.getRelativePath());
+        Path testSuitePath = projectPath.resolve("test-suites").resolve(testSuiteId);
+        Files.createDirectories(testSuitePath);
+        
+        // Test suite metadata
+        String testSuiteName = "Visual Regression Test Suite - " + LocalDateTime.now();
+        String description = "Automatically generated visual regression tests for UI consistency";
+        
+        // Generate visual regression test cases
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // For each page, create a visual regression test
+        for (int i = 0; i < applicationAnalysis.getPageResults().size(); i++) {
+            WebAnalysisResult page = applicationAnalysis.getPageResults().get(i);
+            String pageName = page.getTitle() != null && !page.getTitle().isEmpty() 
+                    ? page.getTitle() : "Page " + (i + 1);
+            
+            TestCase visualTest = generateVisualRegressionTest(project, testSuitePath, pageName, page);
+            testCases.add(visualTest);
+        }
+        
+        // Create test suite object
+        TestSuite testSuite = TestSuite.builder()
+                .id(testSuiteId)
+                .name(testSuiteName)
+                .description(description)
+                .relativePath(projectPath.relativize(testSuitePath))
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .testCases(testCases)
+                .tags(List.of("auto-generated", "visual-regression", "advanced"))
+                .build();
+        
+        // Save test suite metadata
+        saveTestSuiteMetadata(testSuite, testSuitePath);
+        
+        return testSuite;
+    }
+    
+    /**
+     * Extract all forms from the application analysis.
+     *
+     * @param applicationAnalysis The application analysis
+     * @return List of forms with their corresponding pages
+     */
+    private List<FormPagePair> extractAllForms(WebApplicationAnalysis applicationAnalysis) {
+        List<FormPagePair> allForms = new ArrayList<>();
+        
+        for (WebAnalysisResult page : applicationAnalysis.getPageResults()) {
+            for (WebForm form : page.getForms()) {
+                allForms.add(new FormPagePair(form, page));
+            }
+        }
+        
+        return allForms;
+    }
+    
+    /**
+     * Identify potential workflows based on form similarity and connectivity.
+     *
+     * @param allForms List of all forms in the application
+     * @return List of identified workflows (sequences of forms)
+     */
+    private List<List<FormPagePair>> identifyWorkflows(List<FormPagePair> allForms) {
+        // This is a simplified workflow identification algorithm
+        // In a production system, this would be more sophisticated, looking at:
+        // - Form submission destinations
+        // - Form field similarities
+        // - Navigation patterns between pages
+        
+        List<List<FormPagePair>> workflows = new ArrayList<>();
+        
+        // For simplicity, group forms by their field count similarities
+        Map<Integer, List<FormPagePair>> formsByFieldCount = allForms.stream()
+                .collect(Collectors.groupingBy(pair -> pair.form.getFields().size()));
+        
+        // Consider forms with similar field counts as potential workflow steps
+        for (Map.Entry<Integer, List<FormPagePair>> entry : formsByFieldCount.entrySet()) {
+            if (entry.getValue().size() >= 2) {
+                // If we have multiple forms with the same field count, consider them a potential workflow
+                workflows.add(entry.getValue());
+            }
+        }
+        
+        // If we have very few workflows, create one from all forms
+        if (workflows.isEmpty() && !allForms.isEmpty()) {
+            // Sort forms by complexity (field count)
+            List<FormPagePair> sortedForms = new ArrayList<>(allForms);
+            sortedForms.sort(Comparator.comparingInt(pair -> pair.form.getFields().size()));
+            workflows.add(sortedForms);
+        }
+        
+        return workflows;
+    }
+    
+    /**
+     * Identify navigation sequences based on page connections.
+     *
+     * @param applicationAnalysis The application analysis
+     * @return List of navigation sequences
+     */
+    private List<List<WebAnalysisResult>> identifyNavigationSequences(WebApplicationAnalysis applicationAnalysis) {
+        List<List<WebAnalysisResult>> sequences = new ArrayList<>();
+        
+        // In a production system, this would analyze the link structure to find actual navigable sequences
+        // For simplicity, we'll create a few sequences based on page order
+        
+        List<WebAnalysisResult> pages = applicationAnalysis.getPageResults();
+        
+        if (pages.size() <= 3) {
+            // If we have few pages, consider them all as one sequence
+            sequences.add(new ArrayList<>(pages));
+        } else {
+            // Split into multiple sequences
+            for (int i = 0; i < pages.size(); i += 3) {
+                int end = Math.min(i + 3, pages.size());
+                sequences.add(new ArrayList<>(pages.subList(i, end)));
+            }
+        }
+        
+        return sequences;
+    }
+    
+    /**
+     * Generate a workflow test case.
+     *
+     * @param project       The project
+     * @param testSuitePath Path to the test suite directory
+     * @param workflowName  Name of the workflow
+     * @param workflow      List of forms in the workflow
+     * @return The generated test case
+     * @throws IOException If there's an error creating test files
+     */
+    private TestCase generateWorkflowTest(
+            Project project, 
+            Path testSuitePath, 
+            String workflowName, 
+            List<FormPagePair> workflow) throws IOException {
+        String testCaseId = UUID.randomUUID().toString();
+        String testName = "Workflow Test: " + workflowName;
+        String description = "Tests the " + workflowName + " process across multiple pages";
+        
+        // Create test script file
+        Path scriptPath = testSuitePath.resolve(testCaseId + ".spec.ts");
+        
+        // Generate Playwright test script
+        String scriptContent = generateWorkflowTestScript(project, workflowName, workflow);
+        
+        // Write the script to file
+        FileUtils.writeStringToFile(scriptPath.toFile(), scriptContent, StandardCharsets.UTF_8);
+        
+        // Create test case object
+        return TestCase.builder()
+                .id(testCaseId)
+                .name(testName)
+                .description(description)
+                .scriptPath(testSuitePath.getParent().getParent().relativize(scriptPath))
+                .type("UI")
+                .priority(1)
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .tags(List.of("workflow", "auto-generated", "advanced"))
+                .autoGenerated(true)
+                .estimatedExecutionTime(15)
+                .build();
+    }
+    
+    /**
+     * Generate a navigation sequence test case.
+     *
+     * @param project       The project
+     * @param testSuitePath Path to the test suite directory
+     * @param sequenceName  Name of the sequence
+     * @param sequence      List of pages in the sequence
+     * @return The generated test case
+     * @throws IOException If there's an error creating test files
+     */
+    private TestCase generateNavigationSequenceTest(
+            Project project, 
+            Path testSuitePath, 
+            String sequenceName, 
+            List<WebAnalysisResult> sequence) throws IOException {
+        String testCaseId = UUID.randomUUID().toString();
+        String testName = "Navigation Sequence: " + sequenceName;
+        String description = "Tests navigation through a sequence of related pages";
+        
+        // Create test script file
+        Path scriptPath = testSuitePath.resolve(testCaseId + ".spec.ts");
+        
+        // Generate Playwright test script
+        String scriptContent = TestGeneratorUtils.generateNavigationSequenceTestScript(project, sequenceName, sequence);
+        
+        // Write the script to file
+        FileUtils.writeStringToFile(scriptPath.toFile(), scriptContent, StandardCharsets.UTF_8);
+        
+        // Create test case object
+        return TestCase.builder()
+                .id(testCaseId)
+                .name(testName)
+                .description(description)
+                .scriptPath(testSuitePath.getParent().getParent().relativize(scriptPath))
+                .type("UI")
+                .priority(1)
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .tags(List.of("navigation", "auto-generated", "advanced"))
+                .autoGenerated(true)
+                .estimatedExecutionTime(12)
+                .build();
+    }
+    
+    /**
+     * Generate a data-driven test case.
+     *
+     * @param project       The project
+     * @param testSuitePath Path to the test suite directory
+     * @param testName      Name of the test
+     * @param formPair      Form and its page
+     * @param variationType Type of data variation to test
+     * @return The generated test case
+     * @throws IOException If there's an error creating test files
+     */
+    private TestCase generateDataDrivenTest(
+            Project project, 
+            Path testSuitePath, 
+            String testName, 
+            FormPagePair formPair, 
+            DataVariationType variationType) throws IOException {
+        String testCaseId = UUID.randomUUID().toString();
+        String description = "Data-driven test for form using " + variationType + " input data";
+        
+        // Create test script file
+        Path scriptPath = testSuitePath.resolve(testCaseId + ".spec.ts");
+        
+        // Generate Playwright test script
+        String scriptContent = generateDataDrivenTestScript(project, testName, formPair, variationType);
+        
+        // Write the script to file
+        FileUtils.writeStringToFile(scriptPath.toFile(), scriptContent, StandardCharsets.UTF_8);
+        
+        // Create test case object
+        return TestCase.builder()
+                .id(testCaseId)
+                .name(testName)
+                .description(description)
+                .scriptPath(testSuitePath.getParent().getParent().relativize(scriptPath))
+                .type("UI")
+                .priority(2)
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .tags(List.of("data-driven", "auto-generated", "advanced"))
+                .autoGenerated(true)
+                .estimatedExecutionTime(8)
+                .build();
+    }
+    
+    /**
+     * Generate a visual regression test case.
+     *
+     * @param project       The project
+     * @param testSuitePath Path to the test suite directory
+     * @param pageName      Name of the page
+     * @param page          The page to test
+     * @return The generated test case
+     * @throws IOException If there's an error creating test files
+     */
+    private TestCase generateVisualRegressionTest(
+            Project project, 
+            Path testSuitePath, 
+            String pageName, 
+            WebAnalysisResult page) throws IOException {
+        String testCaseId = UUID.randomUUID().toString();
+        String testName = "Visual Regression: " + pageName;
+        String description = "Tests visual appearance and consistency of " + pageName;
+        
+        // Create test script file
+        Path scriptPath = testSuitePath.resolve(testCaseId + ".spec.ts");
+        
+        // Generate Playwright test script
+        String scriptContent = TestGeneratorUtils.generateVisualRegressionTestScript(project, pageName, page);
+        
+        // Write the script to file
+        FileUtils.writeStringToFile(scriptPath.toFile(), scriptContent, StandardCharsets.UTF_8);
+        
+        // Create test case object
+        return TestCase.builder()
+                .id(testCaseId)
+                .name(testName)
+                .description(description)
+                .scriptPath(testSuitePath.getParent().getParent().relativize(scriptPath))
+                .type("UI")
+                .priority(3)
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .tags(List.of("visual-regression", "auto-generated", "advanced"))
+                .autoGenerated(true)
+                .estimatedExecutionTime(5)
+                .build();
+    }
+    
+    /**
+     * Generate a Playwright test script for a workflow test.
+     *
+     * @param project      The project
+     * @param workflowName Name of the workflow
+     * @param workflow     List of forms in the workflow
+     * @return The test script content
+     */
+    private String generateWorkflowTestScript(
+            Project project, String workflowName, List<FormPagePair> workflow) {
+        StringBuilder scriptBuilder = new StringBuilder();
+        
+        scriptBuilder.append("import { test, expect } from '@playwright/test';\n\n");
+        scriptBuilder.append("test('").append(TestGeneratorUtils.escapeString(workflowName)).append("', async ({ page }) => {\n");
+        scriptBuilder.append("  // Start the workflow test\n");
+        scriptBuilder.append("  console.log('[Step] Starting workflow: ").append(TestGeneratorUtils.escapeString(workflowName)).append("');\n\n");
+        
+        // For each form in the workflow, add the navigation and form submission steps
+        for (int i = 0; i < workflow.size(); i++) {
+            FormPagePair pair = workflow.get(i);
+            String stepName = "Step " + (i + 1);
+            
+            scriptBuilder.append("  // ").append(stepName).append(": Navigate to page\n");
+            scriptBuilder.append("  console.log('[Step] ").append(TestGeneratorUtils.escapeString(stepName))
+                    .append(": Navigate to ").append(TestGeneratorUtils.escapeString(pair.page.getUrl())).append("');\n");
+            scriptBuilder.append("  await page.goto('").append(TestGeneratorUtils.escapeString(pair.page.getUrl())).append("');\n");
+            scriptBuilder.append("  await page.waitForLoadState('networkidle');\n\n");
+            
+            // Add form filling and submission logic
+            generateFormInteractionCode(scriptBuilder, pair.form, "  ");
+            
+            // Add assertions and verifications
+            scriptBuilder.append("\n  // Verify that the form submission was successful\n");
+            scriptBuilder.append("  // This is a basic verification and should be customized based on the application behavior\n");
+            scriptBuilder.append("  await page.waitForLoadState('networkidle');\n");
+            scriptBuilder.append("  console.log('[Step] ").append(TestGeneratorUtils.escapeString(stepName)).append(" completed');\n\n");
+        }
+        
+        scriptBuilder.append("  // Workflow test completed\n");
+        scriptBuilder.append("  console.log('[Step] Workflow completed: ").append(TestGeneratorUtils.escapeString(workflowName)).append("');\n");
+        scriptBuilder.append("});\n");
+        
+        return scriptBuilder.toString();
+    }
+    
+    /**
+     * Generate a Playwright test script for a data-driven test.
+     *
+     * @param project       The project
+     * @param testName      Name of the test
+     * @param formPair      Form and its page
+     * @param variationType Type of data variation to test
+     * @return The test script content
+     */
+    private String generateDataDrivenTestScript(
+            Project project, String testName, FormPagePair formPair, DataVariationType variationType) {
+        StringBuilder scriptBuilder = new StringBuilder();
+        
+        scriptBuilder.append("import { test, expect } from '@playwright/test';\n\n");
+        
+        // Define test data variations
+        scriptBuilder.append("// Test data variations\n");
+        scriptBuilder.append("const testData = {\n");
+        
+        List<Map<String, String>> dataVariations = generateDataVariations(formPair.form, variationType);
+        
+        for (int i = 0; i < dataVariations.size(); i++) {
+            Map<String, String> variation = dataVariations.get(i);
+            
+            scriptBuilder.append("  variation").append(i + 1).append(": {\n");
+            for (Map.Entry<String, String> entry : variation.entrySet()) {
+                scriptBuilder.append("    ").append(entry.getKey()).append(": '")
+                        .append(TestGeneratorUtils.escapeString(entry.getValue())).append("',\n");
+            }
+            scriptBuilder.append("  }");
+            
+            if (i < dataVariations.size() - 1) {
+                scriptBuilder.append(",");
+            }
+            scriptBuilder.append("\n");
+        }
+        
+        scriptBuilder.append("};\n\n");
+        
+        // Create test for each data variation
+        for (int i = 0; i < dataVariations.size(); i++) {
+            scriptBuilder.append("test('").append(TestGeneratorUtils.escapeString(testName))
+                    .append(" - Variation ").append(i + 1).append("', async ({ page }) => {\n");
+            
+            scriptBuilder.append("  // Navigate to the page\n");
+            scriptBuilder.append("  await page.goto('").append(TestGeneratorUtils.escapeString(formPair.page.getUrl())).append("');\n");
+            scriptBuilder.append("  await page.waitForLoadState('networkidle');\n\n");
+            
+            // Fill form with the specific data variation
+            scriptBuilder.append("  // Fill form with test data variation ").append(i + 1).append("\n");
+            scriptBuilder.append("  const data = testData.variation").append(i + 1).append(";\n");
+            
+            for (WebElement field : formPair.form.getFields()) {
+                String selector = TestGeneratorUtils.getBestSelector(field);
+                if (selector != null) {
+                    String fieldName = field.getName() != null && !field.getName().isEmpty() 
+                            ? field.getName() : (field.getId() != null && !field.getId().isEmpty() ? field.getId() : null);
+                    
+                    if (fieldName != null) {
+                        switch (field.getType()) {
+                            case TEXT_INPUT:
+                            case TEXTAREA:
+                                scriptBuilder.append("  await page.fill('").append(TestGeneratorUtils.escapeString(selector))
+                                        .append("', data.").append(fieldName).append(" || '');\n");
+                                break;
+                            case CHECKBOX:
+                            case RADIO:
+                                scriptBuilder.append("  if (data.").append(fieldName).append(" === 'true') {\n")
+                                        .append("    await page.check('").append(TestGeneratorUtils.escapeString(selector)).append("');\n")
+                                        .append("  } else {\n")
+                                        .append("    await page.uncheck('").append(TestGeneratorUtils.escapeString(selector)).append("');\n")
+                                        .append("  }\n");
+                                break;
+                            case SELECT:
+                                scriptBuilder.append("  await page.selectOption('").append(TestGeneratorUtils.escapeString(selector))
+                                        .append("', data.").append(fieldName).append(" || '');\n");
+                                break;
+                            default:
+                                scriptBuilder.append("  // Unsupported field type: ").append(field.getType()).append("\n");
+                        }
+                    }
+                }
+            }
+            
+            // Submit the form
+            if (formPair.form.getSubmitButton() != null) {
+                String selector = TestGeneratorUtils.getBestSelector(formPair.form.getSubmitButton());
+                if (selector != null) {
+                    scriptBuilder.append("\n  // Submit the form\n");
+                    scriptBuilder.append("  await page.click('").append(TestGeneratorUtils.escapeString(selector)).append("');\n");
+                }
+            } else {
+                scriptBuilder.append("\n  // Submit the form (using form submission since no submit button was identified)\n");
+                scriptBuilder.append("  await page.evaluate(() => {\n");
+                scriptBuilder.append("    const form = document.querySelector('");
+                
+                if (formPair.form.getId() != null && !formPair.form.getId().isEmpty()) {
+                    scriptBuilder.append("#").append(TestGeneratorUtils.escapeString(formPair.form.getId()));
+                } else if (formPair.form.getName() != null && !formPair.form.getName().isEmpty()) {
+                    scriptBuilder.append("form[name=\"").append(TestGeneratorUtils.escapeString(formPair.form.getName())).append("\"]");
+                } else {
+                    scriptBuilder.append("form");
+                }
+                
+                scriptBuilder.append("');\n");
+                scriptBuilder.append("    if (form) form.submit();\n");
+                scriptBuilder.append("  });\n");
+            }
+            
+            // Add verification behavior based on variation type
+            scriptBuilder.append("\n  // Wait for response\n");
+            scriptBuilder.append("  await page.waitForLoadState('networkidle');\n\n");
+            
+            switch (variationType) {
+                case VALID:
+                    scriptBuilder.append("  // For valid input, expect successful submission\n");
+                    scriptBuilder.append("  // This should be customized based on the application's success indicators\n");
+                    scriptBuilder.append("  // Example: Check for success message or redirection\n");
+                    scriptBuilder.append("  // await expect(page.locator('.success-message')).toBeVisible();\n");
+                    break;
+                case INVALID:
+                    scriptBuilder.append("  // For invalid input, expect error messages\n");
+                    scriptBuilder.append("  // This should be customized based on the application's error indicators\n");
+                    scriptBuilder.append("  // Example: Check for error message\n");
+                    scriptBuilder.append("  // await expect(page.locator('.error-message')).toBeVisible();\n");
+                    break;
+                case BOUNDARY:
+                    scriptBuilder.append("  // For boundary values, check specific conditions\n");
+                    scriptBuilder.append("  // This should be customized based on the application's behavior with boundary values\n");
+                    break;
+            }
+            
+            scriptBuilder.append("});\n\n");
+        }
+        
+        return scriptBuilder.toString();
+    }
+    
+    /**
+     * Generate form interaction code.
+     *
+     * @param scriptBuilder The script builder to append to
+     * @param form          The form to interact with
+     * @param indent        The indentation to use
+     */
+    private void generateFormInteractionCode(StringBuilder scriptBuilder, WebForm form, String indent) {
+        scriptBuilder.append(indent).append("// Fill form fields\n");
+        
+        for (WebElement field : form.getFields()) {
+            String selector = TestGeneratorUtils.getBestSelector(field);
+            if (selector != null) {
+                String value = generateTestDataForField(field);
+                
+                switch (field.getType()) {
+                    case TEXT_INPUT:
+                    case TEXTAREA:
+                        scriptBuilder.append(indent).append("await page.fill('")
+                                .append(TestGeneratorUtils.escapeString(selector)).append("', '")
+                                .append(TestGeneratorUtils.escapeString(value)).append("');\n");
+                        break;
+                    case CHECKBOX:
+                    case RADIO:
+                        scriptBuilder.append(indent).append("await page.check('")
+                                .append(TestGeneratorUtils.escapeString(selector)).append("');\n");
+                        break;
+                    case SELECT:
+                        scriptBuilder.append(indent).append("await page.selectOption('")
+                                .append(TestGeneratorUtils.escapeString(selector)).append("', '")
+                                .append(TestGeneratorUtils.escapeString(value)).append("');\n");
+                        break;
+                    case FILE_INPUT:
+                        scriptBuilder.append(indent).append("// TODO: Handle file upload for '")
+                                .append(TestGeneratorUtils.escapeString(selector)).append("'\n");
+                        break;
+                    default:
+                        scriptBuilder.append(indent).append("// Unsupported field type: ")
+                                .append(field.getType()).append("\n");
+                }
+            }
+        }
+        
+        // Submit the form
+        if (form.getSubmitButton() != null) {
+            String selector = TestGeneratorUtils.getBestSelector(form.getSubmitButton());
+            if (selector != null) {
+                scriptBuilder.append("\n").append(indent).append("// Submit the form\n");
+                scriptBuilder.append(indent).append("await page.click('")
+                        .append(TestGeneratorUtils.escapeString(selector)).append("');\n");
+            }
+        } else {
+            scriptBuilder.append("\n").append(indent).append("// Submit the form (using form submission since no submit button was identified)\n");
+            scriptBuilder.append(indent).append("await page.evaluate(() => {\n");
+            scriptBuilder.append(indent).append("  const form = document.querySelector('");
+            
+            if (form.getId() != null && !form.getId().isEmpty()) {
+                scriptBuilder.append("#").append(TestGeneratorUtils.escapeString(form.getId()));
+            } else if (form.getName() != null && !form.getName().isEmpty()) {
+                scriptBuilder.append("form[name=\"").append(TestGeneratorUtils.escapeString(form.getName())).append("\"]");
+            } else {
+                scriptBuilder.append("form");
+            }
+            
+            scriptBuilder.append("');\n");
+            scriptBuilder.append(indent).append("  if (form) form.submit();\n");
+            scriptBuilder.append(indent).append("});\n");
+        }
+    }
+    
+    /**
+     * Generate data variations for a form.
+     *
+     * @param form          The form
+     * @param variationType The type of variation to generate
+     * @return List of data variation maps
+     */
+    private List<Map<String, String>> generateDataVariations(WebForm form, DataVariationType variationType) {
+        List<Map<String, String>> variations = new ArrayList<>();
+        
+        switch (variationType) {
+            case VALID:
+                // Generate 2-3 variations of valid data
+                variations.add(generateValidData(form, "standard"));
+                variations.add(generateValidData(form, "alternative"));
+                break;
+                
+            case INVALID:
+                // Generate invalid data variations
+                variations.add(generateInvalidData(form, "empty"));
+                variations.add(generateInvalidData(form, "invalid-format"));
+                variations.add(generateInvalidData(form, "too-long"));
+                break;
+                
+            case BOUNDARY:
+                // Generate boundary value variations
+                variations.add(generateBoundaryData(form, "min"));
+                variations.add(generateBoundaryData(form, "max"));
+                variations.add(generateBoundaryData(form, "just-above-min"));
+                variations.add(generateBoundaryData(form, "just-below-max"));
+                break;
+        }
+        
+        return variations;
+    }
+    
+    /**
+     * Generate valid data for a form.
+     *
+     * @param form       The form
+     * @param variation  The variation type
+     * @return Map of field names to values
+     */
+    private Map<String, String> generateValidData(WebForm form, String variation) {
+        Map<String, String> data = new HashMap<>();
+        
+        for (WebElement field : form.getFields()) {
+            String fieldName = field.getName() != null && !field.getName().isEmpty() 
+                    ? field.getName() : (field.getId() != null && !field.getId().isEmpty() ? field.getId() : null);
+            
+            if (fieldName != null) {
+                String value;
+                
+                if ("alternative".equals(variation)) {
+                    value = generateAlternativeValidValue(field);
+                } else {
+                    value = generateTestDataForField(field);
+                }
+                
+                data.put(fieldName, value);
+            }
+        }
+        
+        return data;
+    }
+    
+    /**
+     * Generate invalid data for a form.
+     *
+     * @param form       The form
+     * @param variation  The variation type
+     * @return Map of field names to values
+     */
+    private Map<String, String> generateInvalidData(WebForm form, String variation) {
+        Map<String, String> data = new HashMap<>();
+        
+        for (WebElement field : form.getFields()) {
+            String fieldName = field.getName() != null && !field.getName().isEmpty() 
+                    ? field.getName() : (field.getId() != null && !field.getId().isEmpty() ? field.getId() : null);
+            
+            if (fieldName != null) {
+                String value;
+                
+                switch (variation) {
+                    case "empty":
+                        value = "";
+                        break;
+                    case "invalid-format":
+                        value = generateInvalidFormatValue(field);
+                        break;
+                    case "too-long":
+                        value = generateTooLongValue(field);
+                        break;
+                    default:
+                        value = generateTestDataForField(field);
+                }
+                
+                data.put(fieldName, value);
+            }
+        }
+        
+        return data;
+    }
+    
+    /**
+     * Generate boundary data for a form.
+     *
+     * @param form       The form
+     * @param variation  The variation type
+     * @return Map of field names to values
+     */
+    private Map<String, String> generateBoundaryData(WebForm form, String variation) {
+        Map<String, String> data = new HashMap<>();
+        
+        for (WebElement field : form.getFields()) {
+            String fieldName = field.getName() != null && !field.getName().isEmpty() 
+                    ? field.getName() : (field.getId() != null && !field.getId().isEmpty() ? field.getId() : null);
+            
+            if (fieldName != null) {
+                String value;
+                
+                switch (variation) {
+                    case "min":
+                        value = generateMinBoundaryValue(field);
+                        break;
+                    case "max":
+                        value = generateMaxBoundaryValue(field);
+                        break;
+                    case "just-above-min":
+                        value = generateJustAboveMinValue(field);
+                        break;
+                    case "just-below-max":
+                        value = generateJustBelowMaxValue(field);
+                        break;
+                    default:
+                        value = generateTestDataForField(field);
+                }
+                
+                data.put(fieldName, value);
+            }
+        }
+        
+        return data;
+    }
+    
+    /**
+     * Generate an alternative valid value for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateAlternativeValidValue(WebElement field) {
+        String name = field.getName() != null ? field.getName().toLowerCase() : "";
+        String id = field.getId() != null ? field.getId().toLowerCase() : "";
+        
+        switch (field.getType()) {
+            case TEXT_INPUT:
+                if (name.contains("email") || id.contains("email")) {
+                    return "alternate@example.org";
+                } else if (name.contains("name") || id.contains("name")) {
+                    if (name.contains("first") || id.contains("first")) {
+                        return "Jane";
+                    } else if (name.contains("last") || id.contains("last")) {
+                        return "Smith";
+                    } else {
+                        return "Jane Smith";
+                    }
+                } else if (name.contains("phone") || id.contains("phone")) {
+                    return "888-987-6543";
+                } else if (name.contains("password") || id.contains("password")) {
+                    return "Alternate987!";
+                } else {
+                    return "Alternative input";
+                }
+            case TEXTAREA:
+                return "This is an alternative text area input.\nIt has multiple lines and different content.";
+            case SELECT:
+                return "2";  // Usually the second option
+            default:
+                return "Alternative";
+        }
+    }
+    
+    /**
+     * Generate an invalid format value for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateInvalidFormatValue(WebElement field) {
+        String name = field.getName() != null ? field.getName().toLowerCase() : "";
+        String id = field.getId() != null ? field.getId().toLowerCase() : "";
+        
+        switch (field.getType()) {
+            case TEXT_INPUT:
+                if (name.contains("email") || id.contains("email")) {
+                    return "invalid-email";
+                } else if (name.contains("phone") || id.contains("phone")) {
+                    return "not-a-phone";
+                } else if (name.contains("zip") || id.contains("zip") || 
+                        name.contains("postal") || id.contains("postal")) {
+                    return "ABC";
+                } else {
+                    return "+++Invalid+++";
+                }
+            case TEXTAREA:
+                return "Invalid\0Character";  // Null character
+            default:
+                return "Invalid";
+        }
+    }
+    
+    /**
+     * Generate a too-long value for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateTooLongValue(WebElement field) {
+        StringBuilder longValue = new StringBuilder();
+        
+        // Generate a really long string
+        for (int i = 0; i < 100; i++) {
+            longValue.append("Very long input value. ");
+        }
+        
+        return longValue.toString();
+    }
+    
+    /**
+     * Generate a minimum boundary value for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateMinBoundaryValue(WebElement field) {
+        String name = field.getName() != null ? field.getName().toLowerCase() : "";
+        String id = field.getId() != null ? field.getId().toLowerCase() : "";
+        
+        switch (field.getType()) {
+            case TEXT_INPUT:
+                if (name.contains("password") || id.contains("password")) {
+                    return "A1!";  // Minimal password
+                } else {
+                    return "a";  // Single character
+                }
+            case TEXTAREA:
+                return "a";  // Single character
+            default:
+                return "0";
+        }
+    }
+    
+    /**
+     * Generate a maximum boundary value for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateMaxBoundaryValue(WebElement field) {
+        StringBuilder longValue = new StringBuilder();
+        
+        // Generate a long string (assume 255 character limit)
+        for (int i = 0; i < 255; i++) {
+            longValue.append("a");
+        }
+        
+        return longValue.toString();
+    }
+    
+    /**
+     * Generate a value just above the minimum for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateJustAboveMinValue(WebElement field) {
+        String name = field.getName() != null ? field.getName().toLowerCase() : "";
+        String id = field.getId() != null ? field.getId().toLowerCase() : "";
+        
+        switch (field.getType()) {
+            case TEXT_INPUT:
+                if (name.contains("password") || id.contains("password")) {
+                    return "A1!a";  // Minimal password + 1
+                } else {
+                    return "ab";  // Two characters
+                }
+            case TEXTAREA:
+                return "ab";  // Two characters
+            default:
+                return "1";
+        }
+    }
+    
+    /**
+     * Generate a value just below the maximum for a field.
+     *
+     * @param field The field
+     * @return The generated value
+     */
+    private String generateJustBelowMaxValue(WebElement field) {
+        StringBuilder longValue = new StringBuilder();
+        
+        // Generate a long string (assume 255 character limit)
+        for (int i = 0; i < 254; i++) {
+            longValue.append("a");
+        }
+        
+        return longValue.toString();
+    }
+    
+    /**
+     * Generate test data for a form field.
+     *
+     * @param field The form field
+     * @return Generated test data
+     */
+    private String generateTestDataForField(WebElement field) {
+        String name = field.getName() != null ? field.getName().toLowerCase() : "";
+        String id = field.getId() != null ? field.getId().toLowerCase() : "";
+        
+        switch (field.getType()) {
+            case TEXT_INPUT:
+                if (name.contains("email") || id.contains("email")) {
+                    return "test@example.com";
+                } else if (name.contains("name") || id.contains("name")) {
+                    if (name.contains("first") || id.contains("first")) {
+                        return "John";
+                    } else if (name.contains("last") || id.contains("last")) {
+                        return "Doe";
+                    } else {
+                        return "John Doe";
+                    }
+                } else if (name.contains("phone") || id.contains("phone")) {
+                    return "555-123-4567";
+                } else if (name.contains("password") || id.contains("password")) {
+                    return "TestPassword123!";
+                } else if (name.contains("address") || id.contains("address")) {
+                    return "123 Test Street";
+                } else if (name.contains("city") || id.contains("city")) {
+                    return "Test City";
+                } else if (name.contains("zip") || id.contains("zip") || 
+                        name.contains("postal") || id.contains("postal")) {
+                    return "12345";
+                } else if (name.contains("country") || id.contains("country")) {
+                    return "Test Country";
+                } else if (name.contains("comment") || id.contains("comment") || 
+                        name.contains("message") || id.contains("message")) {
+                    return "This is a test message.";
+                } else if (name.contains("search") || id.contains("search")) {
+                    return "test query";
+                } else {
+                    return "Test Input";
+                }
+            case TEXTAREA:
+                return "This is a test text area content with multiple lines.\nSecond line of test content.";
+            case SELECT:
+                // For select elements, we'll need to determine available options
+                // For now, return a placeholder
+                return "1";  // Usually the first option
+            default:
+                return "Test";
+        }
+    }
+    
+    /**
+     * Save test suite metadata.
+     *
+     * @param testSuite     The test suite
+     * @param testSuitePath Path to the test suite directory
+     * @throws IOException If there's an error writing the file
+     */
+    private void saveTestSuiteMetadata(TestSuite testSuite, Path testSuitePath) throws IOException {
+        // Create a simple metadata file to store information about the test suite
+        Path metadataPath = testSuitePath.resolve("testsuite.json");
+        
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("id", testSuite.getId());
+        metadata.put("name", testSuite.getName());
+        metadata.put("description", testSuite.getDescription());
+        metadata.put("createdAt", testSuite.getCreatedAt().toString());
+        metadata.put("lastModifiedAt", testSuite.getLastModifiedAt().toString());
+        metadata.put("tags", testSuite.getTags());
+        
+        List<Map<String, Object>> testCasesMeta = new ArrayList<>();
+        for (TestCase testCase : testSuite.getTestCases()) {
+            Map<String, Object> testCaseMeta = new HashMap<>();
+            testCaseMeta.put("id", testCase.getId());
+            testCaseMeta.put("name", testCase.getName());
+            testCaseMeta.put("description", testCase.getDescription());
+            testCaseMeta.put("scriptPath", testCase.getScriptPath().toString());
+            testCaseMeta.put("type", testCase.getType());
+            testCaseMeta.put("priority", testCase.getPriority());
+            testCaseMeta.put("tags", testCase.getTags());
+            testCaseMeta.put("autoGenerated", testCase.isAutoGenerated());
+            
+            testCasesMeta.add(testCaseMeta);
+        }
+        metadata.put("testCases", testCasesMeta);
+        
+        // Write the metadata to a file
+        String metadataJson = new com.fasterxml.jackson.databind.ObjectMapper().writerWithDefaultPrettyPrinter()
+                .writeValueAsString(metadata);
+        FileUtils.writeStringToFile(metadataPath.toFile(), metadataJson, StandardCharsets.UTF_8);
+    }
+    
+    /**
+     * Class to pair a form with its page.
+     */
+    private static class FormPagePair {
+        final WebForm form;
+        final WebAnalysisResult page;
+        
+        FormPagePair(WebForm form, WebAnalysisResult page) {
+            this.form = form;
+            this.page = page;
+        }
+    }
+    
+    /**
+     * Types of data variations for testing.
+     */
+    private enum DataVariationType {
+        VALID,
+        INVALID,
+        BOUNDARY
+    }
+}
+
+
+      
+
