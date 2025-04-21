@@ -1,0 +1,4689 @@
+# Contextual Test Generation Platform - Project Structure
+
+```
+contextual-test-platform/
+├── backend/                       # Spring Boot backend
+│   ├── src/
+│   │   ├── main/
+│   │   │   ├── java/com/ctgp/
+│   │   │   │   ├── analyzer/      # Web application analysis
+│   │   │   │   ├── config/        # Application configuration
+│   │   │   │   ├── controller/    # REST controllers
+│   │   │   │   ├── generator/     # Test case generation
+│   │   │   │   ├── integration/   # Azure DevOps integration
+│   │   │   │   ├── model/         # Data models
+│   │   │   │   ├── service/       # Business logic
+│   │   │   │   ├── util/          # Utility classes
+│   │   │   │   └── workspace/     # Workspace management
+│   │   │   └── resources/         # Application resources
+│   │   └── test/                  # Backend tests
+│   └── pom.xml                    # Maven configuration
+│
+├── frontend/                      # React with TypeScript
+│   ├── public/
+│   ├── src/
+│   │   ├── components/            # React components
+│   │   ├── hooks/                 # Custom hooks
+│   │   ├── pages/                 # Page components
+│   │   ├── services/              # API services
+│   │   ├── store/                 # State management
+│   │   ├── types/                 # TypeScript types
+│   │   ├── utils/                 # Utility functions
+│   │   ├── App.tsx
+│   │   └── index.tsx
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── test-engine/                   # Playwright with TypeScript
+│   ├── src/
+│   │   ├── codegen/               # Playwright codegen integration
+│   │   ├── executor/              # Test execution engine
+│   │   ├── reporter/              # Custom reporting
+│   │   ├── selectors/             # Smart selector strategies
+│   │   └── utils/                 # Utility functions
+│   ├── package.json
+│   └── tsconfig.json
+│
+└── workspace/                     # Default workspace location
+    ├── projects/                  # Test projects
+    └── templates/                 # Test templates
+```
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.1.0</version>
+        <relativePath/>
+    </parent>
+    <groupId>com.ctgp</groupId>
+    <artifactId>contextual-test-platform</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <name>Contextual Test Generation Platform</name>
+    <description>Next-generation test automation tool that intelligently analyzes web applications</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <playwright.version>1.32.0</playwright.version>
+        <azure-devops.version>7.1.0</azure-devops.version>
+        <jsoup.version>1.15.3</jsoup.version>
+    </properties>
+
+    <dependencies>
+        <!-- Spring Boot -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Playwright for browser automation -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>${playwright.version}</version>
+        </dependency>
+
+        <!-- Azure DevOps SDK -->
+        <dependency>
+            <groupId>com.microsoft.azure.devops</groupId>
+            <artifactId>azure-devops-java-sdk</artifactId>
+            <version>${azure-devops.version}</version>
+        </dependency>
+
+        <!-- HTML parsing for analysis -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>${jsoup.version}</version>
+        </dependency>
+
+        <!-- Utilities -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.11.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.12.0</version>
+        </dependency>
+
+        <!-- Testing -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+package com.ctgp;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+
+@SpringBootApplication
+@ConfigurationPropertiesScan("com.ctgp.config")
+public class ContextualTestPlatformApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(ContextualTestPlatformApplication.class, args);
+    }
+}
+
+package com.ctgp.model.workspace;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Represents a workspace in the system.
+ * A workspace is the root container for all test projects.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Workspace {
+    
+    /**
+     * Unique identifier for the workspace
+     */
+    private String id;
+    
+    /**
+     * Human-readable name of the workspace
+     */
+    private String name;
+    
+    /**
+     * Description of the workspace
+     */
+    private String description;
+    
+    /**
+     * Absolute path to the workspace directory
+     */
+    private Path location;
+    
+    /**
+     * Creation timestamp
+     */
+    private LocalDateTime createdAt;
+    
+    /**
+     * Last modified timestamp
+     */
+    private LocalDateTime lastModifiedAt;
+    
+    /**
+     * List of projects in this workspace
+     */
+    @Builder.Default
+    private List<Project> projects = new ArrayList<>();
+    
+    /**
+     * Workspace configuration
+     */
+    private WorkspaceConfig config;
+}
+
+package com.ctgp.model.workspace;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+
+/**
+ * Represents a test project within a workspace.
+ * A project contains test suites, configurations, and other test-related artifacts.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Project {
+    
+    /**
+     * Unique identifier for the project
+     */
+    private String id;
+    
+    /**
+     * Human-readable name of the project
+     */
+    private String name;
+    
+    /**
+     * Description of the project
+     */
+    private String description;
+    
+    /**
+     * Relative path to the project directory from workspace root
+     */
+    private Path relativePath;
+    
+    /**
+     * Base URL of the application under test
+     */
+    private String baseUrl;
+    
+    /**
+     * Creation timestamp
+     */
+    private LocalDateTime createdAt;
+    
+    /**
+     * Last modified timestamp
+     */
+    private LocalDateTime lastModifiedAt;
+    
+    /**
+     * List of test suites in this project
+     */package com.ctgp.model.workspace;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Configuration settings for a workspace.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WorkspaceConfig {
+    
+    /**
+     * Default browser to use for testing
+     */
+    private String defaultBrowser;
+    
+    /**
+     * Default viewport width
+     */
+    @Builder.Default
+    private int defaultViewportWidth = 1280;
+    
+    /**
+     * Default viewport height
+     */
+    @Builder.Default
+    private int defaultViewportHeight = 720;
+    
+    /**
+     * Default timeout in milliseconds
+     */
+    @Builder.Default
+    private int defaultTimeout = 30000;
+    
+    /**
+     * Whether to record videos during test execution
+     */
+    @Builder.Default
+    private boolean recordVideo = false;
+    
+    /**
+     * Whether to take screenshots on test failures
+     */
+    @Builder.Default
+    private boolean screenshotOnFailure = true;
+    
+    /**
+     * Whether to use headless browser mode
+     */
+    @Builder.Default
+    private boolean headless = true;
+    
+    /**
+     * Additional custom configuration properties
+     */
+    @Builder.Default
+    private Map<String, Object> customProperties = new HashMap<>();
+}
+
+
+  package com.ctgp.model.workspace;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Represents a test suite within a project.
+ * A test suite contains a collection of related test cases.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TestSuite {
+    
+    /**
+     * Unique identifier for the test suite
+     */
+    private String id;
+    
+    /**
+     * Human-readable name of the test suite
+     */
+    private String name;
+    
+    /**
+     * Description of the test suite
+     */
+    private String description;
+    
+    /**
+     * Relative path to the test suite directory from project root
+     */
+    private Path relativePath;
+    
+    /**
+     * Creation timestamp
+     */
+    private LocalDateTime createdAt;
+    
+    /**
+     * Last modified timestamp
+     */
+    private LocalDateTime lastModifiedAt;
+    
+    /**
+     * List of test cases in this suite
+     */
+    @Builder.Default
+    private List<TestCase> testCases = new ArrayList<>();
+    
+    /**
+     * Tags associated with this test suite
+     */
+    @Builder.Default
+    private List<String> tags = new ArrayList<>();
+}
+
+
+  package com.ctgp.model.workspace;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+
+/**
+ * Represents a test case within a test suite.
+ * A test case contains the actual test script and associated metadata.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class TestCase {
+    
+    /**
+     * Unique identifier for the test case
+     */
+    private String id;
+    
+    /**
+     * Human-readable name of the test case
+     */
+    private String name;
+    
+    /**
+     * Description of the test case
+     */
+    private String description;
+    
+    /**
+     * Path to the test script file
+     */
+    private Path scriptPath;
+    
+    /**
+     * Type of the test (e.g., "UI", "API", "Unit")
+     */
+    private String type;
+    
+    /**
+     * Priority of the test (1-5, with 1 being highest)
+     */
+    private int priority;
+    
+    /**
+     * Creation timestamp
+     */
+    private LocalDateTime createdAt;
+    
+    /**
+     * Last modified timestamp
+     */
+    private LocalDateTime lastModifiedAt;
+    
+    /**
+     * Tags associated with this test case
+     */
+    @Builder.Default
+    private List<String> tags = new ArrayList<>();
+    
+    /**
+     * Test data to be used with this test case
+     */
+    @Builder.Default
+    private Map<String, Object> testData = new HashMap<>();
+    
+    /**
+     * References to external resources (requirements, user stories, etc.)
+     */
+    @Builder.Default
+    private Map<String, String> externalReferences = new HashMap<>();
+    
+    /**
+     * Whether this test case was auto-generated
+     */
+    private boolean autoGenerated;
+    
+    /**
+     * Estimated execution time in seconds
+     */
+    private int estimatedExecutionTime;
+}
+
+
+  package com.ctgp.model.workspace;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+/**
+ * Configuration for Azure DevOps integration.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class AzureDevOpsConfig {
+    
+    /**
+     * Azure DevOps organization URL
+     */
+    private String organizationUrl;
+    
+    /**
+     * Azure DevOps project name
+     */
+    private String projectName;
+    
+    /**
+     * Personal Access Token for authentication
+     */
+    private String personalAccessToken;
+    
+    /**
+     * Azure DevOps team name
+     */
+    private String teamName;
+    
+    /**
+     * Test plan ID to associate test results with
+     */
+    private String testPlanId;
+    
+    /**
+     * Whether to automatically create work items for test failures
+     */
+    @Builder.Default
+    private boolean autoCreateWorkItems = true;
+    
+    /**
+     * Type of work item to create for failures (e.g., "Bug", "Issue")
+     */
+    @Builder.Default
+    private String workItemType = "Bug";
+    
+    /**
+     * Whether to upload test artifacts (screenshots, logs) to Azure DevOps
+     */
+    @Builder.Default
+    private boolean uploadArtifacts = true;
+    
+    /**
+     * Area path for created work items
+     */
+    private String areaPath;
+    
+    /**
+     * Iteration path for created work items
+     */
+    private String iterationPath;
+}
+
+
+  package com.ctgp.service.workspace;
+
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.Workspace;
+import com.ctgp.model.workspace.WorkspaceConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+/**
+ * Service for managing workspaces.
+ */
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class WorkspaceService {
+
+    private final ObjectMapper objectMapper;
+
+    @Value("${app.workspaces.root-directory:./workspaces}")
+    private String workspacesRootDirectory;
+
+    private static final String WORKSPACE_CONFIG_FILENAME = "workspace.json";
+    private static final String PROJECTS_DIRECTORY = "projects";
+
+    /**
+     * Creates a new workspace.
+     *
+     * @param name        The name of the workspace
+     * @param description The description of the workspace
+     * @return The created workspace
+     * @throws IOException If there's an error creating the workspace directory
+     */
+    public Workspace createWorkspace(String name, String description) throws IOException {
+        String id = UUID.randomUUID().toString();
+        Path workspacePath = Paths.get(workspacesRootDirectory, id);
+        
+        // Create workspace directory
+        Files.createDirectories(workspacePath);
+        
+        // Create projects directory
+        Files.createDirectories(workspacePath.resolve(PROJECTS_DIRECTORY));
+        
+        // Create default config
+        WorkspaceConfig config = new WorkspaceConfig();
+        
+        // Create workspace object
+        Workspace workspace = Workspace.builder()
+                .id(id)
+                .name(name)
+                .description(description)
+                .location(workspacePath)
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .projects(new ArrayList<>())
+                .config(config)
+                .build();
+        
+        // Save workspace configuration
+        saveWorkspaceConfig(workspace);
+        
+        log.info("Created new workspace: {} at {}", name, workspacePath);
+        return workspace;
+    }
+
+    /**
+     * Lists all available workspaces.
+     *
+     * @return A list of workspaces
+     */
+    public List<Workspace> listWorkspaces() {
+        File rootDir = new File(workspacesRootDirectory);
+        
+        if (!rootDir.exists() || !rootDir.isDirectory()) {
+            log.warn("Workspaces root directory does not exist: {}", workspacesRootDirectory);
+            return new ArrayList<>();
+        }
+        
+        File[] workspaceDirs = rootDir.listFiles(File::isDirectory);
+        if (workspaceDirs == null) {
+            return new ArrayList<>();
+        }
+        
+        return List.of(workspaceDirs).stream()
+                .map(dir -> {
+                    try {
+                        return loadWorkspace(dir.getName());
+                    } catch (IOException e) {
+                        log.error("Failed to load workspace: {}", dir.getName(), e);
+                        return null;
+                    }
+                })
+                .filter(workspace -> workspace != null)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Loads a workspace by ID.
+     *
+     * @param id The workspace ID
+     * @return The loaded workspace
+     * @throws IOException If there's an error loading the workspace
+     */
+    public Workspace loadWorkspace(String id) throws IOException {
+        Path workspacePath = Paths.get(workspacesRootDirectory, id);
+        Path configPath = workspacePath.resolve(WORKSPACE_CONFIG_FILENAME);
+        
+        if (!Files.exists(configPath)) {
+            throw new IOException("Workspace configuration does not exist: " + configPath);
+        }
+        
+        // Read workspace configuration
+        Workspace workspace = objectMapper.readValue(configPath.toFile(), Workspace.class);
+        workspace.setLocation(workspacePath);
+        
+        // Load projects
+        loadProjects(workspace);
+        
+        return workspace;
+    }
+
+    /**
+     * Saves workspace configuration.
+     *
+     * @param workspace The workspace to save
+     * @throws IOException If there's an error saving the configuration
+     */
+    public void saveWorkspaceConfig(Workspace workspace) throws IOException {
+        Path configPath = workspace.getLocation().resolve(WORKSPACE_CONFIG_FILENAME);
+        objectMapper.writeValue(configPath.toFile(), workspace);
+        workspace.setLastModifiedAt(LocalDateTime.now());
+    }
+
+    /**
+     * Deletes a workspace.
+     *
+     * @param id The workspace ID
+     * @throws IOException If there's an error deleting the workspace
+     */
+    public void deleteWorkspace(String id) throws IOException {
+        Path workspacePath = Paths.get(workspacesRootDirectory, id);
+        
+        if (!Files.exists(workspacePath)) {
+            throw new IOException("Workspace does not exist: " + workspacePath);
+        }
+        
+        FileUtils.deleteDirectory(workspacePath.toFile());
+        log.info("Deleted workspace: {}", id);
+    }
+
+    /**
+     * Creates a new project in a workspace.
+     *
+     * @param workspaceId The workspace ID
+     * @param name        The project name
+     * @param description The project description
+     * @param baseUrl     The base URL of the application under test
+     * @return The created project
+     * @throws IOException If there's an error creating the project
+     */
+    public Project createProject(String workspaceId, String name, String description, String baseUrl) 
+            throws IOException {
+        Workspace workspace = loadWorkspace(workspaceId);
+        
+        String projectId = UUID.randomUUID().toString();
+        Path projectPath = workspace.getLocation().resolve(PROJECTS_DIRECTORY).resolve(projectId);
+        
+        // Create project directory
+        Files.createDirectories(projectPath);
+        
+        // Create project object
+        Project project = Project.builder()
+                .id(projectId)
+                .name(name)
+                .description(description)
+                .baseUrl(baseUrl)
+                .relativePath(Paths.get(PROJECTS_DIRECTORY, projectId))
+                .createdAt(LocalDateTime.now())
+                .lastModifiedAt(LocalDateTime.now())
+                .build();
+        
+        // Add project to workspace
+        workspace.getProjects().add(project);
+        
+        // Save project configuration
+        saveProjectConfig(workspace, project);
+        
+        // Save workspace configuration
+        saveWorkspaceConfig(workspace);
+        
+        log.info("Created new project: {} in workspace: {}", name, workspaceId);
+        return project;
+    }
+
+    /**
+     * Loads projects in a workspace.
+     *
+     * @param workspace The workspace to load projects for
+     * @throws IOException If there's an error loading projects
+     */
+    private void loadProjects(Workspace workspace) throws IOException {
+        Path projectsPath = workspace.getLocation().resolve(PROJECTS_DIRECTORY);
+        
+        if (!Files.exists(projectsPath)) {
+            workspace.setProjects(new ArrayList<>());
+            return;
+        }
+        
+        File[] projectDirs = projectsPath.toFile().listFiles(File::isDirectory);
+        if (projectDirs == null) {
+            workspace.setProjects(new ArrayList<>());
+            return;
+        }
+        
+        List<Project> projects = new ArrayList<>();
+        
+        for (File projectDir : projectDirs) {
+            Path configPath = projectDir.toPath().resolve("project.json");
+            
+            if (Files.exists(configPath)) {
+                Project project = objectMapper.readValue(configPath.toFile(), Project.class);
+                projects.add(project);
+            }
+        }
+        
+        workspace.setProjects(projects);
+    }
+
+    /**
+     * Saves project configuration.
+     *
+     * @param workspace The workspace containing the project
+     * @param project   The project to save
+     * @throws IOException If there's an error saving the configuration
+     */
+    private void saveProjectConfig(Workspace workspace, Project project) throws IOException {
+        Path projectPath = workspace.getLocation().resolve(project.getRelativePath());
+        Path configPath = projectPath.resolve("project.json");
+        objectMapper.writeValue(configPath.toFile(), project);
+        project.setLastModifiedAt(LocalDateTime.now());
+    }
+}
+
+
+package com.ctgp.controller;
+
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.Workspace;
+import com.ctgp.service.workspace.WorkspaceService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.io.IOException;
+import java.util.List;
+
+/**
+ * REST controller for workspace operations.
+ */
+@RestController
+@RequestMapping("/api/workspaces")
+@RequiredArgsConstructor
+public class WorkspaceController {
+
+    private final WorkspaceService workspaceService;
+
+    /**
+     * Creates a new workspace.
+     *
+     * @param request The workspace creation request
+     * @return The created workspace
+     */
+    @PostMapping
+    public ResponseEntity<Workspace> createWorkspace(@Valid @RequestBody CreateWorkspaceRequest request) {
+        try {
+            Workspace workspace = workspaceService.createWorkspace(request.getName(), request.getDescription());
+            return ResponseEntity.status(HttpStatus.CREATED).body(workspace);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to create workspace: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Lists all workspaces.
+     *
+     * @return List of workspaces
+     */
+    @GetMapping
+    public ResponseEntity<List<Workspace>> listWorkspaces() {
+        List<Workspace> workspaces = workspaceService.listWorkspaces();
+        return ResponseEntity.ok(workspaces);
+    }
+
+    /**
+     * Gets a workspace by ID.
+     *
+     * @param id The workspace ID
+     * @return The workspace
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<Workspace> getWorkspace(@PathVariable String id) {
+        try {
+            Workspace workspace = workspaceService.loadWorkspace(id);
+            return ResponseEntity.ok(workspace);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Workspace not found: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Deletes a workspace.
+     *
+     * @param id The workspace ID
+     * @return No content response
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteWorkspace(@PathVariable String id) {
+        try {
+            workspaceService.deleteWorkspace(id);
+            return ResponseEntity.noContent().build();
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to delete workspace: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Creates a new project in a workspace.
+     *
+     * @param workspaceId The workspace ID
+     * @param request     The project creation request
+     * @return The created project
+     */
+    @PostMapping("/{workspaceId}/projects")
+    public ResponseEntity<Project> createProject(
+            @PathVariable String workspaceId,
+            @Valid @RequestBody CreateProjectRequest request) {
+        try {
+            Project project = workspaceService.createProject(
+                    workspaceId,
+                    request.getName(),
+                    request.getDescription(),
+                    request.getBaseUrl());
+            return ResponseEntity.status(HttpStatus.CREATED).body(project);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to create project: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Request for creating a workspace.
+     */
+    @Data
+    public static class CreateWorkspaceRequest {
+        @NotBlank(message = "Workspace name is required")
+        private String name;
+        private String description;
+    }
+
+    /**
+     * Request for creating a project.
+     */
+    @Data
+    public static class CreateProjectRequest {
+        @NotBlank(message = "Project name is required")
+        private String name;
+        private String description;
+        @NotBlank(message = "Base URL is required")
+        private String baseUrl;
+    }
+}
+
+
+package com.ctgp.service.analyzer;
+
+import com.ctgp.model.analyzer.*;
+import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
+import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Page;
+import com.microsoft.playwright.Playwright;
+import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+import org.springframework.stereotype.Service;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+
+/**
+ * Service for analyzing web applications to identify UI elements, forms, and navigation.
+ */
+@Service
+@Slf4j
+public class WebAnalyzerService {
+
+    private static final Set<String> INTERACTIVE_ELEMENTS = Set.of(
+            "a", "button", "input", "select", "textarea", "option", "checkbox", "radio"
+    );
+    
+    private static final Set<String> FORM_ELEMENTS = Set.of(
+            "input", "select", "textarea", "checkbox", "radio"
+    );
+    
+    private static final Map<String, ElementType> ELEMENT_TYPE_MAP = Map.of(
+            "a", ElementType.LINK,
+            "button", ElementType.BUTTON,
+            "input", ElementType.INPUT,
+            "select", ElementType.SELECT,
+            "textarea", ElementType.TEXTAREA,
+            "checkbox", ElementType.CHECKBOX,
+            "radio", ElementType.RADIO
+    );
+
+    /**
+     * Analyze a web page to identify interactive elements, forms, and navigation.
+     *
+     * @param url The URL to analyze
+     * @return The analysis result
+     */
+    public WebAnalysisResult analyzePage(String url) {
+        log.info("Analyzing web page: {}", url);
+        
+        List<WebElement> elements = new ArrayList<>();
+        List<WebForm> forms = new ArrayList<>();
+        
+        // Use Playwright to capture the page content
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(
+                    new BrowserType.LaunchOptions().setHeadless(true)
+            );
+            
+            BrowserContext context = browser.newContext(
+                    new Browser.NewContextOptions()
+                            .setViewportSize(1280, 800)
+                            .setUserAgent("Contextual Test Platform Analyzer")
+            );
+            
+            Page page = context.newPage();
+            page.navigate(url);
+            
+            // Wait for page to load completely
+            page.waitForLoadState();
+            
+            // Get the HTML content
+            String html = page.content();
+            
+            // Parse with JSoup
+            Document document = Jsoup.parse(html, url);
+            
+            // Extract interactive elements
+            elements = extractInteractiveElements(document);
+            
+            // Extract forms
+            forms = extractForms(document);
+            
+            // Take a screenshot
+            byte[] screenshot = page.screenshot();
+            
+            browser.close();
+            
+            // Create the analysis result
+            return WebAnalysisResult.builder()
+                    .url(url)
+                    .title(document.title())
+                    .elements(elements)
+                    .forms(forms)
+                    .timestamp(System.currentTimeMillis())
+                    .screenshot(screenshot)
+                    .build();
+        } catch (Exception e) {
+            log.error("Error analyzing web page: {}", url, e);
+            throw new RuntimeException("Failed to analyze web page: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Extract interactive elements from a document.
+     *
+     * @param document The document to analyze
+     * @return List of web elements
+     */
+    private List<WebElement> extractInteractiveElements(Document document) {
+        List<WebElement> elements = new ArrayList<>();
+        
+        // Map to track elements by ID to avoid duplicates
+        Map<String, WebElement> elementMap = new ConcurrentHashMap<>();
+        
+        // Process each type of interactive element
+        for (String tagName : INTERACTIVE_ELEMENTS) {
+            Elements tagElements = document.getElementsByTag(tagName);
+            
+            for (Element element : tagElements) {
+                String id = element.id();
+                String name = element.attr("name");
+                String uniqueId = !id.isEmpty() ? id : (!name.isEmpty() ? name : element.cssSelector());
+                
+                // Skip if we already processed this element
+                if (elementMap.containsKey(uniqueId) && !uniqueId.equals(element.cssSelector())) {
+                    continue;
+                }
+                
+                // Create web element
+                WebElement webElement = createWebElement(element);
+                elementMap.put(uniqueId, webElement);
+                elements.add(webElement);
+            }
+        }
+        
+        return elements;
+    }
+
+    /**
+     * Create a WebElement from an Element.
+     *
+     * @param element The JSoup element
+     * @return The web element
+     */
+    private WebElement createWebElement(Element element) {
+        // Determine element type
+        ElementType type = ELEMENT_TYPE_MAP.getOrDefault(element.tagName(), ElementType.OTHER);
+        
+        // For inputs, further refine the type
+        if (type == ElementType.INPUT) {
+            String inputType = element.attr("type").toLowerCase();
+            switch (inputType) {
+                case "text":
+                case "email":
+                case "password":
+                case "number":
+                case "tel":
+                case "url":
+                case "search":
+                    type = ElementType.TEXT_INPUT;
+                    break;
+                case "checkbox":
+                    type = ElementType.CHECKBOX;
+                    break;
+                case "radio":
+                    type = ElementType.RADIO;
+                    break;
+                case "button":
+                case "submit":
+                case "reset":
+                    type = ElementType.BUTTON;
+                    break;
+                case "file":
+                    type = ElementType.FILE_INPUT;
+                    break;
+                case "date":
+                case "datetime-local":
+                case "month":
+                case "time":
+                case "week":
+                    type = ElementType.DATE_INPUT;
+                    break;
+                default:
+                    type = ElementType.INPUT;
+            }
+        }
+        
+        // Create selectors
+        Map<SelectorType, String> selectors = createSelectors(element);
+        
+        // Get attributes
+        Map<String, String> attributes = new HashMap<>();
+        element.attributes().forEach(attr -> attributes.put(attr.getKey(), attr.getValue()));
+        
+        // Text content
+        String text = element.text();
+        
+        // Create the web element
+        return WebElement.builder()
+                .tagName(element.tagName())
+                .type(type)
+                .id(element.id())
+                .name(element.attr("name"))
+                .value(element.val())
+                .text(text)
+                .visible(isElementVisible(element))
+                .selectors(selectors)
+                .attributes(attributes)
+                .build();
+    }
+
+    /**
+     * Create selectors for an element.
+     *
+     * @param element The element
+     * @return Map of selector types to selector values
+     */
+    private Map<SelectorType, String> createSelectors(Element element) {
+        Map<SelectorType, String> selectors = new HashMap<>();
+        
+        // Add ID selector if available
+        if (!element.id().isEmpty()) {
+            selectors.put(SelectorType.ID, "#" + element.id());
+        }
+        
+        // Add CSS selector
+        selectors.put(SelectorType.CSS, element.cssSelector());
+        
+        // Add XPath selector
+        String xpath = createXPathSelector(element);
+        if (!xpath.isEmpty()) {
+            selectors.put(SelectorType.XPATH, xpath);
+        }
+        
+        // Add text selector if it has text
+        if (!element.text().trim().isEmpty()) {
+            selectors.put(SelectorType.TEXT, element.text().trim());
+        }
+        
+        return selectors;
+    }
+
+    /**
+     * Create an XPath selector for an element.
+     *
+     * @param element The element
+     * @return The XPath selector
+     */
+    private String createXPathSelector(Element element) {
+        StringBuilder xpathBuilder = new StringBuilder();
+        
+        // Add ID if available
+        if (!element.id().isEmpty()) {
+            return "//*[@id='" + element.id() + "']";
+        }
+        
+        // Generate a basic path
+        String tagName = element.tagName();
+        
+        // If it has unique attributes, use them
+        if (!element.attr("name").isEmpty()) {
+            return "//" + tagName + "[@name='" + element.attr("name") + "']";
+        }
+        
+        // If it has text, use it
+        if (!element.text().trim().isEmpty() && element.children().isEmpty()) {
+            return "//" + tagName + "[text()='" + element.text().trim() + "']";
+        }
+        
+        // Fallback to position-based XPath
+        return getPositionalXPath(element);
+    }
+
+    /**
+     * Get a positional XPath for an element.
+     *
+     * @param element The element
+     * @return The positional XPath
+     */
+    private String getPositionalXPath(Element element) {
+        StringBuilder xpathBuilder = new StringBuilder();
+        Elements siblings = element.parent().children();
+        int position = 0;
+        
+        for (int i = 0; i < siblings.size(); i++) {
+            if (siblings.get(i).tagName().equals(element.tagName())) {
+                position++;
+                if (siblings.get(i).equals(element)) {
+                    break;
+                }
+            }
+        }
+        
+        return "//" + element.tagName() + "[" + position + "]";
+    }
+
+    /**
+     * Extract forms from a document.
+     *
+     * @param document The document to analyze
+     * @return List of web forms
+     */
+    private List<WebForm> extractForms(Document document) {
+        List<WebForm> forms = new ArrayList<>();
+        
+        // Get all form elements
+        Elements formElements = document.getElementsByTag("form");
+        
+        for (Element formElement : formElements) {
+            // Get form fields
+            List<WebElement> fields = new ArrayList<>();
+            
+            // Find all form input elements
+            for (String fieldTag : FORM_ELEMENTS) {
+                Elements fieldElements = formElement.getElementsByTag(fieldTag);
+                for (Element fieldElement : fieldElements) {
+                    WebElement field = createWebElement(fieldElement);
+                    fields.add(field);
+                }
+            }
+            
+            // Find the submit button
+            WebElement submitButton = null;
+            Elements submitElements = formElement.getElementsByAttributeValue("type", "submit");
+            if (!submitElements.isEmpty()) {
+                submitButton = createWebElement(submitElements.first());
+            }
+            
+            // Create form object
+            WebForm form = WebForm.builder()
+                    .id(formElement.id())
+                    .name(formElement.attr("name"))
+                    .action(formElement.attr("action"))
+                    .method(formElement.attr("method"))
+                    .fields(fields)
+                    .submitButton(submitButton)
+                    .build();
+            
+            forms.add(form);
+        }
+        
+        return forms;
+    }
+
+    /**
+     * Check if an element is visible.
+     *
+     * @param element The element to check
+     * @return True if the element is likely visible
+     */
+    private boolean isElementVisible(Element element) {
+        String display = element.attr("style").contains("display:") 
+                ? element.attr("style").replaceAll(".*display:\\s*([^;]*).*", "$1") 
+                : "";
+        String visibility = element.attr("style").contains("visibility:") 
+                ? element.attr("style").replaceAll(".*visibility:\\s*([^;]*).*", "$1") 
+                : "";
+        
+        return !display.equals("none") && !visibility.equals("hidden");
+    }
+
+    /**
+     * Analyze multiple pages of a web application.
+     *
+     * @param baseUrl The base URL of the application
+     * @param maxPages Maximum number of pages to analyze
+     * @return The analysis result
+     */
+    public WebApplicationAnalysis analyzeApplication(String baseUrl, int maxPages) {
+        log.info("Analyzing web application: {} (max pages: {})", baseUrl, maxPages);
+        
+        // Set of visited URLs
+        Set<String> visitedUrls = new HashSet<>();
+        
+        // Set of URLs to visit
+        Set<String> urlsToVisit = new HashSet<>();
+        urlsToVisit.add(baseUrl);
+        
+        // Results
+        List<WebAnalysisResult> pageResults = new ArrayList<>();
+        
+        // Use Playwright for crawling
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(
+                    new BrowserType.LaunchOptions().setHeadless(true)
+            );
+            
+            BrowserContext context = browser.newContext(
+                    new Browser.NewContextOptions()
+                            .setViewportSize(1280, 800)
+                            .setUserAgent("Contextual Test Platform Analyzer")
+            );
+            
+            Page page = context.newPage();
+            
+            // Process pages until we reach the limit or run out of URLs
+            while (!urlsToVisit.isEmpty() && pageResults.size() < maxPages) {
+                // Get the next URL to visit
+                String url = urlsToVisit.iterator().next();
+                urlsToVisit.remove(url);
+                
+                // Skip if we've already visited this URL
+                if (visitedUrls.contains(url)) {
+                    continue;
+                }
+                
+                // Mark as visited
+                visitedUrls.add(url);
+                
+                // Analyze the page
+                WebAnalysisResult result = analyzePage(url);
+                pageResults.add(result);
+                
+                // Extract links to other pages in the same domain
+                List<String> links = result.getElements().stream()
+                        .filter(element -> element.getType() == ElementType.LINK)
+                        .map(element -> element.getAttributes().get("href"))
+                        .filter(href -> href != null && !href.isEmpty() && !href.startsWith("#"))
+                        .map(href -> normalizeUrl(url, href))
+                        .filter(href -> href.startsWith(baseUrl))
+                        .collect(Collectors.toList());
+                
+                // Add new links to visit
+                for (String link : links) {
+                    if (!visitedUrls.contains(link)) {
+                        urlsToVisit.add(link);
+                    }
+                }
+            }
+            
+            browser.close();
+            
+            // Create the application analysis result
+            return WebApplicationAnalysis.builder()
+                    .baseUrl(baseUrl)
+                    .pageResults(pageResults)
+                    .build();
+        } catch (Exception e) {
+            log.error("Error analyzing web application: {}", baseUrl, e);
+            throw new RuntimeException("Failed to analyze web application: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Normalize a URL relative to a base URL.
+     *
+     * @param baseUrl The base URL
+     * @param href The href value
+     * @return The normalized URL
+     */
+    private String normalizeUrl(String baseUrl, String href) {
+        if (href.startsWith("http")) {
+            return href;
+        }
+        
+        if (href.startsWith("/")) {
+            String domain = baseUrl.replaceAll("(https?://[^/]+).*", "$1");
+            return domain + href;
+        }
+        
+        String base = baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
+        return base + href;
+    }
+}
+
+
+package com.ctgp.model.analyzer;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Represents a web element identified during analysis.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebElement {
+    
+    /**
+     * HTML tag name of the element
+     */
+    private String tagName;
+    
+    /**
+     * Type of the element
+     */
+    private ElementType type;
+    
+    /**
+     * ID attribute of the element
+     */
+    private String id;
+    
+    /**
+     * Name attribute of the element
+     */
+    private String name;
+    
+    /**
+     * Value attribute of the element
+     */
+    private String value;
+    
+    /**
+     * Text content of the element
+     */
+    private String text;
+    
+    /**
+     * Whether the element is visible
+     */
+    private boolean visible;
+    
+    /**
+     * Different types of selectors that can be used to locate the element
+     */
+    @Builder.Default
+    private Map<SelectorType, String> selectors = new HashMap<>();
+    
+    /**
+     * All attributes of the element
+     */
+    @Builder.Default
+    private Map<String, String> attributes = new HashMap<>();
+}
+
+/**
+ * Represents a web form identified during analysis.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebForm {
+    
+    /**
+     * ID attribute of the form
+     */
+    private String id;
+    
+    /**
+     * Name attribute of the form
+     */
+    private String name;
+    
+    /**
+     * Action attribute (form submission URL)
+     */
+    private String action;
+    
+    /**
+     * Method attribute (GET or POST)
+     */
+    private String method;
+    
+    /**
+     * Form fields
+     */
+    @Builder.Default
+    private List<WebElement> fields = List.of();
+    
+    /**
+     * Submit button
+     */
+    private WebElement submitButton;
+}
+
+/**
+ * Types of web elements.
+ */
+public enum ElementType {
+    BUTTON,
+    LINK,
+    INPUT,
+    TEXT_INPUT,
+    CHECKBOX,
+    RADIO,
+    SELECT,
+    TEXTAREA,
+    FILE_INPUT,
+    DATE_INPUT,
+    OTHER
+}
+
+/**
+ * Types of selectors.
+ */
+public enum SelectorType {
+    ID,
+    CSS,
+    XPATH,
+    TEXT
+}
+
+/**
+ * Result of analyzing a single web page.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebAnalysisResult {
+    
+    /**
+     * URL of the analyzed page
+     */
+    private String url;
+    
+    /**
+     * Title of the page
+     */
+    private String title;
+    
+    /**
+     * Interactive elements found on the page
+     */
+    @Builder.Default
+    private List<WebElement> elements = List.of();
+    
+    /**
+     * Forms found on the page
+     */
+    @Builder.Default
+    private List<WebForm> forms = List.of();
+    
+    /**
+     * Timestamp of the analysis
+     */
+    private long timestamp;
+    
+    /**
+     * Screenshot of the page
+     */
+    private byte[] screenshot;
+}
+
+/**
+ * Result of analyzing a web application (multiple pages).
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebApplicationAnalysis {
+    
+    /**
+     * Base URL of the application
+     */
+    private String baseUrl;
+    
+    /**
+     * Analysis results for individual pages
+     */
+    @Builder.Default
+    private List<WebAnalysisResult> pageResults = List.of();
+}
+
+
+package com.ctgp.controller;
+
+import com.ctgp.model.analyzer.WebAnalysisResult;
+import com.ctgp.model.analyzer.WebApplicationAnalysis;
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.model.workspace.Workspace;
+import com.ctgp.service.analyzer.WebAnalyzerService;
+import com.ctgp.service.generator.TestGeneratorService;
+import com.ctgp.service.workspace.WorkspaceService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import lombok.Data;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.io.IOException;
+
+/**
+ * REST controller for web application analysis and test generation.
+ */
+@RestController
+@RequestMapping("/api/analyzer")
+@RequiredArgsConstructor
+public class AnalyzerController {
+
+    private final WebAnalyzerService webAnalyzerService;
+    private final TestGeneratorService testGeneratorService;
+    private final WorkspaceService workspaceService;
+
+    /**
+     * Analyze a single web page.
+     *
+     * @param request The analysis request
+     * @return The analysis result
+     */
+    @PostMapping("/analyze-page")
+    public ResponseEntity<WebAnalysisResult> analyzePage(@Valid @RequestBody AnalyzePageRequest request) {
+        try {
+            WebAnalysisResult result = webAnalyzerService.analyzePage(request.getUrl());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to analyze page: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Analyze a web application.
+     *
+     * @param request The analysis request
+     * @return The analysis result
+     */
+    @PostMapping("/analyze-application")
+    public ResponseEntity<WebApplicationAnalysis> analyzeApplication(
+            @Valid @RequestBody AnalyzeApplicationRequest request) {
+        try {
+            WebApplicationAnalysis result = webAnalyzerService.analyzeApplication(
+                    request.getBaseUrl(), request.getMaxPages());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to analyze application: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Generate tests from a web application analysis.
+     *
+     * @param workspaceId The workspace ID
+     * @param projectId The project ID
+     * @param request The test generation request
+     * @return The generated test suite
+     */
+    @PostMapping("/generate-tests/{workspaceId}/{projectId}")
+    public ResponseEntity<TestSuite> generateTests(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @Valid @RequestBody GenerateTestsRequest request) {
+        try {
+            // Load workspace
+            Workspace workspace = workspaceService.loadWorkspace(workspaceId);
+            
+            // Find project
+            Project project = workspace.getProjects().stream()
+                    .filter(p -> p.getId().equals(projectId))
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Project not found: " + projectId));
+            
+            // Analyze the application
+            WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(
+                    request.getBaseUrl(), request.getMaxPages());
+            
+            // Generate test suite
+            TestSuite testSuite = testGeneratorService.generateTestSuite(
+                    project, workspace.getLocation(), analysis);
+            
+            return ResponseEntity.ok(testSuite);
+        } catch (IOException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, 
+                    "Workspace or project not found: " + e.getMessage(), e);
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, 
+                    "Failed to generate tests: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Request for analyzing a single web page.
+     */
+    @Data
+    public static class AnalyzePageRequest {
+        @NotBlank(message = "URL is required")
+        private String url;
+    }
+
+    /**
+     * Request for analyzing a web application.
+     */
+    @Data
+    public static class AnalyzeApplicationRequest {
+        @NotBlank(message = "Base URL is required")
+        private String baseUrl;
+        
+        @Min(value = 1, message = "Maximum pages must be at least 1")
+        private int maxPages = 10;
+    }
+
+    /**
+     * Request for generating tests.
+     */
+    @Data
+    public static class GenerateTestsRequest {
+        @NotBlank(message = "Base URL is required")
+        private String baseUrl;
+        
+        @Min(value = 1, message = "Maximum pages must be at least 1")
+        private int maxPages = 10;
+    }
+}
+
+
+
+package com.ctgp.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/**
+ * Application configuration.
+ */
+@Configuration
+public class AppConfig {
+
+    /**
+     * Configure CORS for the application.
+     *
+     * @return WebMvcConfigurer with CORS configuration
+     */
+    @Bean
+    public WebMvcConfigurer corsConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/api/**")
+                        .allowedOrigins("http://localhost:3000")
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        .allowCredentials(true);
+            }
+        };
+    }
+
+    /**
+     * Configure ObjectMapper for the application.
+     *
+     * @return Configured ObjectMapper
+     */
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.registerModule(new JavaTimeModule());
+        return objectMapper;
+    }
+}
+
+
+application properties
+---------------------------
+
+# Server configuration
+server.port=8080
+server.servlet.context-path=/
+spring.application.name=contextual-test-platform
+
+# Logging configuration
+logging.level.root=INFO
+logging.level.com.ctgp=DEBUG
+logging.pattern.console=%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n
+
+# Jackson configuration
+spring.jackson.serialization.write-dates-as-timestamps=false
+spring.jackson.deserialization.fail-on-unknown-properties=false
+
+# Application-specific configuration
+app.workspaces.root-directory=./workspaces
+
+# Actuator endpoints
+management.endpoints.web.exposure.include=health,info,metrics
+management.endpoint.health.show-details=when_authorized
+
+# CORS configuration
+spring.mvc.cors.allowed-origins=http://localhost:3000
+spring.mvc.cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS
+spring.mvc.cors.allowed-headers=*
+spring.mvc.cors.allow-credentials=true
+
+# Security - Basic authentication is disabled by default
+# To enable, uncomment the following lines and add required dependencies
+#spring.security.user.name=admin
+#spring.security.user.password=admin
+
+
+// src/App.tsx
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
+// Components
+import Navbar from './components/Navbar';
+import Sidebar from './components/Sidebar';
+
+// Pages
+import Dashboard from './pages/Dashboard';
+import WorkspaceList from './pages/workspace/WorkspaceList';
+import WorkspaceDetail from './pages/workspace/WorkspaceDetail';
+import ProjectDetail from './pages/project/ProjectDetail';
+import TestSuiteDetail from './pages/testsuite/TestSuiteDetail';
+import WebAnalyzer from './pages/analyzer/WebAnalyzer';
+import Settings from './pages/Settings';
+
+const App: React.FC = () => {
+  return (
+    <Router>
+      <div className="app">
+        <Navbar />
+        <div className="main-container">
+          <Sidebar />
+          <main className="content">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/workspaces" element={<WorkspaceList />} />
+              <Route path="/workspaces/:workspaceId" element={<WorkspaceDetail />} />
+              <Route path="/workspaces/:workspaceId/projects/:projectId" element={<ProjectDetail />} />
+              <Route path="/workspaces/:workspaceId/projects/:projectId/testsuites/:testSuiteId" element={<TestSuiteDetail />} />
+              <Route path="/analyzer" element={<WebAnalyzer />} />
+              <Route path="/settings" element={<Settings />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
+      <ToastContainer position="bottom-right" />
+    </Router>
+  );
+};
+
+export default App;
+
+// src/pages/workspace/WorkspaceList.tsx
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { FaPlus, FaFolder, FaTrash, FaSpinner } from 'react-icons/fa';
+import { formatDistanceToNow } from 'date-fns';
+import { Workspace } from '../../types/workspace';
+import workspaceService from '../../services/workspaceService';
+
+const WorkspaceList: React.FC = () => {
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+  const [newWorkspace, setNewWorkspace] = useState({
+    name: '',
+    description: ''
+  });
+
+  // Fetch workspaces on component mount
+  useEffect(() => {
+    fetchWorkspaces();
+  }, []);
+
+  const fetchWorkspaces = async () => {
+    setLoading(true);
+    try {
+      const data = await workspaceService.listWorkspaces();
+      setWorkspaces(data);
+    } catch (error) {
+      console.error('Error fetching workspaces:', error);
+      toast.error('Failed to load workspaces');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateWorkspace = async () => {
+    try {
+      if (!newWorkspace.name.trim()) {
+        toast.warning('Workspace name is required');
+        return;
+      }
+
+      const createdWorkspace = await workspaceService.createWorkspace(
+        newWorkspace.name,
+        newWorkspace.description
+      );
+      
+      setWorkspaces([...workspaces, createdWorkspace]);
+      setShowCreateModal(false);
+      setNewWorkspace({ name: '', description: '' });
+      toast.success('Workspace created successfully');
+    } catch (error) {
+      console.error('Error creating workspace:', error);
+      toast.error('Failed to create workspace');
+    }
+  };
+
+  const handleDeleteWorkspace = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this workspace?')) {
+      return;
+    }
+
+    try {
+      await workspaceService.deleteWorkspace(id);
+      setWorkspaces(workspaces.filter(workspace => workspace.id !== id));
+      toast.success('Workspace deleted successfully');
+    } catch (error) {
+      console.error('Error deleting workspace:', error);
+      toast.error('Failed to delete workspace');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading workspaces...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="workspace-list-container">
+      <div className="page-header">
+        <h1>Workspaces</h1>
+        <button 
+          className="btn btn-primary" 
+          onClick={() => setShowCreateModal(true)}
+        >
+          <FaPlus /> New Workspace
+        </button>
+      </div>
+
+      {workspaces.length === 0 ? (
+        <div className="empty-state">
+          <FaFolder size={48} />
+          <h2>No workspaces found</h2>
+          <p>Create a new workspace to get started</p>
+          <button 
+            className="btn btn-primary" 
+            onClick={() => setShowCreateModal(true)}
+          >
+            <FaPlus /> New Workspace
+          </button>
+        </div>
+      ) : (
+        <div className="workspace-grid">
+          {workspaces.map(workspace => (
+            <div key={workspace.id} className="workspace-card">
+              <div className="workspace-card-header">
+                <FaFolder size={24} />
+                <button 
+                  className="btn btn-icon delete-btn"
+                  onClick={() => handleDeleteWorkspace(workspace.id)}
+                >
+                  <FaTrash />
+                </button>
+              </div>
+              <Link to={`/workspaces/${workspace.id}`} className="workspace-card-content">
+                <h3>{workspace.name}</h3>
+                <p className="workspace-description">{workspace.description}</p>
+                <div className="workspace-meta">
+                  <span>{workspace.projects.length} projects</span>
+                  <span>Updated {formatDistanceToNow(new Date(workspace.lastModifiedAt))} ago</span>
+                </div>
+              </Link>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create Workspace Modal */}
+      {showCreateModal && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Create New Workspace</h2>
+              <button 
+                className="btn btn-icon close-btn"
+                onClick={() => setShowCreateModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label htmlFor="workspace-name">Name</label>
+                <input 
+                  type="text" 
+                  id="workspace-name" 
+                  value={newWorkspace.name}
+                  onChange={(e) => setNewWorkspace({...newWorkspace, name: e.target.value})}
+                  placeholder="Enter workspace name"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="workspace-description">Description</label>
+                <textarea 
+                  id="workspace-description" 
+                  value={newWorkspace.description}
+                  onChange={(e) => setNewWorkspace({...newWorkspace, description: e.target.value})}
+                  placeholder="Enter workspace description"
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowCreateModal(false)}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleCreateWorkspace}
+              >
+                Create Workspace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default WorkspaceList;
+
+
+// src/services/workspaceService.ts
+import { Workspace, Project } from '../types/workspace';
+import api from './api';
+
+/**
+ * Service for workspace-related API calls
+ */
+const workspaceService = {
+  /**
+   * Get a list of all workspaces
+   */
+  async listWorkspaces(): Promise<Workspace[]> {
+    const response = await api.get('/api/workspaces');
+    return response.data;
+  },
+
+  /**
+   * Get a workspace by ID
+   * @param id Workspace ID
+   */
+  async getWorkspace(id: string): Promise<Workspace> {
+    const response = await api.get(`/api/workspaces/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Create a new workspace
+   * @param name Workspace name
+   * @param description Workspace description
+   */
+  async createWorkspace(name: string, description: string): Promise<Workspace> {
+    const response = await api.post('/api/workspaces', { name, description });
+    return response.data;
+  },
+
+  /**
+   * Delete a workspace
+   * @param id Workspace ID
+   */
+  async deleteWorkspace(id: string): Promise<void> {
+    await api.delete(`/api/workspaces/${id}`);
+  },
+
+  /**
+   * Create a new project in a workspace
+   * @param workspaceId Workspace ID
+   * @param name Project name
+   * @param description Project description
+   * @param baseUrl Base URL of the application under test
+   */
+  async createProject(
+    workspaceId: string,
+    name: string,
+    description: string,
+    baseUrl: string
+  ): Promise<Project> {
+    const response = await api.post(`/api/workspaces/${workspaceId}/projects`, {
+      name,
+      description,
+      baseUrl
+    });
+    return response.data;
+  }
+};
+
+export default workspaceService;
+
+
+    @Builder.Default
+    private List<TestSuite> testSuites = new ArrayList<>();
+    
+    /**
+     * Project-specific configuration
+     */
+    @Builder.Default
+    private Map<String, Object> configuration = new HashMap<>();
+    
+    /**
+     * Azure DevOps integration settings
+     */
+    private AzureDevOpsConfig azureDevOpsConfig;
+}
+
+
+// src/services/workspaceService.ts
+import { Workspace, Project } from '../types/workspace';
+import api from './api';
+
+/**
+ * Service for workspace-related API calls
+ */
+const workspaceService = {
+  /**
+   * Get a list of all workspaces
+   */
+  async listWorkspaces(): Promise<Workspace[]> {
+    const response = await api.get('/api/workspaces');
+    return response.data;
+  },
+
+  /**
+   * Get a workspace by ID
+   * @param id Workspace ID
+   */
+  async getWorkspace(id: string): Promise<Workspace> {
+    const response = await api.get(`/api/workspaces/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Create a new workspace
+   * @param name Workspace name
+   * @param description Workspace description
+   */
+  async createWorkspace(name: string, description: string): Promise<Workspace> {
+    const response = await api.post('/api/workspaces', { name, description });
+    return response.data;
+  },
+
+  /**
+   * Delete a workspace
+   * @param id Workspace ID
+   */
+  async deleteWorkspace(id: string): Promise<void> {
+    await api.delete(`/api/workspaces/${id}`);
+  },
+
+  /**
+   * Create a new project in a workspace
+   * @param workspaceId Workspace ID
+   * @param name Project name
+   * @param description Project description
+   * @param baseUrl Base URL of the application under test
+   */
+  async createProject(
+    workspaceId: string,
+    name: string,
+    description: string,
+    baseUrl: string
+  ): Promise<Project> {
+    const response = await api.post(`/api/workspaces/${workspaceId}/projects`, {
+      name,
+      description,
+      baseUrl
+    });
+    return response.data;
+  }
+};
+
+export default workspaceService;
+
+// src/services/api.ts
+import axios from 'axios';
+import { toast } from 'react-toastify';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+
+// Create an axios instance
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Add request interceptor
+api.interceptors.request.use(
+  (config) => {
+    // You can add auth tokens here if needed
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor
+api.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  (error) => {
+    let errorMessage = 'An unexpected error occurred';
+    
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      const { status, data } = error.response;
+      
+      switch (status) {
+        case 400:
+          errorMessage = data.message || 'Bad request';
+          break;
+        case 401:
+          errorMessage = 'Unauthorized. Please log in again.';
+          break;
+        case 403:
+          errorMessage = 'You do not have permission to perform this action';
+          break;
+        case 404:
+          errorMessage = 'The requested resource was not found';
+          break;
+        case 500:
+          errorMessage = 'Server error. Please try again later.';
+          break;
+        default:
+          errorMessage = data.message || `Error ${status}: ${data}`;
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      errorMessage = 'No response received from server. Please check your network connection.';
+    }
+    
+    // Show toast notification for errors
+    toast.error(errorMessage);
+    
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+
+// src/types/workspace.ts
+
+/**
+ * Workspace model
+ */
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  location: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  projects: Project[];
+  config: WorkspaceConfig;
+}
+
+/**
+ * Project model
+ */
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  relativePath: string;
+  baseUrl: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  testSuites: TestSuite[];
+  configuration: Record<string, any>;
+  azureDevOpsConfig?: AzureDevOpsConfig;
+}
+
+/**
+ * Test suite model
+ */
+export interface TestSuite {
+  id: string;
+  name: string;
+  description: string;
+  relativePath: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  testCases: TestCase[];
+  tags: string[];
+}
+
+/**
+ * Test case model
+ */
+export interface TestCase {
+  id: string;
+  name: string;
+  description: string;
+  scriptPath: string;
+  type: string;
+  priority: number;
+  createdAt: string;
+  lastModifiedAt: string;
+  tags: string[];
+  testData: Record<string, any>;
+  externalReferences: Record<string, string>;
+  autoGenerated: boolean;
+  estimatedExecutionTime: number;
+}
+
+/**
+ * Workspace configuration
+ */
+export interface WorkspaceConfig {
+  defaultBrowser: string;
+  defaultViewportWidth: number;
+  defaultViewportHeight: number;
+  defaultTimeout: number;
+  recordVideo: boolean;
+  screenshotOnFailure: boolean;
+  headless: boolean;
+  customProperties: Record<string, any>;
+}
+
+/**
+ * Azure DevOps integration configuration
+ */
+export interface AzureDevOpsConfig {
+  organizationUrl: string;
+  projectName: string;
+  personalAccessToken: string;
+  teamName: string;
+  testPlanId: string;
+  autoCreateWorkItems: boolean;
+  workItemType: string;
+  uploadArtifacts: boolean;
+  areaPath: string;
+  iterationPath: string;
+}
+
+
+
+// src/types/analyzer.ts
+
+/**
+ * Web element types
+ */
+export enum ElementType {
+  BUTTON = 'BUTTON',
+  LINK = 'LINK',
+  INPUT = 'INPUT',
+  TEXT_INPUT = 'TEXT_INPUT',
+  CHECKBOX = 'CHECKBOX',
+  RADIO = 'RADIO',
+  SELECT = 'SELECT',
+  TEXTAREA = 'TEXTAREA',
+  FILE_INPUT = 'FILE_INPUT',
+  DATE_INPUT = 'DATE_INPUT',
+  OTHER = 'OTHER'
+}
+
+/**
+ * Selector types
+ */
+export enum SelectorType {
+  ID = 'ID',
+  CSS = 'CSS',
+  XPATH = 'XPATH',
+  TEXT = 'TEXT'
+}
+
+/**
+ * Web element model
+ */
+export interface WebElement {
+  tagName: string;
+  type: ElementType;
+  id?: string;
+  name?: string;
+  value?: string;
+  text?: string;
+  visible: boolean;
+  selectors: Record<SelectorType, string>;
+  attributes: Record<string, string>;
+}
+
+/**
+ * Web form model
+ */
+export interface WebForm {
+  id?: string;
+  name?: string;
+  action?: string;
+  method?: string;
+  fields: WebElement[];
+  submitButton?: WebElement;
+}
+
+/**
+ * Web page analysis result
+ */
+export interface WebAnalysisResult {
+  url: string;
+  title: string;
+  elements: WebElement[];
+  forms: WebForm[];
+  timestamp: number;
+  screenshot?: string; // Base64 encoded image
+}
+
+/**
+ * Web application analysis result
+ */
+export interface WebApplicationAnalysis {
+  baseUrl: string;
+  pageResults: WebAnalysisResult[];
+}
+
+
+// src/services/analyzerService.ts
+import { WebAnalysisResult, WebApplicationAnalysis } from '../types/analyzer';
+import { TestSuite } from '../types/workspace';
+import api from './api';
+
+/**
+ * Service for web application analysis and test generation
+ */
+const analyzerService = {
+  /**
+   * Analyze a single web page
+   * @param url URL to analyze
+   */
+  async analyzePage(url: string): Promise<WebAnalysisResult> {
+    const response = await api.post('/api/analyzer/analyze-page', { url });
+    return response.data;
+  },
+
+  /**
+   * Analyze a web application
+   * @param baseUrl Base URL of the application
+   * @param maxPages Maximum number of pages to analyze
+   */
+  async analyzeApplication(baseUrl: string, maxPages: number = 10): Promise<WebApplicationAnalysis> {
+    const response = await api.post('/api/analyzer/analyze-application', { baseUrl, maxPages });
+    return response.data;
+  },
+
+  /**
+   * Generate tests from a web application analysis
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param baseUrl Base URL of the application
+   * @param maxPages Maximum number of pages to analyze
+   */
+  async generateTests(
+    workspaceId: string,
+    projectId: string,
+    baseUrl: string,
+    maxPages: number = 10
+  ): Promise<TestSuite> {
+    const response = await api.post(
+      `/api/analyzer/generate-tests/${workspaceId}/${projectId}`,
+      { baseUrl, maxPages }
+    );
+    return response.data;
+  }
+};
+
+export default analyzerService;
+
+
+// src/pages/analyzer/WebAnalyzer.tsx
+import React, { useState, useEffect } from 'react';
+import { toast } from 'react-toastify';
+import { FaSpinner, FaSearch, FaCode, FaList, FaFile } from 'react-icons/fa';
+import { WebAnalysisResult, WebApplicationAnalysis, WebElement, WebForm } from '../../types/analyzer';
+import { Workspace, Project } from '../../types/workspace';
+import analyzerService from '../../services/analyzerService';
+import workspaceService from '../../services/workspaceService';
+
+/**
+ * Web Analyzer Component
+ * This component provides UI for analyzing web applications and generating tests
+ */
+const WebAnalyzer: React.FC = () => {
+  // Analysis state
+  const [urlToAnalyze, setUrlToAnalyze] = useState<string>('');
+  const [maxPages, setMaxPages] = useState<number>(5);
+  const [analyzing, setAnalyzing] = useState<boolean>(false);
+  const [generatingTests, setGeneratingTests] = useState<boolean>(false);
+  const [singlePageResult, setSinglePageResult] = useState<WebAnalysisResult | null>(null);
+  const [applicationResult, setApplicationResult] = useState<WebApplicationAnalysis | null>(null);
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'elements' | 'forms' | 'summary'>('summary');
+  
+  // Workspace and project selection
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
+  const [selectedProject, setSelectedProject] = useState<string>('');
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState<boolean>(false);
+
+  // Load workspaces on component mount
+  useEffect(() => {
+    fetchWorkspaces();
+  }, []);
+
+  // Fetch workspaces
+  const fetchWorkspaces = async () => {
+    setLoadingWorkspaces(true);
+    try {
+      const data = await workspaceService.listWorkspaces();
+      setWorkspaces(data);
+      if (data.length > 0) {
+        setSelectedWorkspace(data[0].id);
+        if (data[0].projects.length > 0) {
+          setSelectedProject(data[0].projects[0].id);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching workspaces:', error);
+    } finally {
+      setLoadingWorkspaces(false);
+    }
+  };
+
+  // Handle single page analysis
+  const handleAnalyzePage = async () => {
+    if (!urlToAnalyze) {
+      toast.warning('Please enter a URL to analyze');
+      return;
+    }
+
+    setAnalyzing(true);
+    setSinglePageResult(null);
+    setApplicationResult(null);
+    
+    try {
+      const result = await analyzerService.analyzePage(urlToAnalyze);
+      setSinglePageResult(result);
+      toast.success('Page analysis completed');
+    } catch (error) {
+      console.error('Error analyzing page:', error);
+      toast.error('Failed to analyze page');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  // Handle application analysis
+  const handleAnalyzeApplication = async () => {
+    if (!urlToAnalyze) {
+      toast.warning('Please enter a URL to analyze');
+      return;
+    }
+
+    setAnalyzing(true);
+    setSinglePageResult(null);
+    setApplicationResult(null);
+    
+    try {
+      const result = await analyzerService.analyzeApplication(urlToAnalyze, maxPages);
+      setApplicationResult(result);
+      toast.success('Application analysis completed');
+    } catch (error) {
+      console.error('Error analyzing application:', error);
+      toast.error('Failed to analyze application');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  // Handle test generation
+  const handleGenerateTests = async () => {
+    if (!selectedWorkspace || !selectedProject) {
+      toast.warning('Please select a workspace and project');
+      return;
+    }
+    
+    if (!urlToAnalyze) {
+      toast.warning('Please enter a URL to analyze');
+      return;
+    }
+
+    setGeneratingTests(true);
+    
+    try {
+      const testSuite = await analyzerService.generateTests(
+        selectedWorkspace,
+        selectedProject,
+        urlToAnalyze,
+        maxPages
+      );
+      toast.success(`Test suite "${testSuite.name}" generated successfully`);
+    } catch (error) {
+      console.error('Error generating tests:', error);
+      toast.error('Failed to generate tests');
+    } finally {
+      setGeneratingTests(false);
+    }
+  };
+
+  return (
+    <div className="web-analyzer-container">
+      <div className="page-header">
+        <h1>Web Application Analyzer</h1>
+      </div>
+      
+      <div className="analyzer-form">
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="url-input">URL to Analyze</label>
+            <div className="input-with-button">
+              <input
+                id="url-input"
+                type="url"
+                value={urlToAnalyze}
+                onChange={(e) => setUrlToAnalyze(e.target.value)}
+                placeholder="https://example.com"
+              />
+              <button 
+                className="btn btn-primary"
+                onClick={handleAnalyzePage}
+                disabled={analyzing || !urlToAnalyze}
+              >
+                {analyzing ? <FaSpinner className="spinner" /> : <FaSearch />}
+                Analyze Page
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="max-pages">Maximum Pages</label>
+            <input
+              id="max-pages"
+              type="number"
+              min="1"
+              max="50"
+              value={maxPages}
+              onChange={(e) => setMaxPages(Number(e.target.value))}
+            />
+          </div>
+          
+          <div className="form-group">
+            <button
+              className="btn btn-secondary"
+              onClick={handleAnalyzeApplication}
+              disabled={analyzing || !urlToAnalyze}
+            >
+              {analyzing ? <FaSpinner className="spinner" /> : <FaList />}
+              Analyze Application
+            </button>
+          </div>
+        </div>
+        
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="workspace-select">Workspace</label>
+            <select
+              id="workspace-select"
+              value={selectedWorkspace}
+              onChange={(e) => setSelectedWorkspace(e.target.value)}
+              disabled={loadingWorkspaces}
+            >
+              {workspaces.length === 0 && <option value="">No workspaces available</option>}
+              {workspaces.map(workspace => (
+                <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+              ))}
+            </select>
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="project-select">Project</label>
+            <select
+              id="project-select"
+              value={selectedProject}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              disabled={loadingWorkspaces || !selectedWorkspace}
+            >
+              {!selectedWorkspace && <option value="">Select a workspace first</option>}
+              {selectedWorkspace && 
+                workspaces.find(w => w.id === selectedWorkspace)?.projects.length === 0 && 
+                <option value="">No projects available</option>
+              }
+              {selectedWorkspace && 
+                workspaces.find(w => w.id === selectedWorkspace)?.projects.map(project => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))
+              }
+            </select>
+          </div>
+          
+          <div className="form-group">
+            <button
+              className="btn btn-primary"
+              onClick={handleGenerateTests}
+              disabled={generatingTests || !selectedWorkspace || !selectedProject || !urlToAnalyze}
+            >
+              {generatingTests ? <FaSpinner className="spinner" /> : <FaCode />}
+              Generate Tests
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      {/* Analysis Results */}
+      {(singlePageResult || applicationResult) && (
+        <div className="analysis-results">
+          <div className="results-header">
+            <h2>Analysis Results</h2>
+            <div className="tab-navigation">
+              <button
+                className={`tab-button ${activeTab === 'summary' ? 'active' : ''}`}
+                onClick={() => setActiveTab('summary')}
+              >
+                Summary
+              </button>
+              <button
+                className={`tab-button ${activeTab === 'elements' ? 'active' : ''}`}
+                onClick={() => setActiveTab('elements')}
+              >
+                Elements
+              </button>
+              <button
+                className={`tab-button ${activeTab === 'forms' ? 'active' : ''}`}
+                onClick={() => setActiveTab('forms')}
+              >
+                Forms
+              </button>
+            </div>
+          </div>
+          
+          <div className="results-content">
+            {activeTab === 'summary' && (
+              <div className="summary-tab">
+                {singlePageResult && (
+                  <div className="summary-section">
+                    <h3>Page Analysis</h3>
+                    <div className="summary-stats">
+                      <div className="stat-item">
+                        <span className="stat-label">URL:</span>
+                        <span className="stat-value">{singlePageResult.url}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Title:</span>
+                        <span className="stat-value">{singlePageResult.title}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Elements:</span>
+                        <span className="stat-value">{singlePageResult.elements.length}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Forms:</span>
+                        <span className="stat-value">{singlePageResult.forms.length}</span>
+                      </div>
+                    </div>
+                    
+                    {singlePageResult.screenshot && (
+                      <div className="screenshot-container">
+                        <h4>Screenshot</h4>
+                        <img 
+                          src={`data:image/png;base64,${singlePageResult.screenshot}`} 
+                          alt="Page screenshot" 
+                          className="page-screenshot" 
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {applicationResult && (
+                  <div className="summary-section">
+                    <h3>Application Analysis</h3>
+                    <div className="summary-stats">
+                      <div className="stat-item">
+                        <span className="stat-label">Base URL:</span>
+                        <span className="stat-value">{applicationResult.baseUrl}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Pages Analyzed:</span>
+                        <span className="stat-value">{applicationResult.pageResults.length}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Total Elements:</span>
+                        <span className="stat-value">
+                          {applicationResult.pageResults.reduce(
+                            (sum, page) => sum + page.elements.length, 0
+                          )}
+                        </span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Total Forms:</span>
+                        <span className="stat-value">
+                          {applicationResult.pageResults.reduce(
+                            (sum, page) => sum + page.forms.length, 0
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <h4>Analyzed Pages</h4>
+                    <ul className="page-list">
+                      {applicationResult.pageResults.map((page, index) => (
+                        <li key={index} className="page-item">
+                          <span className="page-title">{page.title}</span>
+                          <span className="page-url">{page.url}</span>
+                          <span className="page-elements-count">{page.elements.length} elements</span>
+                          <span className="page-forms-count">{page.forms.length} forms</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'elements' && (
+              <div className="elements-tab">
+                {singlePageResult && (
+                  <ElementsTable elements={singlePageResult.elements} />
+                )}
+                
+                {applicationResult && (
+                  <div className="application-elements">
+                    <h3>Elements by Page</h3>
+                    <div className="accordion">
+                      {applicationResult.pageResults.map((page, index) => (
+                        <div key={index} className="accordion-item">
+                          <div className="accordion-header">
+                            <h4>{page.title}</h4>
+                            <span>{page.url}</span>
+                            <span>{page.elements.length} elements</span>
+                          </div>
+                          <div className="accordion-content">
+                            <ElementsTable elements={page.elements} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'forms' && (
+              <div className="forms-tab">
+                {singlePageResult && (
+                  <FormsTable forms={singlePageResult.forms} />
+                )}
+                
+                {applicationResult && (
+                  <div className="application-forms">
+                    <h3>Forms by Page</h3>
+                    <div className="accordion">
+                      {applicationResult.pageResults.map((page, index) => (
+                        <div key={index} className="accordion-item">
+                          <div className="accordion-header">
+                            <h4>{page.title}</h4>
+                            <span>{page.url}</span>
+                            <span>{page.forms.length} forms</span>
+                          </div>
+                          <div className="accordion-content">
+                            <FormsTable forms={page.forms} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Elements Table Component
+interface ElementsTableProps {
+  elements: WebElement[];
+}
+
+const ElementsTable: React.FC<ElementsTableProps> = ({ elements }) => {
+  return (
+    <div className="elements-table-container">
+      <table className="elements-table">
+        <thead>
+          <tr>
+            <th>Type</th>
+            <th>Tag</th>
+            <th>ID/Name</th>
+            <th>Text</th>
+            <th>Visible</th>
+            <th>Selectors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {elements.map((element, index) => (
+            <tr key={index}>
+              <td>{element.type}</td>
+              <td>{element.tagName}</td>
+              <td>{element.id || element.name || '-'}</td>
+              <td>{element.text || '-'}</td>
+              <td>{element.visible ? 'Yes' : 'No'}</td>
+              <td>
+                <div className="selectors-list">
+                  {Object.entries(element.selectors).map(([type, value], i) => (
+                    <div key={i} className="selector-item">
+                      <span className="selector-type">{type}:</span>
+                      <span className="selector-value">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// Forms Table Component
+interface FormsTableProps {
+  forms: WebForm[];
+}
+
+const FormsTable: React.FC<FormsTableProps> = ({ forms }) => {
+  return (
+    <div className="forms-table-container">
+      {forms.length === 0 ? (
+        <p>No forms found on this page.</p>
+      ) : (
+        forms.map((form, index) => (
+          <div key={index} className="form-details">
+            <h4>
+              Form: {form.name || form.id || `Form ${index + 1}`}
+              {form.action && <span className="form-action">Action: {form.action}</span>}
+              {form.method && <span className="form-method">Method: {form.method}</span>}
+            </h4>
+            
+            <h5>Fields ({form.fields.length})</h5>
+            <table className="form-fields-table">
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Name/ID</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {form.fields.map((field, fieldIndex) => (
+                  <tr key={fieldIndex}>
+                    <td>{field.type}</td>
+                    <td>{field.name || field.id || '-'}</td>
+                    <td>{field.value || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            
+            {form.submitButton && (
+              <div className="submit-button-info">
+                <h5>Submit Button</h5>
+                <div className="button-details">
+                  <span className="button-text">{form.submitButton.text || form.submitButton.value || 'Unnamed Button'}</span>
+                  <span className="button-selector">Selector: {Object.values(form.submitButton.selectors)[0] || '-'}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+};
+
+export default WebAnalyzer;
+
+
+/* src/styles/App.css */
+
+/* Global Styles */
+:root {
+  --primary-color: #4a6ee0;
+  --primary-hover: #3a5ecc;
+  --secondary-color: #6c757d;
+  --secondary-hover: #5a6268;
+  --success-color: #28a745;
+  --danger-color: #dc3545;
+  --warning-color: #ffc107;
+  --info-color: #17a2b8;
+  --light-color: #f8f9fa;
+  --dark-color: #343a40;
+  --border-color: #dee2e6;
+  --box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  --transition: all 0.2s ease-in-out;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.6;
+  color: #333;
+  background-color: #f5f7fb;
+}
+
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.main-container {
+  display: flex;
+  flex: 1;
+}
+
+.content {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+/* Navbar */
+.navbar {
+  display: flex;
+  align-items: center;
+  background-color: var(--primary-color);
+  color: white;
+  padding: 0 1.5rem;
+  height: 60px;
+  box-shadow: var(--box-shadow);
+}
+
+.navbar-brand {
+  font-size: 1.25rem;
+  font-weight: bold;
+  margin-right: 2rem;
+  color: white;
+  text-decoration: none;
+}
+
+.navbar-nav {
+  display: flex;
+  list-style: none;
+}
+
+.nav-item {
+  margin-right: 1rem;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
+  padding: 0.5rem;
+}
+
+.nav-link:hover {
+  color: white;
+  text-decoration: none;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 250px;
+  background-color: white;
+  border-right: 1px solid var(--border-color);
+  padding: 1.5rem 0;
+}
+
+.sidebar-menu {
+  list-style: none;
+}
+
+.sidebar-item {
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  color: var(--secondary-color);
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.sidebar-link:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  text-decoration: none;
+}
+
+.sidebar-link.active {
+  color: var(--primary-color);
+  background-color: rgba(74, 110, 224, 0.1);
+  border-left: 3px solid var(--primary-color);
+  font-weight: bold;
+}
+
+.sidebar-link svg {
+  margin-right: 0.75rem;
+}
+
+/* Page Headers */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+}
+
+.page-header h1 {
+  font-size: 1.75rem;
+  color: var(--dark-color);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  border-radius: 0.25rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn svg {
+  margin-right: 0.5rem;
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.btn-secondary {
+  background-color: var(--secondary-color);
+  color: white;
+  border-color: var(--secondary-color);
+}
+
+.btn-secondary:hover {
+  background-color: var(--secondary-hover);
+  border-color: var(--secondary-hover);
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  color: white;
+  border-color: var(--danger-color);
+}
+
+.btn-danger:hover {
+  background-color: #c82333;
+  border-color: #bd2130;
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+/* Forms */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+input, select, textarea {
+  display: block;
+  width: 100%;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #495057;
+  background-color: #fff;
+  background-clip: padding-box;
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--primary-color);
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(74, 110, 224, 0.25);
+}
+
+.input-with-button {
+  display: flex;
+}
+
+.input-with-button input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.input-with-button .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Cards */
+.card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  margin-bottom: 1.5rem;
+}
+
+.card-header {
+  padding: 1rem 1.25rem;
+  background-color: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.card-body {
+  padding: 1.25rem;
+}
+
+/* Workspace Grid */
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.workspace-card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  transition: var(--transition);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.workspace-card-header {
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.workspace-card-content {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.workspace-card-content h3 {
+  font-size: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: var(--dark-color);
+}
+
+.workspace-description {
+  flex: 1;
+  margin-bottom: 1rem;
+  color: var(--secondary-color);
+}
+
+.workspace-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--secondary-color);
+  font-size: 0.875rem;
+}
+
+.delete-btn {
+  color: var(--danger-color);
+  background-color: transparent;
+  border: none;
+}
+
+.delete-btn:hover {
+  background-color: rgba(220, 53, 69, 0.1);
+}
+
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background-color: white;
+  border-radius: 0.3rem;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  width: 500px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.close-btn {
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--secondary-color);
+  background-color: transparent;
+  border: none;
+}
+
+.modal-body {
+  padding: 1rem;
+}
+
+.modal-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+}
+
+.empty-state svg {
+  color: var(--secondary-color);
+  margin-bottom: 1rem;
+}
+
+.empty-state h2 {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.empty-state p {
+  color: var(--secondary-color);
+  margin-bottom: 1.5rem;
+}
+
+/* Loading */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+  font-size: 2rem;
+  color: var(--primary-color);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Web Analyzer */
+.analyzer-form {
+  background-color: white;
+  padding: 1.5rem;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  margin-bottom: 2rem;
+}
+
+.form-row {
+  display: flex;
+  margin-bottom: 1rem;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+/* Analysis Results */
+.analysis-results {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  overflow: hidden;
+}
+
+.results-header {
+  padding: 1rem 1.5rem;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.results-header h2 {
+  margin-bottom: 1rem;
+}
+
+.tab-navigation {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tab-button {
+  padding: 0.75rem 1.5rem;
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--secondary-color);
+  border-bottom: 3px solid transparent;
+}
+
+.tab-button.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+}
+
+.results-content {
+  padding: 1.5rem;
+}
+
+.summary-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-item {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.stat-label {
+  font-weight: 500;
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--secondary-color);
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.page-screenshot {
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  margin-top: 1rem;
+}
+
+.page-list {
+  list-style: none;
+}
+
+.page-item {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.page-title {
+  font-weight: 500;
+  flex: 1;
+}
+
+.page-url {
+  color: var(--secondary-color);
+  margin: 0 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.page-elements-count, .page-forms-count {
+  background-color: #f8f9fa;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  margin-left: 0.5rem;
+}
+
+/* Tables */
+.elements-table-container, .forms-table-container {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background-color: #f8f9fa;
+  font-weight: 600;
+}
+
+tr:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.selectors-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.selector-item {
+  margin-bottom: 0.25rem;
+}
+
+.selector-type {
+  font-weight: 500;
+  margin-right: 0.5rem;
+}
+
+.form-details {
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.form-details h4 {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.form-action, .form-method {
+  font-size: 0.875rem;
+  font-weight: normal;
+  color: var(--secondary-color);
+  margin-left: 1rem;
+}
+
+.form-fields-table {
+  margin-bottom: 1rem;
+}
+
+.submit-button-info {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.button-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.button-text {
+  font-weight: 500;
+}
+
+.button-selector {
+  color: var(--secondary-color);
+  font-size: 0.875rem;
+}
+
+/* Accordion */
+.accordion-item {
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.accordion-header {
+  background-color: #f8f9fa;
+  padding: 1rem 1.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.accordion-header h4 {
+  margin: 0;
+  margin-right: auto;
+}
+
+.accordion-header span {
+  margin-left: 1rem;
+  color: var(--secondary-color);
+}
+
+.accordion-content {
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+
+
+// src/components/Navbar.tsx
+import React from 'react';
+import { Link } from 'react-router-dom';
+
+const Navbar: React.FC = () => {
+  return (
+    <nav className="navbar">
+      <Link to="/" className="navbar-brand">
+        Contextual Test Platform
+      </Link>
+      <ul className="navbar-nav">
+        <li className="nav-item">
+          <Link to="/workspaces" className="nav-link">
+            Workspaces
+          </Link>
+        </li>
+        <li className="nav-item">
+          <Link to="/analyzer" className="nav-link">
+            Analyzer
+          </Link>
+        </li>
+        <li className="nav-item">
+          <Link to="/settings" className="nav-link">
+            Settings
+          </Link>
+        </li>
+      </ul>
+    </nav>
+  );
+};
+
+export default Navbar;
+
+
+// src/components/Sidebar.tsx
+import React from 'react';
+import { NavLink } from 'react-router-dom';
+import { FaHome, FaFolder, FaSearch, FaCode, FaCog } from 'react-icons/fa';
+
+const Sidebar: React.FC = () => {
+  return (
+    <div className="sidebar">
+      <ul className="sidebar-menu">
+        <li className="sidebar-item">
+          <NavLink to="/" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <FaHome /> Dashboard
+          </NavLink>
+        </li>
+        <li className="sidebar-item">
+          <NavLink to="/workspaces" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <FaFolder /> Workspaces
+          </NavLink>
+        </li>
+        <li className="sidebar-item">
+          <NavLink to="/analyzer" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <FaSearch /> Web Analyzer
+          </NavLink>
+        </li>
+        <li className="sidebar-item">
+          <NavLink to="/settings" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+            <FaCog /> Settings
+          </NavLink>
+        </li>
+      </ul>
+    </div>
+  );
+};
+
+export default Sidebar;
+
+
+// src/pages/Dashboard.tsx
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { FaFolder, FaCode, FaSearch, FaSpinner } from 'react-icons/fa';
+import { Workspace } from '../types/workspace';
+import workspaceService from '../services/workspaceService';
+
+const Dashboard: React.FC = () => {
+  const [recentWorkspaces, setRecentWorkspaces] = useState<Workspace[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    fetchWorkspaces();
+  }, []);
+
+  const fetchWorkspaces = async () => {
+    setLoading(true);
+    try {
+      const data = await workspaceService.listWorkspaces();
+      // Get the most recently modified workspaces
+      const sorted = [...data].sort((a, b) => 
+        new Date(b.lastModifiedAt).getTime() - new Date(a.lastModifiedAt).getTime()
+      );
+      setRecentWorkspaces(sorted.slice(0, 3)); // Get top 3
+    } catch (error) {
+      console.error('Error fetching workspaces:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="dashboard-container">
+      <div className="page-header">
+        <h1>Dashboard</h1>
+      </div>
+      
+      <div className="dashboard-stats">
+        <div className="dashboard-welcome">
+          <h2>Welcome to Contextual Test Generation Platform</h2>
+          <p>
+            This platform helps you analyze web applications and automatically generate 
+            comprehensive test suites using contextual intelligence.
+          </p>
+        </div>
+        
+        <div className="quick-actions">
+          <h3>Quick Actions</h3>
+          <div className="action-cards">
+            <Link to="/workspaces" className="action-card">
+              <FaFolder className="card-icon" />
+              <h4>Workspaces</h4>
+              <p>Manage your test workspaces</p>
+            </Link>
+            
+            <Link to="/analyzer" className="action-card">
+              <FaSearch className="card-icon" />
+              <h4>Web Analyzer</h4>
+              <p>Analyze web applications</p>
+            </Link>
+            
+            <Link to="/settings" className="action-card">
+              <FaCode className="card-icon" />
+              <h4>Generate Tests</h4>
+              <p>Create test suites</p>
+            </Link>
+          </div>
+        </div>
+        
+        {loading ? (
+          <div className="loading-container">
+            <FaSpinner className="spinner" />
+            <p>Loading recent workspaces...</p>
+          </div>
+        ) : (
+          <div className="recent-workspaces">
+            <div className="section-header">
+              <h3>Recent Workspaces</h3>
+              <Link to="/workspaces" className="view-all-link">
+                View All
+              </Link>
+            </div>
+            
+            {recentWorkspaces.length === 0 ? (
+              <div className="empty-list">
+                <p>No workspaces found. Create a new workspace to get started.</p>
+                <Link to="/workspaces" className="btn btn-primary">
+                  Create Workspace
+                </Link>
+              </div>
+            ) : (
+              <div className="workspace-list">
+                {recentWorkspaces.map(workspace => (
+                  <Link 
+                    key={workspace.id} 
+                    to={`/workspaces/${workspace.id}`}
+                    className="workspace-list-item"
+                  >
+                    <div className="workspace-icon">
+                      <FaFolder />
+                    </div>
+                    <div className="workspace-info">
+                      <h4>{workspace.name}</h4>
+                      <p>{workspace.description}</p>
+                      <div className="workspace-meta">
+                        <span>{workspace.projects.length} projects</span>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;
+
+/* src/styles/App.css */
+
+/* Global Styles */
+:root {
+  --primary-color: #4a6ee0;
+  --primary-hover: #3a5ecc;
+  --secondary-color: #6c757d;
+  --secondary-hover: #5a6268;
+  --success-color: #28a745;
+  --danger-color: #dc3545;
+  --warning-color: #ffc107;
+  --info-color: #17a2b8;
+  --light-color: #f8f9fa;
+  --dark-color: #343a40;
+  --border-color: #dee2e6;
+  --box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+  --transition: all 0.2s ease-in-out;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.6;
+  color: #333;
+  background-color: #f5f7fb;
+}
+
+a {
+  color: var(--primary-color);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.main-container {
+  display: flex;
+  flex: 1;
+}
+
+.content {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+}
+
+/* Navbar */
+.navbar {
+  display: flex;
+  align-items: center;
+  background-color: var(--primary-color);
+  color: white;
+  padding: 0 1.5rem;
+  height: 60px;
+  box-shadow: var(--box-shadow);
+}
+
+.navbar-brand {
+  font-size: 1.25rem;
+  font-weight: bold;
+  margin-right: 2rem;
+  color: white;
+  text-decoration: none;
+}
+
+.navbar-nav {
+  display: flex;
+  list-style: none;
+}
+
+.nav-item {
+  margin-right: 1rem;
+}
+
+.nav-link {
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
+  padding: 0.5rem;
+}
+
+.nav-link:hover {
+  color: white;
+  text-decoration: none;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 250px;
+  background-color: white;
+  border-right: 1px solid var(--border-color);
+  padding: 1.5rem 0;
+}
+
+.sidebar-menu {
+  list-style: none;
+}
+
+.sidebar-item {
+  margin-bottom: 0.5rem;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1.5rem;
+  color: var(--secondary-color);
+  text-decoration: none;
+  transition: var(--transition);
+}
+
+.sidebar-link:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+  text-decoration: none;
+}
+
+.sidebar-link.active {
+  color: var(--primary-color);
+  background-color: rgba(74, 110, 224, 0.1);
+  border-left: 3px solid var(--primary-color);
+  font-weight: bold;
+}
+
+.sidebar-link svg {
+  margin-right: 0.75rem;
+}
+
+/* Page Headers */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+}
+
+.page-header h1 {
+  font-size: 1.75rem;
+  color: var(--dark-color);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  border-radius: 0.25rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn svg {
+  margin-right: 0.5rem;
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.btn-secondary {
+  background-color: var(--secondary-color);
+  color: white;
+  border-color: var(--secondary-color);
+}
+
+.btn-secondary:hover {
+  background-color: var(--secondary-hover);
+  border-color: var(--secondary-hover);
+}
+
+.btn-danger {
+  background-color: var(--danger-color);
+  color: white;
+  border-color: var(--danger-color);
+}
+
+.btn-danger:hover {
+  background-color: #c82333;
+  border-color: #bd2130;
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+/* Forms */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+}
+
+input, select, textarea {
+  display: block;
+  width: 100%;
+  padding: 0.375rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #495057;
+  background-color: #fff;
+  background-clip: padding-box;
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--primary-color);
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(74, 110, 224, 0.25);
+}
+
+.input-with-button {
+  display: flex;
+}
+
+.input-with-button input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.input-with-button .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Cards */
+.card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  margin-bottom: 1.5rem;
+}
+
+.card-header {
+  padding: 1rem 1.25rem;
+  background-color: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.card-body {
+  padding: 1.25rem;
+}
+
+/* Workspace Grid */
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.workspace-card {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  transition: var(--transition);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.workspace-card-header {
+  padding: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.workspace-card-content {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  text-decoration: none;
+  color: inherit;
+}
+
+.workspace-card-content h3 {
+  font-size: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: var(--dark-color);
+}
+
+.workspace-description {
+  flex: 1;
+  margin-bottom: 1rem;
+  color: var(--secondary-color);
+}
+
+.workspace-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--secondary-color);
+  font-size: 0.875rem;
+}
+
+.delete-btn {
+  color: var(--danger-color);
+  background-color: transparent;
+  border: none;
+}
+
+.delete-btn:hover {
+  background-color: rgba(220, 53, 69, 0.1);
+}
+
+/* Modals */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background-color: white;
+  border-radius: 0.3rem;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  width: 500px;
+  max-width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.close-btn {
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--secondary-color);
+  background-color: transparent;
+  border: none;
+}
+
+.modal-body {
+  padding: 1rem;
+}
+
+.modal-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 3rem;
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+}
+
+.empty-state svg {
+  color: var(--secondary-color);
+  margin-bottom: 1rem;
+}
+
+.empty-state h2 {
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.empty-state p {
+  color: var(--secondary-color);
+  margin-bottom: 1.5rem;
+}
+
+/* Loading */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+  font-size: 2rem;
+  color: var(--primary-color);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Web Analyzer */
+.analyzer-form {
+  background-color: white;
+  padding: 1.5rem;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  margin-bottom: 2rem;
+}
+
+.form-row {
+  display: flex;
+  margin-bottom: 1rem;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+/* Analysis Results */
+.analysis-results {
+  background-color: white;
+  border-radius: 0.25rem;
+  box-shadow: var(--box-shadow);
+  overflow: hidden;
+}
+
+.results-header {
+  padding: 1rem 1.5rem;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.results-header h2 {
+  margin-bottom: 1rem;
+}
+
+.tab-navigation {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tab-button {
+  padding: 0.75rem 1.5rem;
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--secondary-color);
+  border-bottom: 3px solid transparent;
+}
+
+.tab-button.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+}
+
+.results-content {
+  padding: 1.5rem;
+}
+
+.summary-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-item {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.stat-label {
+  font-weight: 500;
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--secondary-color);
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.page-screenshot {
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  margin-top: 1rem;
+}
+
+.page-list {
+  list-style: none;
+}
+
+.page-item {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.page-title {
+  font-weight: 500;
+  flex: 1;
+}
+
+.page-url {
+  color: var(--secondary-color);
+  margin: 0 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.page-elements-count, .page-forms-count {
+  background-color: #f8f9fa;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  margin-left: 0.5rem;
+}
+
+/* Tables */
+.elements-table-container, .forms-table-container {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background-color: #f8f9fa;
+  font-weight: 600;
+}
+
+tr:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.selectors-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.selector-item {
+  margin-bottom: 0.25rem;
+}
+
+.selector-type {
+  font-weight: 500;
+  margin-right: 0.5rem;
+}
+
+.form-details {
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.form-details h4 {
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.form-action, .form-method {
+  font-size: 0.875rem;
+  font-weight: normal;
+  color: var(--secondary-color);
+  margin-left: 1rem;
+}
+
+.form-fields-table {
+  margin-bottom: 1rem;
+}
+
+.submit-button-info {
+  background-color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 0.25rem;
+}
+
+.button-details {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.button-text {
+  font-weight: 500;
+}
+
+.button-selector {
+  color: var(--secondary-color);
+  font-size: 0.875rem;
+}
+
+/* Accordion */
+.accordion-item {
+  border: 1px solid var(--border-color);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.accordion-header {
+  background-color: #f8f9fa;
+  padding: 1rem 1.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.accordion-header h4 {
+  margin: 0;
+  margin-right: auto;
+}
+
+.accordion-header span {
+  margin-left: 1rem;
+  color: var(--secondary-color);
+}
+
+.accordion-content {
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+
+// src/index.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import './styles/App.css';
+
+const root = ReactDOM.createRoot(
+  document.getElementById('root') as HTMLElement
+);
+
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+
+
