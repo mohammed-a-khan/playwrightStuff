@@ -1180,3 +1180,499 @@
     </script>
 </body>
 </html>
+
+
+
+import React, { useState, useEffect } from 'react';
+import { Card, Container, Row, Col, Form, Button, Spinner, Table, Badge, Alert } from 'react-bootstrap';
+import axios from 'axios';
+
+interface TestResult {
+  id: string;
+  testCaseId: string;
+  testCaseName: string;
+  passed: boolean;
+  executionTime: string;
+  errorMessage?: string;
+  screenshot?: string;
+}
+
+interface ExecutionSession {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  testSuiteId: string;
+  startTime: string;
+  endTime: string;
+  environment: string;
+  browser: string;
+  testResults: TestResult[];
+}
+
+const TestExecution: React.FC = () => {
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [testSuites, setTestSuites] = useState<any[]>([]);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
+  const [selectedProject, setSelectedProject] = useState<string>('');
+  const [selectedTestSuite, setSelectedTestSuite] = useState<string>('');
+  const [environment, setEnvironment] = useState<string>('staging');
+  const [browser, setBrowser] = useState<string>('chrome');
+  const [parallelExecution, setParallelExecution] = useState<string>('1');
+  
+  const [loading, setLoading] = useState<boolean>(false);
+  const [executionSession, setExecutionSession] = useState<ExecutionSession | null>(null);
+  const [selectedFailedTest, setSelectedFailedTest] = useState<TestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load workspaces on component mount
+  useEffect(() => {
+    // Simulated API call - replace with actual API
+    setTimeout(() => {
+      setWorkspaces([
+        { id: '1', name: 'E-commerce Testing' },
+        { id: '2', name: 'Customer Portal Testing' },
+        { id: '3', name: 'Admin Dashboard Testing' }
+      ]);
+    }, 500);
+  }, []);
+
+  // Load projects when workspace changes
+  useEffect(() => {
+    if (selectedWorkspace) {
+      setLoading(true);
+      // Simulated API call - replace with actual API
+      setTimeout(() => {
+        setProjects([
+          { id: '1', name: 'Online Store', workspaceId: '1' },
+          { id: '2', name: 'Mobile App', workspaceId: '1' },
+          { id: '3', name: 'Customer Portal', workspaceId: '2' },
+          { id: '4', name: 'Admin Dashboard', workspaceId: '3' }
+        ].filter(p => p.workspaceId === selectedWorkspace));
+        setLoading(false);
+        setSelectedProject('');
+        setTestSuites([]);
+      }, 500);
+    } else {
+      setProjects([]);
+      setSelectedProject('');
+    }
+  }, [selectedWorkspace]);
+
+  // Load test suites when project changes
+  useEffect(() => {
+    if (selectedProject) {
+      setLoading(true);
+      // Simulated API call - replace with actual API
+      setTimeout(() => {
+        setTestSuites([
+          { id: '1', name: 'Login Flow Tests', projectId: '1' },
+          { id: '2', name: 'Checkout Process', projectId: '1' },
+          { id: '3', name: 'Product Search', projectId: '1' },
+          { id: '4', name: 'User Registration', projectId: '1' },
+          { id: '5', name: 'Mobile Navigation', projectId: '2' },
+          { id: '6', name: 'Account Management', projectId: '3' },
+          { id: '7', name: 'Admin Functions', projectId: '4' }
+        ].filter(ts => ts.projectId === selectedProject));
+        setLoading(false);
+        setSelectedTestSuite('');
+      }, 500);
+    } else {
+      setTestSuites([]);
+      setSelectedTestSuite('');
+    }
+  }, [selectedProject]);
+
+  const executeTests = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!selectedWorkspace || !selectedProject || !selectedTestSuite) {
+      setError('Please select a workspace, project, and test suite');
+      return;
+    }
+    
+    setError(null);
+    setLoading(true);
+    setExecutionSession(null);
+    setSelectedFailedTest(null);
+    
+    try {
+      // In a real implementation, this would be an API call to your backend
+      // const response = await axios.post('/api/execution/execute-test-suite', {
+      //   workspaceId: selectedWorkspace,
+      //   projectId: selectedProject,
+      //   testSuiteId: selectedTestSuite,
+      //   environment,
+      //   browser
+      // });
+      
+      // Simulated API response
+      setTimeout(() => {
+        const mockSession: ExecutionSession = {
+          id: 'exec-' + Date.now(),
+          workspaceId: selectedWorkspace,
+          projectId: selectedProject,
+          testSuiteId: selectedTestSuite,
+          startTime: new Date().toISOString(),
+          endTime: new Date(Date.now() + 84000).toISOString(), // 84 seconds later
+          environment,
+          browser,
+          testResults: [
+            {
+              id: 'result-1',
+              testCaseId: 'tc-1',
+              testCaseName: 'Login Form Test',
+              passed: true,
+              executionTime: '5.2',
+            },
+            {
+              id: 'result-2',
+              testCaseId: 'tc-2',
+              testCaseName: 'Add to Cart Test',
+              passed: true,
+              executionTime: '7.8',
+            },
+            {
+              id: 'result-3',
+              testCaseId: 'tc-3',
+              testCaseName: 'Checkout Process Test',
+              passed: false,
+              executionTime: '12.3',
+              errorMessage: 'Element not found: "complete-checkout-button" (Timeout: 10s)',
+              screenshot: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEA...'
+            },
+            {
+              id: 'result-4',
+              testCaseId: 'tc-4',
+              testCaseName: 'Product Search Test',
+              passed: true,
+              executionTime: '4.5',
+            },
+            {
+              id: 'result-5',
+              testCaseId: 'tc-5',
+              testCaseName: 'User Registration Test',
+              passed: true,
+              executionTime: '8.7',
+            }
+          ]
+        };
+        
+        setExecutionSession(mockSession);
+        setLoading(false);
+      }, 3000);
+      
+    } catch (error) {
+      setError('An error occurred while executing tests');
+      setLoading(false);
+    }
+  };
+
+  const viewTestDetails = (test: TestResult) => {
+    setSelectedFailedTest(test);
+  };
+
+  const getTotalPassedTests = () => {
+    if (!executionSession) return 0;
+    return executionSession.testResults.filter(test => test.passed).length;
+  };
+
+  const getTotalFailedTests = () => {
+    if (!executionSession) return 0;
+    return executionSession.testResults.filter(test => !test.passed).length;
+  };
+
+  const getExecutionDuration = () => {
+    if (!executionSession) return '0:00';
+    const start = new Date(executionSession.startTime).getTime();
+    const end = new Date(executionSession.endTime).getTime();
+    const durationMs = end - start;
+    const minutes = Math.floor(durationMs / 60000);
+    const seconds = Math.floor((durationMs % 60000) / 1000);
+    return `${minutes}:${seconds < 10 ? '0' + seconds : seconds}`;
+  };
+
+  return (
+    <Container>
+      <h2 className="mb-4">Test Execution</h2>
+      
+      {error && (
+        <Alert variant="danger" onClose={() => setError(null)} dismissible>
+          {error}
+        </Alert>
+      )}
+      
+      <Card className="mb-4">
+        <Card.Header>
+          <i className="fas fa-play me-2"></i>
+          Execute Tests
+        </Card.Header>
+        <Card.Body>
+          <Form onSubmit={executeTests}>
+            <Row className="mb-3">
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Workspace</Form.Label>
+                  <Form.Select 
+                    value={selectedWorkspace} 
+                    onChange={(e) => setSelectedWorkspace(e.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="">Select a workspace</option>
+                    {workspaces.map(workspace => (
+                      <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Project</Form.Label>
+                  <Form.Select 
+                    value={selectedProject} 
+                    onChange={(e) => setSelectedProject(e.target.value)}
+                    disabled={loading || !selectedWorkspace}
+                  >
+                    <option value="">Select a project</option>
+                    {projects.map(project => (
+                      <option key={project.id} value={project.id}>{project.name}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Test Suite</Form.Label>
+                  <Form.Select 
+                    value={selectedTestSuite} 
+                    onChange={(e) => setSelectedTestSuite(e.target.value)}
+                    disabled={loading || !selectedProject}
+                  >
+                    <option value="">Select a test suite</option>
+                    {testSuites.map(suite => (
+                      <option key={suite.id} value={suite.id}>{suite.name}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+            </Row>
+            
+            <Row className="mb-3">
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Environment</Form.Label>
+                  <Form.Select 
+                    value={environment} 
+                    onChange={(e) => setEnvironment(e.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="dev">Development</option>
+                    <option value="staging">Staging</option>
+                    <option value="prod">Production</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Browser</Form.Label>
+                  <Form.Select 
+                    value={browser} 
+                    onChange={(e) => setBrowser(e.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="chrome">Chrome</option>
+                    <option value="firefox">Firefox</option>
+                    <option value="edge">Edge</option>
+                    <option value="safari">Safari</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group className="mb-3">
+                  <Form.Label>Parallel Execution</Form.Label>
+                  <Form.Select 
+                    value={parallelExecution} 
+                    onChange={(e) => setParallelExecution(e.target.value)}
+                    disabled={loading}
+                  >
+                    <option value="1">Sequential</option>
+                    <option value="2">2 Threads</option>
+                    <option value="4">4 Threads</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+            </Row>
+            
+            <div className="d-grid gap-2 d-md-flex justify-content-md-end">
+              <Button type="submit" variant="primary" disabled={loading}>
+                {loading ? (
+                  <>
+                    <Spinner as="span" animation="border" size="sm" className="me-2" />
+                    Executing Tests...
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-play me-2"></i> Start Execution
+                  </>
+                )}
+              </Button>
+            </div>
+          </Form>
+          
+          {loading && !executionSession && (
+            <div className="text-center my-4">
+              <Spinner animation="border" />
+              <p className="mt-2">Executing tests...</p>
+            </div>
+          )}
+          
+          {executionSession && (
+            <>
+              <hr />
+              <h4 className="mb-3">Execution Results</h4>
+              
+              <Row>
+                <Col md={3}>
+                  <Card bg="light" className="mb-3">
+                    <Card.Body className="text-center">
+                      <h3>{executionSession.testResults.length}</h3>
+                      <p className="mb-0">Total Tests</p>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={3}>
+                  <Card bg="success" text="white" className="mb-3">
+                    <Card.Body className="text-center">
+                      <h3>{getTotalPassedTests()}</h3>
+                      <p className="mb-0">Passed</p>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={3}>
+                  <Card bg="danger" text="white" className="mb-3">
+                    <Card.Body className="text-center">
+                      <h3>{getTotalFailedTests()}</h3>
+                      <p className="mb-0">Failed</p>
+                    </Card.Body>
+                  </Card>
+                </Col>
+                <Col md={3}>
+                  <Card bg="info" text="white" className="mb-3">
+                    <Card.Body className="text-center">
+                      <h3>{getExecutionDuration()}</h3>
+                      <p className="mb-0">Duration (min:sec)</p>
+                    </Card.Body>
+                  </Card>
+                </Col>
+              </Row>
+              
+              <Card className="mb-4">
+                <Card.Header>Test Results</Card.Header>
+                <Card.Body className="p-0">
+                  <Table hover responsive className="mb-0">
+                    <thead>
+                      <tr>
+                        <th>Test Case</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {executionSession.testResults.map((result) => (
+                        <tr key={result.id} className={`table-${result.passed ? 'success' : 'danger'}`}>
+                          <td>{result.testCaseName}</td>
+                          <td>
+                            <Badge bg={result.passed ? 'success' : 'danger'}>
+                              {result.passed ? 'Passed' : 'Failed'}
+                            </Badge>
+                          </td>
+                          <td>{result.executionTime}s</td>
+                          <td>
+                            <Button 
+                              variant="outline-primary" 
+                              size="sm"
+                              onClick={() => viewTestDetails(result)}
+                            >
+                              View Details
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </Card.Body>
+              </Card>
+              
+              {selectedFailedTest && !selectedFailedTest.passed && (
+                <Card className="mb-4">
+                  <Card.Header className="bg-danger text-white">
+                    <i className="fas fa-times-circle me-2"></i>
+                    Failed Test Details - {selectedFailedTest.testCaseName}
+                  </Card.Header>
+                  <Card.Body>
+                    <h6>Error Message</h6>
+                    <Alert variant="danger">
+                      {selectedFailedTest.errorMessage}
+                    </Alert>
+                    
+                    <h6>Test Steps</h6>
+                    <div className="ps-2 border-start border-success mb-2 py-2">
+                      <i className="fas fa-check-circle me-2 text-success"></i> Navigate to cart page
+                    </div>
+                    <div className="ps-2 border-start border-success mb-2 py-2">
+                      <i className="fas fa-check-circle me-2 text-success"></i> Click "Proceed to Checkout" button
+                    </div>
+                    <div className="ps-2 border-start border-success mb-2 py-2">
+                      <i className="fas fa-check-circle me-2 text-success"></i> Fill in shipping information
+                    </div>
+                    <div className="ps-2 border-start border-success mb-2 py-2">
+                      <i className="fas fa-check-circle me-2 text-success"></i> Click "Continue to Payment" button
+                    </div>
+                    <div className="ps-2 border-start border-success mb-2 py-2">
+                      <i className="fas fa-check-circle me-2 text-success"></i> Enter credit card details
+                    </div>
+                    <div className="ps-2 border-start border-danger mb-2 py-2">
+                      <i className="fas fa-times-circle me-2 text-danger"></i> Click "Complete Checkout" button
+                      <div className="small text-danger mt-1">
+                        {selectedFailedTest.errorMessage}
+                      </div>
+                    </div>
+                    
+                    <h6 className="mt-3">Screenshot at Failure</h6>
+                    {selectedFailedTest.screenshot ? (
+                      <img 
+                        src="/api/placeholder/800/400" 
+                        alt="Error Screenshot" 
+                        className="img-fluid border mb-3" 
+                      />
+                    ) : (
+                      <p className="text-muted">No screenshot available</p>
+                    )}
+                    
+                    <div className="mt-3">
+                      <Button variant="warning">
+                        <i className="fas fa-redo me-2"></i> Retry Test
+                      </Button>
+                    </div>
+                  </Card.Body>
+                </Card>
+              )}
+              
+              <div className="d-grid gap-2 d-md-flex justify-content-md-end">
+                <Button variant="outline-primary" className="me-2">
+                  <i className="fas fa-file-export me-2"></i> Export Results
+                </Button>
+                <Button variant="primary">
+                  <i className="fas fa-chart-bar me-2"></i> Generate Report
+                </Button>
+              </div>
+            </>
+          )}
+        </Card.Body>
+      </Card>
+    </Container>
+  );
+};
+
+export default TestExecution;
