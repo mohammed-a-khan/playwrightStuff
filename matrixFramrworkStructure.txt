@@ -1,0 +1,144 @@
+csmatrix/
+├── pom.xml
+├── src/
+│   ├── main/
+│   │   ├── java/
+│   │   │   └── com/
+│   │   │       └── csmatrix/
+│   │   │           ├── annotations/
+│   │   │           │   ├── CSDataProvider.java
+│   │   │           │   ├── CSFindBy.java
+│   │   │           │   ├── CSStep.java
+│   │   │           │   ├── CSTest.java
+│   │   │           │   └── CSTestCase.java
+│   │   │           ├── ai/
+│   │   │           │   ├── analytics/
+│   │   │           │   │   └── TestAnalytics.java
+│   │   │           │   ├── prediction/
+│   │   │           │   │   └── ElementPrediction.java
+│   │   │           │   └── selfheal/
+│   │   │           │       └── SelfHealingLocator.java
+│   │   │           ├── api/
+│   │   │           │   ├── client/
+│   │   │           │   │   ├── ApiContext.java
+│   │   │           │   │   ├── RestClient.java
+│   │   │           │   │   └── SoapClient.java
+│   │   │           │   └── validators/
+│   │   │           │       └── ResponseValidator.java
+│   │   │           ├── bdd/
+│   │   │           │   ├── registry/
+│   │   │           │   │   └── CSStepRegistry.java
+│   │   │           │   ├── runner/
+│   │   │           │   │   ├── CSMatrixRunner.java
+│   │   │           │   │   └── CSTestRunner.java
+│   │   │           │   ├── scanner/
+│   │   │           │   │   └── CSStepScanner.java
+│   │   │           │   └── steps/
+│   │   │           │       ├── ApiSteps.java
+│   │   │           │       ├── PDFSteps.java
+│   │   │           │       └── SoapSteps.java
+│   │   │           ├── core/
+│   │   │           │   ├── base/
+│   │   │           │   │   ├── AutoWaitPage.java
+│   │   │           │   │   ├── BasePage.java
+│   │   │           │   │   └── BaseTest.java
+│   │   │           │   ├── config/
+│   │   │           │   │   └── ConfigManager.java
+│   │   │           │   ├── driver/
+│   │   │           │   │   └── WebDriverManager.java
+│   │   │           │   ├── listeners/
+│   │   │           │   │   └── TestListener.java
+│   │   │           │   ├── pagefactory/
+│   │   │           │   │   ├── CSPageFactory.java
+│   │   │           │   │   ├── CSSelfHealingElementHandler.java
+│   │   │           │   │   ├── CSSelfHealingElementListHandler.java
+│   │   │           │   │   ├── CSSelfHealingElementLocator.java
+│   │   │           │   │   └── CSSelfHealingFieldDecorator.java
+│   │   │           │   └── wait/
+│   │   │           │       └── SmartWaitManager.java
+│   │   │           ├── dataproviders/
+│   │   │           │   ├── csv/
+│   │   │           │   │   └── CSCsvDataProvider.java
+│   │   │           │   ├── database/
+│   │   │           │   │   └── CSDatabaseDataProvider.java
+│   │   │           │   ├── excel/
+│   │   │           │   │   └── CSExcelDataProvider.java
+│   │   │           │   ├── json/
+│   │   │           │   │   └── CSJsonDataProvider.java
+│   │   │           │   └── xml/
+│   │   │           │       └── CSXmlDataProvider.java
+│   │   │           ├── integration/
+│   │   │           │   └── azuredevops/
+│   │   │           │       ├── DashboardCreator.java
+│   │   │           │       ├── DashboardManager.java
+│   │   │           │       └── TestPlansIntegration.java
+│   │   │           ├── metrics/
+│   │   │           │   ├── AzureDevOpsMetricsPusher.java
+│   │   │           │   └── TestMetricsCollector.java
+│   │   │           ├── reporting/
+│   │   │           │   ├── LogEntry.java
+│   │   │           │   ├── LogLevel.java
+│   │   │           │   ├── MetricsReportGenerator.java
+│   │   │           │   ├── ReportListener.java
+│   │   │           │   ├── ReportManager.java
+│   │   │           │   ├── ReportSummary.java
+│   │   │           │   ├── StepStatus.java
+│   │   │           │   ├── TestPlansReportListener.java
+│   │   │           │   ├── TestReport.java
+│   │   │           │   ├── TestStatus.java
+│   │   │           │   └── TestStep.java
+│   │   │           ├── testng/
+│   │   │           │   ├── CSTestBase.java
+│   │   │           │   └── TestNGXmlParser.java
+│   │   │           └── utils/
+│   │   │               ├── DateUtils.java
+│   │   │               ├── DBUtils.java
+│   │   │               ├── FileUtils.java
+│   │   │               ├── JsonUtils.java
+│   │   │               ├── pdf/
+│   │   │               │   └── PDFUtils.java
+│   │   │               ├── ssrs/
+│   │   │               │   └── SSRSUtils.java
+│   │   │               └── StringUtils.java
+│   │   └── resources/
+│   │       ├── application.properties
+│   │       ├── config/
+│   │       │   └── config.properties
+│   │       ├── env/
+│   │       │   ├── dev.properties
+│   │       │   ├── prod.properties
+│   │       │   ├── qa.properties
+│   │       │   └── uat.properties
+│   │       └── templates/
+│   │           ├── css/
+│   │           │   └── csmatrix.css
+│   │           ├── dashboard-template.html
+│   │           ├── dashboard.html
+│   │           ├── detail-template.html
+│   │           ├── email-template.html
+│   │           ├── images/
+│   │           │   └── csmatrix-logo.png
+│   │           └── js/
+│   │               ├── chart.min.js
+│   │               └── jquery.min.js
+│   └── test/
+│       ├── java/
+│       │   └── com/
+│       │       └── csmatrix/
+│       │           └── tests/
+│       │               ├── api/
+│       │               │   └── ApiExampleTests.java
+│       │               └── ui/
+│       │                   └── LoginTests.java
+│       └── resources/
+│           ├── features/
+│           │   └── login.feature
+│           └── testdata/
+│               ├── sample.csv
+│               ├── sample.json
+│               └── sample.xlsx
+├── testng-api.xml
+├── testng-regression.xml
+├── testng-smoke.xml
+├── testng-ui.xml
+└── testng.xml
