@@ -1,0 +1,1604 @@
+package com.ctgp.service.analyzer;
+
+import com.ctgp.model.analyzer.*;
+import com.microsoft.playwright.*;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+
+@Service
+public class WebAnalyzerService {
+    
+    /**
+     * Analyzes a web application and returns detailed analysis result
+     * 
+     * @param url The base URL of the web application
+     * @param depth The depth of the crawl
+     * @return WebApplicationAnalysis containing detailed analysis results
+     */
+    public WebApplicationAnalysis analyzeApplication(String url, int depth) {
+        WebApplicationAnalysis analysis = new WebApplicationAnalysis();
+        analysis.setId(UUID.randomUUID().toString());
+        analysis.setUrl(url);
+        analysis.setDepth(depth);
+        analysis.setAnalysisDate(LocalDateTime.now());
+        
+        try (Playwright playwright = Playwright.create()) {
+            Browser browser = playwright.chromium().launch(new BrowserType.LaunchOptions()
+                .setHeadless(true));
+            BrowserContext context = browser.newContext(new Browser.NewContextOptions()
+                .setViewportSize(1280, 720));
+            
+            // Start crawling from the base URL
+            Set<String> visitedUrls = new HashSet<>();
+            Set<String> urlsToVisit = new HashSet<>();
+            urlsToVisit.add(url);
+            
+            AtomicInteger currentDepth = new AtomicInteger(0);
+            
+            while (currentDepth.get() < depth && !urlsToVisit.isEmpty()) {
+                Set<String> newUrlsToVisit = new HashSet<>();
+                
+                for (String currentUrl : urlsToVisit) {
+                    if (visitedUrls.contains(currentUrl)) continue;
+                    
+                    System.out.println("Analyzing page: " + currentUrl);
+                    
+                    // Add current URL to visited set and pages list
+                    visitedUrls.add(currentUrl);
+                    analysis.addPage(currentUrl);
+                    
+                    // Open page in browser
+                    Page page = context.newPage();
+                    try {
+                        page.navigate(currentUrl, new Page.NavigateOptions().setTimeout(30000));
+                        page.waitForLoadState(LoadState.NETWORKIDLE);
+                        
+                        // Analyze forms
+                        analyzeForms(page, analysis, currentUrl);
+                        
+                        // Analyze elements
+                        analyzeElements(page, analysis, currentUrl);
+                        
+                        // Collect links for next depth if needed
+                        if (currentDepth.get() < depth - 1) {
+                            Set<String> links = collectLinks(page, url);
+                            links.removeAll(visitedUrls);
+                            newUrlsToVisit.addAll(links);
+                        }
+                    } catch (Exception e) {
+                        System.err.println("Error analyzing page " + currentUrl + ": " + e.getMessage());
+                    } finally {
+                        page.close();
+                    }
+                }
+                
+                urlsToVisit = newUrlsToVisit;
+                currentDepth.incrementAndGet();
+            }
+            
+            browser.close();
+        } catch (Exception e) {
+            System.err.println("Error during web analysis: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        return analysis;
+    }
+    
+    /**
+     * Convert detailed WebApplicationAnalysis to simplified WebAnalysisResult 
+     * for API responses
+     */
+    public WebAnalysisResult getAnalysisResult(WebApplicationAnalysis analysis) {
+        return new WebAnalysisResult(analysis);
+    }
+    
+    /**
+     * Analyze forms on a page
+     */
+    private void analyzeForms(Page page, WebApplicationAnalysis analysis, String currentUrl) {
+        List<ElementHandle> formElements = page.querySelectorAll("form");
+        
+        for (ElementHandle formElement : formElements) {
+            WebForm form = new WebForm();
+            form.setId(UUID.randomUUID().toString());
+            
+            // Extract form attributes
+            form.setFormId(formElement.getAttribute("id"));
+            form.setFormName(formElement.getAttribute("name"));
+            form.setAction(formElement.getAttribute("action"));
+            form.setMethod(formElement.getAttribute("method"));
+            
+            // Find all input elements within the form
+            List<ElementHandle> inputElements = formElement.querySelectorAll("input, select, textarea, button");
+            
+            for (ElementHandle inputElement : inputElements) {
+                WebElement element = createWebElement(inputElement);
+                element.setForm(form);
+                form.addElement(element);
+                analysis.addElement(currentUrl, element);
+            }
+            
+            analysis.addForm(currentUrl, form);
+        }
+    }
+    
+    /**
+     * Analyze elements on a page
+     */
+    private void analyzeElements(Page page, WebApplicationAnalysis analysis, String currentUrl) {
+        // Find interactive elements
+        List<ElementHandle> elements = page.querySelectorAll(
+            "button, a, input, select, textarea, [role='button'], [role='checkbox'], [role='radio']");
+        
+        for (ElementHandle element : elements) {
+            // Skip elements that are already part of a form
+            String formId = element.getAttribute("form");
+            if (formId != null && !formId.isEmpty()) {
+                continue;
+            }
+            
+            WebElement webElement = createWebElement(element);
+            analysis.addElement(currentUrl, webElement);
+        }
+    }
+    
+    /**
+     * Create a WebElement from a Playwright ElementHandle
+     */
+    private WebElement createWebElement(ElementHandle element) {
+        WebElement webElement = new WebElement();
+        webElement.setId(UUID.randomUUID().toString());
+        
+        // Set basic properties
+        String tagName = element.evaluate("el => el.tagName").toString().toLowerCase();
+        webElement.setTagName(tagName);
+        
+        // Try to get text content
+        try {
+            webElement.setText(element.innerText());
+        } catch (Exception e) {
+            // Some elements may not have text content
+        }
+        
+        // Determine element type
+        webElement.setType(determineElementType(element, tagName));
+        
+        // Get attributes
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("id", element.getAttribute("id"));
+        attributes.put("name", element.getAttribute("name"));
+        attributes.put("class", element.getAttribute("class"));
+        attributes.put("type", element.getAttribute("type"));
+        attributes.put("value", element.getAttribute("value"));
+        attributes.put("placeholder", element.getAttribute("placeholder"));
+        
+        // Remove null values
+        attributes.values().removeIf(Objects::isNull);
+        webElement.setAttributes(attributes);
+        
+        // Create selectors
+        Map<SelectorType, String> selectors = new HashMap<>();
+        
+        // ID selector
+        String id = attributes.get("id");
+        if (id != null && !id.isEmpty()) {
+            selectors.put(SelectorType.ID, id);
+        }
+        
+        // Name selector
+        String name = attributes.get("name");
+        if (name != null && !name.isEmpty()) {
+            selectors.put(SelectorType.NAME, name);
+        }
+        
+        // CSS selector
+        try {
+            String cssSelector = element.evaluate("el => {\n" +
+                "  let path = [];\n" +
+                "  while (el && el.nodeType === Node.ELEMENT_NODE) {\n" +
+                "    let selector = el.nodeName.toLowerCase();\n" +
+                "    if (el.id) {\n" +
+                "      selector += '#' + el.id;\n" +
+                "      path.unshift(selector);\n" +
+                "      break;\n" +
+                "    } else {\n" +
+                "      let sibling = el, nth = 1;\n" +
+                "      while (sibling = sibling.previousElementSibling) {\n" +
+                "        if (sibling.nodeName.toLowerCase() === selector) nth++;\n" +
+                "      }\n" +
+                "      if (nth !== 1) selector += ':nth-of-type(' + nth + ')';\n" +
+                "    }\n" +
+                "    path.unshift(selector);\n" +
+                "    el = el.parentNode;\n" +
+                "  }\n" +
+                "  return path.join(' > ');\n" +
+                "}").toString();
+            
+            selectors.put(SelectorType.CSS_SELECTOR, cssSelector);
+        } catch (Exception e) {
+            // Fallback to a basic selector
+            selectors.put(SelectorType.CSS_SELECTOR, tagName);
+        }
+        
+        // XPath selector
+        try {
+            String xpath = element.evaluate("el => {\n" +
+                "  const getXPath = node => {\n" +
+                "    let comp, comps = [];\n" +
+                "    let parent = node.parentNode;\n" +
+                "    let xpath = '';\n" +
+                "    if (!node.parentNode || parent.nodeType === 9) return '/' + node.nodeName.toLowerCase();\n" +
+                "    if (node.id) return `//${node.nodeName.toLowerCase()}[@id='${node.id}']`;\n" +
+                "    if (node === document.body) return '/html/body';\n" +
+                "    let siblings = parent.children;\n" +
+                "    for (let i = 0; i < siblings.length; i++) {\n" +
+                "      let sibling = siblings[i];\n" +
+                "      if (sibling === node) {\n" +
+                "        comps.unshift(node.nodeName.toLowerCase() + '[' + (comps.length + 1) + ']');\n" +
+                "        break;\n" +
+                "      }\n" +
+                "    }\n" +
+                "    return getXPath(parent) + '/' + comps[0];\n" +
+                "  };\n" +
+                "  return getXPath(el);\n" +
+                "}").toString();
+            
+            selectors.put(SelectorType.XPATH, xpath);
+        } catch (Exception e) {
+            // XPath generation can fail in some cases
+        }
+        
+        webElement.setSelectors(selectors);
+        
+        // Determine visibility and enabled state
+        try {
+            webElement.setVisible(element.isVisible());
+            webElement.setEnabled(!element.isDisabled());
+        } catch (Exception e) {
+            webElement.setVisible(true);
+            webElement.setEnabled(true);
+        }
+        
+        // Determine if required
+        String required = element.getAttribute("required");
+        webElement.setRequired(required != null && !required.isEmpty());
+        
+        return webElement;
+    }
+    
+    /**
+     * Determine element type based on tag and attributes
+     */
+    private ElementType determineElementType(ElementHandle element, String tagName) {
+        String type = element.getAttribute("type");
+        String role = element.getAttribute("role");
+        
+        switch (tagName) {
+            case "button":
+                return ElementType.BUTTON;
+            case "input":
+                if (type == null) {
+                    return ElementType.TEXT_INPUT;
+                }
+                switch (type.toLowerCase()) {
+                    case "checkbox":
+                        return ElementType.CHECKBOX;
+                    case "radio":
+                        return ElementType.RADIO;
+                    case "submit":
+                    case "reset":
+                    case "button":
+                        return ElementType.BUTTON;
+                    default:
+                        return ElementType.TEXT_INPUT;
+                }
+            case "select":
+                return ElementType.SELECT;
+            case "textarea":
+                return ElementType.TEXT_INPUT;
+            case "a":
+                return ElementType.LINK;
+            case "img":
+                return ElementType.IMAGE;
+            case "table":
+                return ElementType.TABLE;
+            case "label":
+                return ElementType.LABEL;
+            case "form":
+                return ElementType.FORM;
+            case "div":
+            case "section":
+            case "article":
+            case "aside":
+            case "nav":
+            case "header":
+            case "footer":
+                return ElementType.CONTAINER;
+            default:
+                if (role != null) {
+                    switch (role.toLowerCase()) {
+                        case "button":
+                            return ElementType.BUTTON;
+                        case "checkbox":
+                            return ElementType.CHECKBOX;
+                        case "radio":
+                            return ElementType.RADIO;
+                        case "link":
+                            return ElementType.LINK;
+                    }
+                }
+                return ElementType.OTHER;
+        }
+    }
+    
+    /**
+     * Collect links from a page for crawling
+     */
+    private Set<String> collectLinks(Page page, String baseUrl) {
+        List<String> links = page.evaluate("() => {\n" +
+            "  return Array.from(document.querySelectorAll('a[href]'))\n" +
+            "    .map(a => a.href)\n" +
+            "    .filter(href => href && href.startsWith('" + baseUrl + "'));\n" +
+            "}");
+        
+        return new HashSet<>(links);
+    }
+}
+
+
+
+package com.ctgp.service.generator;
+
+import com.ctgp.model.analyzer.*;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+public class AdvancedTestGeneratorService {
+    
+    /**
+     * Generate a test suite from web application analysis
+     */
+    public TestSuite generateTestSuite(WebApplicationAnalysis analysis, String projectId) {
+        TestSuite testSuite = new TestSuite();
+        testSuite.setId(UUID.randomUUID().toString());
+        testSuite.setName("Generated Test Suite for " + analysis.getUrl());
+        testSuite.setDescription("Automatically generated test suite based on web analysis");
+        testSuite.setProjectId(projectId);
+        testSuite.setCreatedAt(LocalDateTime.now());
+        testSuite.setUpdatedAt(LocalDateTime.now());
+        
+        // Generate form submission tests
+        List<TestCase> formTests = generateFormSubmissionTests(analysis);
+        formTests.forEach(testSuite::addTestCase);
+        
+        // Generate navigation tests
+        List<TestCase> navigationTests = generateNavigationTests(analysis);
+        navigationTests.forEach(testSuite::addTestCase);
+        
+        // Generate element interaction tests
+        List<TestCase> interactionTests = generateElementInteractionTests(analysis);
+        interactionTests.forEach(testSuite::addTestCase);
+        
+        return testSuite;
+    }
+    
+    /**
+     * Generate test cases for form submissions
+     */
+    private List<TestCase> generateFormSubmissionTests(WebApplicationAnalysis analysis) {
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // Group forms by page
+        for (Map.Entry<String, List<WebForm>> entry : analysis.getPageFormsMap().entrySet()) {
+            String page = entry.getKey();
+            List<WebForm> forms = entry.getValue();
+            
+            for (WebForm form : forms) {
+                if (form.getElements().isEmpty()) {
+                    continue; // Skip empty forms
+                }
+                
+                TestCase testCase = new TestCase();
+                testCase.setId(UUID.randomUUID().toString());
+                testCase.setName("Form Submission Test: " + (form.getFormName() != null ? form.getFormName() : "Form on " + page));
+                testCase.setDescription("Test form submission for " + (form.getFormName() != null ? form.getFormName() : "form on " + page));
+                testCase.setAutomated(true);
+                testCase.setCreatedAt(LocalDateTime.now());
+                testCase.setUpdatedAt(LocalDateTime.now());
+                
+                // Create test steps
+                List<Map<String, Object>> steps = new ArrayList<>();
+                
+                // Step 1: Navigate to page
+                steps.add(createNavigationStep(page));
+                
+                // Step 2-n: Fill form fields
+                for (WebElement element : form.getElements().stream()
+                        .filter(e -> e.getType() != ElementType.BUTTON)
+                        .collect(Collectors.toList())) {
+                    
+                    switch (element.getType()) {
+                        case TEXT_INPUT:
+                            steps.add(createInputStep(element));
+                            break;
+                        case SELECT:
+                            steps.add(createSelectStep(element));
+                            break;
+                        case CHECKBOX:
+                        case RADIO:
+                            steps.add(createClickStep(element));
+                            break;
+                    }
+                }
+                
+                // Find submit button
+                Optional<WebElement> submitButton = form.getElements().stream()
+                        .filter(e -> e.getType() == ElementType.BUTTON)
+                        .findFirst();
+                
+                // Add submit step
+                if (submitButton.isPresent()) {
+                    steps.add(createClickStep(submitButton.get()));
+                } else {
+                    steps.add(Map.of(
+                        "type", "submit",
+                        "description", "Submit the form",
+                        "action", "evaluate",
+                        "selector", getFormSelector(form),
+                        "expression", "form => form.submit()"
+                    ));
+                }
+                
+                // Add verification step
+                steps.add(createWaitForNavigationStep());
+                steps.add(createVerificationStep("body", "exists"));
+                
+                testCase.setSteps(steps);
+                testCases.add(testCase);
+            }
+        }
+        
+        return testCases;
+    }
+    
+    /**
+     * Generate test cases for navigation between pages
+     */
+    private List<TestCase> generateNavigationTests(WebApplicationAnalysis analysis) {
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // Create a navigation test case
+        TestCase testCase = new TestCase();
+        testCase.setId(UUID.randomUUID().toString());
+        testCase.setName("Navigation Test: " + analysis.getUrl());
+        testCase.setDescription("Test navigation through all discovered pages");
+        testCase.setAutomated(true);
+        testCase.setCreatedAt(LocalDateTime.now());
+        testCase.setUpdatedAt(LocalDateTime.now());
+        
+        // Create test steps for navigation
+        List<Map<String, Object>> steps = new ArrayList<>();
+        
+        // For each page, add a navigation step
+        for (String page : analysis.getPages()) {
+            steps.add(createNavigationStep(page));
+            
+            // Add verification step for each page
+            steps.add(createVerificationStep("body", "exists"));
+            
+            // Take a screenshot for evidence
+            steps.add(createScreenshotStep("Page_" + analysis.getPages().indexOf(page)));
+        }
+        
+        testCase.setSteps(steps);
+        testCases.add(testCase);
+        
+        return testCases;
+    }
+    
+    /**
+     * Generate test cases for element interactions
+     */
+    private List<TestCase> generateElementInteractionTests(WebApplicationAnalysis analysis) {
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // For each page, generate interaction tests for clickable elements
+        for (Map.Entry<String, List<WebElement>> entry : analysis.getPageElementsMap().entrySet()) {
+            String page = entry.getKey();
+            List<WebElement> elements = entry.getValue();
+            
+            // Filter for interactive elements not in forms
+            List<WebElement> interactiveElements = elements.stream()
+                    .filter(e -> e.getForm() == null)
+                    .filter(e -> e.getType() == ElementType.BUTTON || e.getType() == ElementType.LINK)
+                    .collect(Collectors.toList());
+            
+            if (interactiveElements.isEmpty()) {
+                continue;
+            }
+            
+            TestCase testCase = new TestCase();
+            testCase.setId(UUID.randomUUID().toString());
+            testCase.setName("Interaction Test: " + page);
+            testCase.setDescription("Test interactions with elements on " + page);
+            testCase.setAutomated(true);
+            testCase.setCreatedAt(LocalDateTime.now());
+            testCase.setUpdatedAt(LocalDateTime.now());
+            
+            // Create test steps
+            List<Map<String, Object>> steps = new ArrayList<>();
+            
+            // Step 1: Navigate to page
+            steps.add(createNavigationStep(page));
+            
+            // Step 2: Verify page loaded
+            steps.add(createVerificationStep("body", "exists"));
+            
+            // Step 3-n: Interact with elements
+            for (WebElement element : interactiveElements) {
+                steps.add(createClickStep(element));
+                
+                // If it's a link, we might navigate away, so add a back step
+                if (element.getType() == ElementType.LINK) {
+                    steps.add(createWaitForNavigationStep());
+                    steps.add(Map.of(
+                        "type", "navigation",
+                        "description", "Go back to previous page",
+                        "action", "goBack"
+                    ));
+                    steps.add(createWaitForNavigationStep());
+                } else {
+                    // For buttons, we might need to wait for DOM changes
+                    steps.add(Map.of(
+                        "type", "wait",
+                        "description", "Wait for potential changes",
+                        "action", "waitForTimeout",
+                        "timeout", 1000
+                    ));
+                }
+            }
+            
+            testCase.setSteps(steps);
+            testCases.add(testCase);
+        }
+        
+        return testCases;
+    }
+    
+    /**
+     * Helper methods to create test steps
+     */
+    private Map<String, Object> createNavigationStep(String url) {
+        return Map.of(
+            "type", "navigation",
+            "description", "Navigate to " + url,
+            "action", "goto",
+            "url", url
+        );
+    }
+    
+    private Map<String, Object> createInputStep(WebElement element) {
+        return Map.of(
+            "type", "input",
+            "description", "Enter text in " + getElementDescription(element),
+            "action", "fill",
+            "selector", getBestSelector(element),
+            "value", generateSampleValue(element)
+        );
+    }
+    
+    private Map<String, Object> createSelectStep(WebElement element) {
+        return Map.of(
+            "type", "select",
+            "description", "Select option in " + getElementDescription(element),
+            "action", "selectOption",
+            "selector", getBestSelector(element),
+            "option", Map.of("index", 1)
+        );
+    }
+    
+    private Map<String, Object> createClickStep(WebElement element) {
+        return Map.of(
+            "type", "click",
+            "description", "Click on " + getElementDescription(element),
+            "action", "click",
+            "selector", getBestSelector(element)
+        );
+    }
+    
+    private Map<String, Object> createWaitForNavigationStep() {
+        return Map.of(
+            "type", "wait",
+            "description", "Wait for navigation to complete",
+            "action", "waitForNavigation"
+        );
+    }
+    
+    private Map<String, Object> createVerificationStep(String selector, String condition) {
+        return Map.of(
+            "type", "verification",
+            "description", "Verify element " + selector + " " + condition,
+            "action", "expect",
+            "selector", selector,
+            "assertion", condition
+        );
+    }
+    
+    private Map<String, Object> createScreenshotStep(String name) {
+        return Map.of(
+            "type", "screenshot",
+            "description", "Take screenshot",
+            "action", "screenshot",
+            "path", name + ".png"
+        );
+    }
+    
+    /**
+     * Helper methods for working with elements
+     */
+    private String getElementDescription(WebElement element) {
+        if (element.getText() != null && !element.getText().isEmpty()) {
+            return "'" + element.getText() + "'";
+        } else if (element.getAttributes().get("name") != null) {
+            return element.getAttributes().get("name");
+        } else if (element.getAttributes().get("id") != null) {
+            return element.getAttributes().get("id");
+        } else {
+            return element.getType().toString().toLowerCase();
+        }
+    }
+    
+    private String getBestSelector(WebElement element) {
+        // Use best available selector
+        if (element.getSelectors().containsKey(SelectorType.ID)) {
+            return "#" + element.getSelectors().get(SelectorType.ID);
+        } else if (element.getSelectors().containsKey(SelectorType.CSS_SELECTOR)) {
+            return element.getSelectors().get(SelectorType.CSS_SELECTOR);
+        } else if (element.getSelectors().containsKey(SelectorType.XPATH)) {
+            return element.getSelectors().get(SelectorType.XPATH);
+        } else {
+            return element.getTagName();
+        }
+    }
+    
+    private String getFormSelector(WebForm form) {
+        if (form.getFormId() != null && !form.getFormId().isEmpty()) {
+            return "form#" + form.getFormId();
+        } else if (form.getFormName() != null && !form.getFormName().isEmpty()) {
+            return "form[name='" + form.getFormName() + "']";
+        } else {
+            return "form";
+        }
+    }
+    
+    private String generateSampleValue(WebElement element) {
+        String elementName = element.getAttributes().getOrDefault("name", "").toLowerCase();
+        String elementType = element.getAttributes().getOrDefault("type", "").toLowerCase();
+        String placeholder = element.getAttributes().getOrDefault("placeholder", "").toLowerCase();
+        
+        // Generate appropriate test data based on field attributes
+        if (elementType.equals("email") || elementName.contains("email")) {
+            return "test@example.com";
+        } else if (elementType.equals("password") || elementName.contains("pass")) {
+            return "TestPassword123!";
+        } else if (elementType.equals("tel") || elementName.contains("phone") || elementName.contains("mobile")) {
+            return "123-456-7890";
+        } else if (elementName.contains("name")) {
+            if (elementName.contains("first")) {
+                return "John";
+            } else if (elementName.contains("last")) {
+                return "Doe";
+            } else {
+                return "John Doe";
+            }
+        } else if (elementName.contains("address")) {
+            return "123 Test Street";
+        } else if (elementName.contains("city")) {
+            return "Test City";
+        } else if (elementName.contains("state")) {
+            return "California";
+        } else if (elementName.contains("zip") || elementName.contains("postal")) {
+            return "12345";
+        } else if (elementName.contains("country")) {
+            return "United States";
+        } else if (elementType.equals("number") || elementName.contains("number")) {
+            return "42";
+        } else if (elementType.equals("date") || elementName.contains("date")) {
+            return "2023-01-01";
+        } else if (elementName.contains("card")) {
+            return "4111111111111111"; // Test credit card number
+        } else if (elementName.contains("cvv") || elementName.contains("cvc")) {
+            return "123";
+        } else if (elementName.contains("month")) {
+            return "01";
+        } else if (elementName.contains("year")) {
+            return "2025";
+        } else if (elementName.contains("comment") || elementName.contains("message")) {
+            return "This is a test message from the automated test generation platform.";
+        } else if (placeholder != null && !placeholder.isEmpty()) {
+            return "Test " + placeholder;
+        } else {
+            return "Test Input";
+        }
+    }
+}
+
+package com.ctgp.service.execution;
+
+import com.ctgp.model.execution.TestExecutionResult;
+import com.ctgp.model.execution.TestExecutionSession;
+import com.ctgp.model.execution.TestExecutionSummary;
+import com.ctgp.model.execution.TestStepResult;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.service.workspace.WorkspaceService;
+import com.microsoft.playwright.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+@Service
+public class TestExecutionService {
+    
+    private final WorkspaceService workspaceService;
+    
+    @Autowired
+    public TestExecutionService(WorkspaceService workspaceService) {
+        this.workspaceService = workspaceService;
+    }
+    
+    /**
+     * Execute a test suite and return execution session results
+     */
+    public TestExecutionSession executeTestSuite(String workspaceId, String projectId, String testSuiteId, 
+                                                String environment, String browser) {
+        // Get the test suite from workspace service
+        TestSuite testSuite = workspaceService.getTestSuite(projectId, testSuiteId);
+        
+        if (testSuite == null) {
+            throw new IllegalArgumentException("Test suite not found");
+        }
+        
+        // Create new execution session
+        TestExecutionSession session = new TestExecutionSession();
+        session.setId(UUID.randomUUID().toString());
+        session.setWorkspaceId(workspaceId);
+        session.setProjectId(projectId);
+        session.setTestSuiteId(testSuiteId);
+        session.setStartTime(LocalDateTime.now());
+        session.setEnvironment(environment);
+        session.setBrowser(browser);
+        
+        // Execute each test case in the suite
+        for (TestCase testCase : testSuite.getTestCases()) {
+            TestExecutionResult result = executeTestCase(testCase, browser, environment);
+            session.addTestResult(result);
+        }
+        
+        session.setEndTime(LocalDateTime.now());
+        
+        return session;
+    }
+    
+    /**
+     * Get summary of test execution session
+     */
+    public TestExecutionSummary getExecutionSummary(TestExecutionSession session) {
+        return new TestExecutionSummary(session);
+    }
+    
+    /**
+     * Execute a single test case using Playwright
+     */
+    private TestExecutionResult executeTestCase(TestCase testCase, String browserName, String environment) {
+        TestExecutionResult result = new TestExecutionResult();
+        result.setId(UUID.randomUUID().toString());
+        result.setTestCaseId(testCase.getId());
+        result.setTestCaseName(testCase.getName());
+        result.setExecutionTime(LocalDateTime.now());
+        
+        try (Playwright playwright = Playwright.create()) {
+            BrowserType browserType;
+            
+            // Select browser type based on parameter
+            switch (browserName.toLowerCase()) {
+                case "firefox":
+                    browserType = playwright.firefox();
+                    break;
+                case "webkit":
+                    browserType = playwright.webkit();
+                    break;
+                case "chrome":
+                case "chromium":
+                default:
+                    browserType = playwright.chromium();
+            }
+            
+            Browser browser = browserType.launch(new BrowserType.LaunchOptions()
+                .setHeadless(true));
+            
+            BrowserContext context = browser.newContext(new Browser.NewContextOptions()
+                .setViewportSize(1280, 720));
+            
+            Page page = context.newPage();
+            
+            // Set environment-specific base URL or other settings
+            String baseUrl = getBaseUrlForEnvironment(environment);
+            
+            // Execute test steps
+            boolean testPassed = executeTestSteps(page, testCase.getSteps(), baseUrl);
+            result.setPassed(testPassed);
+            
+            // If test failed, capture screenshot
+            if (!testPassed) {
+                try {
+                    byte[] screenshot = page.screenshot(new Page.ScreenshotOptions()
+                        .setFullPage(true));
+                    
+                    // Convert screenshot to base64 for storing in the result
+                    String base64Screenshot = Base64.getEncoder().encodeToString(screenshot);
+                    result.setScreenshot("data:image/png;base64," + base64Screenshot);
+                } catch (Exception e) {
+                    System.err.println("Failed to capture screenshot: " + e.getMessage());
+                }
+            }
+            
+            browser.close();
+            
+        } catch (Exception e) {
+            // Test failed due to unexpected exception
+            result.setPassed(false);
+            result.setErrorMessage("Test execution failed: " + e.getMessage());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Execute test steps for a test case
+     * @return true if all steps passed, false if any step failed
+     */
+    private boolean executeTestSteps(Page page, List<Map<String, Object>> steps, String baseUrl) {
+        for (Map<String, Object> step : steps) {
+            String action = (String) step.get("action");
+            String description = (String) step.get("description");
+            
+            System.out.println("Executing step: " + description);
+            
+            try {
+                switch (action) {
+                    case "goto":
+                        String url = (String) step.get("url");
+                        // Replace placeholders in URL if needed
+                        if (url.startsWith("${BASE_URL}")) {
+                            url = url.replace("${BASE_URL}", baseUrl);
+                        }
+                        page.navigate(url);
+                        break;
+                        
+                    case "click":
+                        String clickSelector = (String) step.get("selector");
+                        page.click(clickSelector);
+                        break;
+                        
+                    case "fill":
+                        String fillSelector = (String) step.get("selector");
+                        String value = (String) step.get("value");
+                        page.fill(fillSelector, value);
+                        break;
+                        
+                    case "selectOption":
+                        String selectSelector = (String) step.get("selector");
+                        if (step.get("option") instanceof Map) {
+                            Map<String, Object> option = (Map<String, Object>) step.get("option");
+                            if (option.containsKey("index")) {
+                                // Select by index
+                                int index = ((Number) option.get("index")).intValue();
+                                // Playwright doesn't support direct index selection, so we need to query all options
+                                String optionSelector = selectSelector + " option:nth-child(" + (index + 1) + ")";
+                                String optionValue = page.getAttribute(optionSelector, "value");
+                                page.selectOption(selectSelector, optionValue);
+                            } else if (option.containsKey("value")) {
+                                // Select by value
+                                page.selectOption(selectSelector, (String) option.get("value"));
+                            } else if (option.containsKey("label")) {
+                                // Select by label
+                                page.selectOption(selectSelector, new SelectOption().setLabel((String) option.get("label")));
+                            }
+                        } else {
+                            // Direct option value
+                            page.selectOption(selectSelector, (String) step.get("option"));
+                        }
+                        break;
+                        
+                    case "waitForNavigation":
+                        page.waitForNavigation();
+                        break;
+                        
+                    case "waitForTimeout":
+                        int timeout = ((Number) step.get("timeout")).intValue();
+                        page.waitForTimeout(timeout);
+                        break;
+                        
+                    case "waitForSelector":
+                        String waitSelector = (String) step.get("selector");
+                        page.waitForSelector(waitSelector);
+                        break;
+                        
+                    case "evaluate":
+                        String evalSelector = (String) step.get("selector");
+                        String expression = (String) step.get("expression");
+                        ElementHandle element = page.querySelector(evalSelector);
+                        if (element != null) {
+                            element.evaluate(expression);
+                        } else {
+                            throw new RuntimeException("Element not found: " + evalSelector);
+                        }
+                        break;
+                        
+                    case "expect":
+                        String expectSelector = (String) step.get("selector");
+                        String assertion = (String) step.get("assertion");
+                        
+                        switch (assertion) {
+                            case "exists":
+                                ElementHandle existsElement = page.querySelector(expectSelector);
+                                if (existsElement == null) {
+                                    throw new RuntimeException("Expected element to exist: " + expectSelector);
+                                }
+                                break;
+                                
+                            case "visible":
+                                boolean isVisible = page.isVisible(expectSelector);
+                                if (!isVisible) {
+                                    throw new RuntimeException("Expected element to be visible: " + expectSelector);
+                                }
+                                break;
+                                
+                            case "contains":
+                                String expectedText = (String) step.get("value");
+                                String actualText = page.textContent(expectSelector);
+                                if (actualText == null || !actualText.contains(expectedText)) {
+                                    throw new RuntimeException("Expected text '" + expectedText + "' not found in element " + expectSelector);
+                                }
+                                break;
+                                
+                            default:
+                                throw new RuntimeException("Unsupported assertion: " + assertion);
+                        }
+                        break;
+                        
+                    case "screenshot":
+                        String path = (String) step.get("path");
+                        page.screenshot(new Page.ScreenshotOptions().setPath(Path.of(path)));
+                        break;
+                        
+                    case "goBack":
+                        page.goBack();
+                        break;
+                        
+                    case "submit":
+                        String formSelector = (String) step.get("selector");
+                        page.evaluate("selector => { document.querySelector(selector).submit(); }", formSelector);
+                        break;
+                        
+                    default:
+                        throw new RuntimeException("Unsupported action: " + action);
+                }
+                
+            } catch (Exception e) {
+                System.err.println("Step failed: " + description);
+                System.err.println("Error: " + e.getMessage());
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Get base URL for the specified environment
+     */
+    private String getBaseUrlForEnvironment(String environment) {
+        switch (environment.toLowerCase()) {
+            case "production":
+            case "prod":
+                return "https://production.example.com";
+            case "staging":
+                return "https://staging.example.com";
+            case "development":
+            case "dev":
+            default:
+                return "https://dev.example.com";
+        }
+    }
+}
+
+
+package com.ctgp.service.codegen;
+
+import org.springframework.stereotype.Service;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Service for integrating with Playwright's codegen functionality
+ * to record user interactions and generate tests
+ */
+@Service
+public class PlaywrightCodegenService {
+    
+    /**
+     * Start a Playwright codegen session to record user interactions
+     * 
+     * @param url The URL to start recording from
+     * @param outputFormat The desired output format (java, javascript, python)
+     * @return A future that will complete with the recorded script
+     */
+    public CompletableFuture<String> startRecordingSession(String url, String outputFormat) {
+        CompletableFuture<String> future = new CompletableFuture<>();
+        
+        // Build the command to launch Playwright codegen
+        List<String> command = new ArrayList<>();
+        command.add("npx");
+        command.add("playwright");
+        command.add("codegen");
+        
+        // Add output format if specified
+        if (outputFormat != null && !outputFormat.isEmpty()) {
+            command.add("--target");
+            command.add(outputFormat);
+        }
+        
+        // Add starting URL
+        command.add(url);
+        
+        // Start the process asynchronously
+        new Thread(() -> {
+            try {
+                ProcessBuilder processBuilder = new ProcessBuilder(command);
+                processBuilder.redirectErrorStream(true);
+                Process process = processBuilder.start();
+                
+                // Read the output
+                StringBuilder output = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        output.append(line).append("\n");
+                    }
+                }
+                
+                // Wait for the process to complete
+                int exitCode = process.waitFor();
+                
+                if (exitCode == 0) {
+                    // Extract the generated code from the output
+                    String generatedCode = extractGeneratedCode(output.toString(), outputFormat);
+                    future.complete(generatedCode);
+                } else {
+                    future.completeExceptionally(new RuntimeException("Playwright codegen exited with code " + exitCode));
+                }
+                
+            } catch (IOException | InterruptedException e) {
+                future.completeExceptionally(e);
+            }
+        }).start();
+        
+        return future;
+    }
+    
+    /**
+     * Convert a recorded Playwright script to test steps
+     * 
+     * @param playwrightScript The script generated by Playwright codegen
+     * @return A list of test steps in our format
+     */
+    public List<Map<String, Object>> convertPlaywrightScriptToTestSteps(String playwrightScript) {
+        List<Map<String, Object>> steps = new ArrayList<>();
+        
+        // Different patterns based on the language
+        if (playwrightScript.contains("page.navigate(")) {
+            // Java format
+            parseJavaScript(playwrightScript, steps);
+        } else if (playwrightScript.contains("await page.goto(")) {
+            // JavaScript format
+            parseJavaScript(playwrightScript, steps);
+        } else if (playwrightScript.contains("page.goto(")) {
+            // Python format
+            parsePythonScript(playwrightScript, steps);
+        }
+        
+        return steps;
+    }
+    
+    /**
+     * Parse a JavaScript or Java Playwright script to extract test steps
+     */
+    private void parseJavaScript(String script, List<Map<String, Object>> steps) {
+        // Regular expressions to match common Playwright actions
+        Pattern navigatePattern = Pattern.compile("(?:await )?page\\.(?:navigate|goto)\\([\"\']([^\"\']*)[\"\']\\)");
+        Pattern clickPattern = Pattern.compile("(?:await )?page\\.click\\([\"\']([^\"\']*)[\"\']\\)");
+        Pattern fillPattern = Pattern.compile("(?:await )?page\\.fill\\([\"\']([^\"\']*)[\"\'], [\"\']([^\"\']*)[\"\']\\)");
+        Pattern selectPattern = Pattern.compile("(?:await )?page\\.selectOption\\([\"\']([^\"\']*)[\"\'], (?:[{\"\']([^\"\'}]*)[\"\'}])?\\)");
+        Pattern waitForNavigationPattern = Pattern.compile("(?:await )?page\\.waitForNavigation\\(\\)");
+        
+        // Process each line
+        String[] lines = script.split("\n");
+        for (String line : lines) {
+            line = line.trim();
+            
+            // Skip empty lines and comments
+            if (line.isEmpty() || line.startsWith("//") || line.startsWith("/*")) {
+                continue;
+            }
+            
+            // Check for navigation
+            Matcher navigateMatcher = navigatePattern.matcher(line);
+            if (navigateMatcher.find()) {
+                String url = navigateMatcher.group(1);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "navigation");
+                step.put("description", "Navigate to " + url);
+                step.put("action", "goto");
+                step.put("url", url);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for clicks
+            Matcher clickMatcher = clickPattern.matcher(line);
+            if (clickMatcher.find()) {
+                String selector = clickMatcher.group(1);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "click");
+                step.put("description", "Click on element " + selector);
+                step.put("action", "click");
+                step.put("selector", selector);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for filling input fields
+            Matcher fillMatcher = fillPattern.matcher(line);
+            if (fillMatcher.find()) {
+                String selector = fillMatcher.group(1);
+                String value = fillMatcher.group(2);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "input");
+                step.put("description", "Fill " + selector + " with '" + value + "'");
+                step.put("action", "fill");
+                step.put("selector", selector);
+                step.put("value", value);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for select options
+            Matcher selectMatcher = selectPattern.matcher(line);
+            if (selectMatcher.find()) {
+                String selector = selectMatcher.group(1);
+                String value = selectMatcher.group(2);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "select");
+                step.put("description", "Select option in " + selector);
+                step.put("action", "selectOption");
+                step.put("selector", selector);
+                step.put("option", value);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for waiting for navigation
+            Matcher waitMatcher = waitForNavigationPattern.matcher(line);
+            if (waitMatcher.find()) {
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "wait");
+                step.put("description", "Wait for navigation to complete");
+                step.put("action", "waitForNavigation");
+                steps.add(step);
+                continue;
+            }
+        }
+    }
+    
+    /**
+     * Parse a Python Playwright script to extract test steps
+     */
+    private void parsePythonScript(String script, List<Map<String, Object>> steps) {
+        // Regular expressions to match common Playwright actions in Python
+        Pattern navigatePattern = Pattern.compile("page\\.goto\\([\"']([^\"']*)[\"']\\)");
+        Pattern clickPattern = Pattern.compile("page\\.click\\([\"']([^\"']*)[\"']\\)");
+        Pattern fillPattern = Pattern.compile("page\\.fill\\([\"']([^\"']*)[\"'], [\"']([^\"']*)[\"']\\)");
+        Pattern selectPattern = Pattern.compile("page\\.select_option\\([\"']([^\"']*)[\"'], (?:[{\"']([^\"'}]*)[\"']}])?\\)");
+        Pattern waitForNavigationPattern = Pattern.compile("page\\.wait_for_navigation\\(\\)");
+        
+        // Process each line
+        String[] lines = script.split("\n");
+        for (String line : lines) {
+            line = line.trim();
+            
+            // Skip empty lines and comments
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+            
+            // Check for navigation
+            Matcher navigateMatcher = navigatePattern.matcher(line);
+            if (navigateMatcher.find()) {
+                String url = navigateMatcher.group(1);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "navigation");
+                step.put("description", "Navigate to " + url);
+                step.put("action", "goto");
+                step.put("url", url);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for clicks
+            Matcher clickMatcher = clickPattern.matcher(line);
+            if (clickMatcher.find()) {
+                String selector = clickMatcher.group(1);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "click");
+                step.put("description", "Click on element " + selector);
+                step.put("action", "click");
+                step.put("selector", selector);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for filling input fields
+            Matcher fillMatcher = fillPattern.matcher(line);
+            if (fillMatcher.find()) {
+                String selector = fillMatcher.group(1);
+                String value = fillMatcher.group(2);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "input");
+                step.put("description", "Fill " + selector + " with '" + value + "'");
+                step.put("action", "fill");
+                step.put("selector", selector);
+                step.put("value", value);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for select options
+            Matcher selectMatcher = selectPattern.matcher(line);
+            if (selectMatcher.find()) {
+                String selector = selectMatcher.group(1);
+                String value = selectMatcher.group(2);
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "select");
+                step.put("description", "Select option in " + selector);
+                step.put("action", "selectOption");
+                step.put("selector", selector);
+                step.put("option", value);
+                steps.add(step);
+                continue;
+            }
+            
+            // Check for waiting for navigation
+            Matcher waitMatcher = waitForNavigationPattern.matcher(line);
+            if (waitMatcher.find()) {
+                Map<String, Object> step = new HashMap<>();
+                step.put("type", "wait");
+                step.put("description", "Wait for navigation to complete");
+                step.put("action", "waitForNavigation");
+                steps.add(step);
+                continue;
+            }
+        }
+    }
+    
+    /**
+     * Extract the generated code from Playwright codegen output
+     */
+    private String extractGeneratedCode(String output, String format) {
+        // The actual code is usually after some introductory text
+        // For this simplified version, we'll just return the whole output
+        // In a real implementation, you'd want to parse this more carefully
+        return output;
+    }
+}
+
+
+
+package com.ctgp.controller;
+
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.service.codegen.PlaywrightCodegenService;
+import com.ctgp.service.workspace.WorkspaceService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+
+@RestController
+@RequestMapping("/api/codegen")
+public class CodegenController {
+    
+    private final PlaywrightCodegenService codegenService;
+    private final WorkspaceService workspaceService;
+    
+    @Autowired
+    public CodegenController(PlaywrightCodegenService codegenService, WorkspaceService workspaceService) {
+        this.codegenService = codegenService;
+        this.workspaceService = workspaceService;
+    }
+    
+    /**
+     * Start a recording session using Playwright codegen
+     */
+    @PostMapping("/start-recording")
+    public ResponseEntity<String> startRecording(
+            @RequestParam String url,
+            @RequestParam(required = false, defaultValue = "java") String outputFormat) {
+        
+        CompletableFuture<String> future = codegenService.startRecordingSession(url, outputFormat);
+        
+        // In a real implementation, you'd want to handle this asynchronously
+        // For simplicity, we'll just wait for the result here
+        try {
+            String result = future.get();
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("Recording failed: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Convert a recorded script to test steps and create a test case
+     */
+    @PostMapping("/convert-to-test-case")
+    public ResponseEntity<TestCase> convertToTestCase(
+            @RequestParam String testSuiteId,
+            @RequestParam String testName,
+            @RequestBody String playwrightScript) {
+        
+        // Convert the script to our test steps format
+        List<Map<String, Object>> steps = codegenService.convertPlaywrightScriptToTestSteps(playwrightScript);
+        
+        // Create a new test case
+        TestCase testCase = new TestCase();
+        testCase.setId(UUID.randomUUID().toString());
+        testCase.setName(testName);
+        testCase.setDescription("Test case created from Playwright recording");
+        testCase.setTestSuiteId(testSuiteId);
+        testCase.setAutomated(true);
+        testCase.setCreatedAt(LocalDateTime.now());
+        testCase.setUpdatedAt(LocalDateTime.now());
+        testCase.setSteps(steps);
+        
+        // Save the test case
+        TestCase savedTestCase = workspaceService.createTestCase(testCase);
+        
+        return ResponseEntity.ok(savedTestCase);
+    }
+}
+
+
+// src/components/PlaywrightRecorder.tsx
+import React, { useState } from 'react';
+import { Button, Modal, Form, Spinner, Alert } from 'react-bootstrap';
+import axios from 'axios';
+
+interface PlaywrightRecorderProps {
+  testSuiteId: string;
+  onRecordingComplete: (testCase: any) => void;
+}
+
+const PlaywrightRecorder: React.FC<PlaywrightRecorderProps> = ({ testSuiteId, onRecordingComplete }) => {
+  const [show, setShow] = useState(false);
+  const [url, setUrl] = useState('');
+  const [testName, setTestName] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedScript, setRecordedScript] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [outputFormat, setOutputFormat] = useState('java');
+  
+  const handleClose = () => setShow(false);
+  const handleShow = () => setShow(true);
+  
+  const startRecording = async () => {
+    if (!url) {
+      setError('Please enter a URL');
+      return;
+    }
+    
+    if (!testName) {
+      setError('Please enter a test name');
+      return;
+    }
+    
+    setError(null);
+    setIsRecording(true);
+    
+    try {
+      const response = await axios.post('/api/codegen/start-recording', null, {
+        params: {
+          url,
+          outputFormat
+        }
+      });
+      
+      setRecordedScript(response.data);
+      
+      // Now convert the script to a test case
+      const testCaseResponse = await axios.post('/api/codegen/convert-to-test-case', 
+        recordedScript,
+        {
+          params: {
+            testSuiteId,
+            testName
+          },
+          headers: {
+            'Content-Type': 'text/plain'
+          }
+        }
+      );
+      
+      onRecordingComplete(testCaseResponse.data);
+      handleClose();
+      
+    } catch (error) {
+      setError('Recording failed: ' + (error.response?.data || error.message));
+    } finally {
+      setIsRecording(false);
+    }
+  };
+  
+  return (
+    <>
+      <Button variant="primary" onClick={handleShow}>
+        <i className="fas fa-video me-2"></i> Record New Test
+      </Button>
+      
+      <Modal show={show} onHide={handleClose} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Record Test with Playwright</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {error && (
+            <Alert variant="danger" onClose={() => setError(null)} dismissible>
+              {error}
+            </Alert>
+          )}
+          
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Test Name</Form.Label>
+              <Form.Control 
+                type="text" 
+                placeholder="Enter test name" 
+                value={testName}
+                onChange={(e) => setTestName(e.target.value)}
+                disabled={isRecording}
+              />
+            </Form.Group>
+            
+            <Form.Group className="mb-3">
+              <Form.Label>URL to Test</Form.Label>
+              <Form.Control 
+                type="url" 
+                placeholder="https://example.com" 
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                disabled={isRecording}
+              />
+            </Form.Group>
+            
+            <Form.Group className="mb-3">
+              <Form.Label>Output Format</Form.Label>
+              <Form.Select 
+                value={outputFormat}
+                onChange={(e) => setOutputFormat(e.target.value)}
+                disabled={isRecording}
+              >
+                <option value="java">Java</option>
+                <option value="javascript">JavaScript</option>
+                <option value="python">Python</option>
+              </Form.Select>
+            </Form.Group>
+            
+            {isRecording && (
+              <div className="text-center my-4">
+                <Spinner animation="border" variant="primary" />
+                <p className="mt-2">
+                  Recording in progress... A Playwright browser window has been opened.
+                  <br />
+                  Interact with the website and close the browser when finished.
+                </p>
+              </div>
+            )}
+            
+            {recordedScript && !isRecording && (
+              <div className="mt-3">
+                <h6>Recorded Script:</h6>
+                <pre className="bg-light p-3 border rounded">
+                  {recordedScript}
+                </pre>
+              </div>
+            )}
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={handleClose} disabled={isRecording}>
+            Cancel
+          </Button>
+          <Button 
+            variant="primary" 
+            onClick={startRecording} 
+            disabled={isRecording || !url || !testName}
+          >
+            {isRecording ? (
+              <>
+                <Spinner as="span" animation="border" size="sm" className="me-2" />
+                Recording...
+              </>
+            ) : (
+              <>Start Recording</>
+            )}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </>
+  );
+};
+
+export default PlaywrightRecorder;
+
+
+// Update in your TestGenerator.tsx or similar component
+
+// Add import
+import PlaywrightRecorder from '../components/PlaywrightRecorder';
+
+// Inside your component's render method, add the recorder component:
+<div className="d-flex justify-content-between mb-3">
+  <h4>Test Cases</h4>
+  <PlaywrightRecorder 
+    testSuiteId={selectedTestSuite} 
+    onRecordingComplete={(testCase) => {
+      // Refresh the list of test cases or add the new one to the existing list
+      setTestCases([...testCases, testCase]);
+    }} 
+  />
+</div>
+
+
+
+                      
