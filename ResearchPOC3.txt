@@ -1,0 +1,2675 @@
+ElementType.java
+-------------------
+
+package com.ctgp.model.analyzer;
+
+/**
+ * Types of web elements.
+ */
+public enum ElementType {
+    BUTTON,
+    LINK,
+    INPUT,
+    TEXT_INPUT,
+    CHECKBOX,
+    RADIO,
+    SELECT,
+    TEXTAREA,
+    FILE_INPUT,
+    DATE_INPUT,
+    OTHER
+}
+
+SelectorType.java
+--------------------
+
+package com.ctgp.model.analyzer;
+
+/**
+ * Types of selectors.
+ */
+public enum SelectorType {
+    ID,
+    CSS,
+    XPATH,
+    TEXT
+}
+
+
+Settings.tsx
+------------------
+
+// src/pages/Settings.tsx
+import React, { useState, useEffect } from 'react';
+import { toast } from 'react-toastify';
+import { FaSave, FaSync, FaCog } from 'react-icons/fa';
+
+interface AppSettings {
+  defaultBrowser: string;
+  defaultViewportWidth: number;
+  defaultViewportHeight: number;
+  defaultTimeout: number;
+  headless: boolean;
+  recordVideo: boolean;
+  screenshotOnFailure: boolean;
+}
+
+const Settings: React.FC = () => {
+  const [settings, setSettings] = useState<AppSettings>({
+    defaultBrowser: 'chromium',
+    defaultViewportWidth: 1280,
+    defaultViewportHeight: 720,
+    defaultTimeout: 30000,
+    headless: true,
+    recordVideo: false,
+    screenshotOnFailure: true
+  });
+
+  const [azureDevOpsSettings, setAzureDevOpsSettings] = useState({
+    enabled: false,
+    organizationUrl: '',
+    projectName: '',
+    personalAccessToken: '',
+    teamName: '',
+    testPlanId: '',
+    autoCreateWorkItems: true,
+    workItemType: 'Bug'
+  });
+
+  const [loading, setLoading] = useState(false);
+
+  // Load settings on component mount (would fetch from API in a real implementation)
+  useEffect(() => {
+    const loadSettings = async () => {
+      setLoading(true);
+      try {
+        // In a real implementation, this would fetch from an API
+        // const response = await api.get('/api/settings');
+        // setSettings(response.data);
+        
+        // Simulate loading delay
+        setTimeout(() => {
+          setLoading(false);
+        }, 500);
+      } catch (error) {
+        console.error('Error loading settings:', error);
+        toast.error('Failed to load settings');
+        setLoading(false);
+      }
+    };
+    
+    loadSettings();
+  }, []);
+
+  // Handle form submit
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    
+    try {
+      // In a real implementation, this would send to an API
+      // await api.put('/api/settings', settings);
+      
+      // Simulate API call
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      toast.success('Settings saved successfully');
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      toast.error('Failed to save settings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle input change
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type } = e.target as HTMLInputElement;
+    
+    if (type === 'checkbox') {
+      const { checked } = e.target as HTMLInputElement;
+      setSettings(prev => ({
+        ...prev,
+        [name]: checked
+      }));
+    } else {
+      setSettings(prev => ({
+        ...prev,
+        [name]: type === 'number' ? Number(value) : value
+      }));
+    }
+  };
+
+  // Handle Azure DevOps settings change
+  const handleAzureSettingsChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value, type } = e.target as HTMLInputElement;
+    
+    if (type === 'checkbox') {
+      const { checked } = e.target as HTMLInputElement;
+      setAzureDevOpsSettings(prev => ({
+        ...prev,
+        [name]: checked
+      }));
+    } else {
+      setAzureDevOpsSettings(prev => ({
+        ...prev,
+        [name]: value
+      }));
+    }
+  };
+
+  return (
+    <div className="settings-container">
+      <div className="page-header">
+        <h1>Settings</h1>
+        <button 
+          className="btn btn-primary"
+          onClick={handleSubmit}
+          disabled={loading}
+        >
+          {loading ? <FaSync className="spinner" /> : <FaSave />}
+          Save Settings
+        </button>
+      </div>
+      
+      <form onSubmit={handleSubmit}>
+        <div className="settings-section">
+          <div className="section-header">
+            <FaCog />
+            <h2>General Settings</h2>
+          </div>
+          
+          <div className="section-content">
+            <div className="setting-group">
+              <label htmlFor="defaultBrowser">Default Browser</label>
+              <select
+                id="defaultBrowser"
+                name="defaultBrowser"
+                value={settings.defaultBrowser}
+                onChange={handleChange}
+              >
+                <option value="chromium">Chromium</option>
+                <option value="firefox">Firefox</option>
+                <option value="webkit">WebKit</option>
+              </select>
+            </div>
+            
+            <div className="setting-group">
+              <label htmlFor="defaultViewportWidth">Default Viewport Width</label>
+              <input
+                type="number"
+                id="defaultViewportWidth"
+                name="defaultViewportWidth"
+                value={settings.defaultViewportWidth}
+                onChange={handleChange}
+                min={320}
+                max={2560}
+              />
+            </div>
+            
+            <div className="setting-group">
+              <label htmlFor="defaultViewportHeight">Default Viewport Height</label>
+              <input
+                type="number"
+                id="defaultViewportHeight"
+                name="defaultViewportHeight"
+                value={settings.defaultViewportHeight}
+                onChange={handleChange}
+                min={320}
+                max={1600}
+              />
+            </div>
+            
+            <div className="setting-group">
+              <label htmlFor="defaultTimeout">Default Timeout (ms)</label>
+              <input
+                type="number"
+                id="defaultTimeout"
+                name="defaultTimeout"
+                value={settings.defaultTimeout}
+                onChange={handleChange}
+                min={1000}
+                max={120000}
+                step={1000}
+              />
+            </div>
+            
+            <div className="setting-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="headless"
+                  checked={settings.headless}
+                  onChange={handleChange}
+                />
+                <span>Run tests in headless mode</span>
+              </label>
+            </div>
+            
+            <div className="setting-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="recordVideo"
+                  checked={settings.recordVideo}
+                  onChange={handleChange}
+                />
+                <span>Record video during test execution</span>
+              </label>
+            </div>
+            
+            <div className="setting-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="screenshotOnFailure"
+                  checked={settings.screenshotOnFailure}
+                  onChange={handleChange}
+                />
+                <span>Take screenshot on test failure</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        
+        <div className="settings-section">
+          <div className="section-header">
+            <FaCog />
+            <h2>Azure DevOps Integration</h2>
+          </div>
+          
+          <div className="section-content">
+            <div className="setting-group checkbox-group">
+              <label>
+                <input
+                  type="checkbox"
+                  name="enabled"
+                  checked={azureDevOpsSettings.enabled}
+                  onChange={handleAzureSettingsChange}
+                />
+                <span>Enable Azure DevOps Integration</span>
+              </label>
+            </div>
+            
+            {azureDevOpsSettings.enabled && (
+              <>
+                <div className="setting-group">
+                  <label htmlFor="organizationUrl">Organization URL</label>
+                  <input
+                    type="text"
+                    id="organizationUrl"
+                    name="organizationUrl"
+                    value={azureDevOpsSettings.organizationUrl}
+                    onChange={handleAzureSettingsChange}
+                    placeholder="https://dev.azure.com/your-organization"
+                  />
+                </div>
+                
+                <div className="setting-group">
+                  <label htmlFor="projectName">Project Name</label>
+                  <input
+                    type="text"
+                    id="projectName"
+                    name="projectName"
+                    value={azureDevOpsSettings.projectName}
+                    onChange={handleAzureSettingsChange}
+                    placeholder="Your Project Name"
+                  />
+                </div>
+                
+                <div className="setting-group">
+                  <label htmlFor="personalAccessToken">Personal Access Token</label>
+                  <input
+                    type="password"
+                    id="personalAccessToken"
+                    name="personalAccessToken"
+                    value={azureDevOpsSettings.personalAccessToken}
+                    onChange={handleAzureSettingsChange}
+                    placeholder="Your PAT"
+                  />
+                </div>
+                
+                <div className="setting-group">
+                  <label htmlFor="teamName">Team Name</label>
+                  <input
+                    type="text"
+                    id="teamName"
+                    name="teamName"
+                    value={azureDevOpsSettings.teamName}
+                    onChange={handleAzureSettingsChange}
+                    placeholder="Your Team Name"
+                  />
+                </div>
+                
+                <div className="setting-group">
+                  <label htmlFor="testPlanId">Test Plan ID</label>
+                  <input
+                    type="text"
+                    id="testPlanId"
+                    name="testPlanId"
+                    value={azureDevOpsSettings.testPlanId}
+                    onChange={handleAzureSettingsChange}
+                    placeholder="Test Plan ID"
+                  />
+                </div>
+                
+                <div className="setting-group checkbox-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      name="autoCreateWorkItems"
+                      checked={azureDevOpsSettings.autoCreateWorkItems}
+                      onChange={handleAzureSettingsChange}
+                    />
+                    <span>Automatically create work items for test failures</span>
+                  </label>
+                </div>
+                
+                <div className="setting-group">
+                  <label htmlFor="workItemType">Work Item Type</label>
+                  <select
+                    id="workItemType"
+                    name="workItemType"
+                    value={azureDevOpsSettings.workItemType}
+                    onChange={handleAzureSettingsChange}
+                  >
+                    <option value="Bug">Bug</option>
+                    <option value="Issue">Issue</option>
+                    <option value="Task">Task</option>
+                  </select>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+export default Settings;
+
+
+// src/pages/workspace/WorkspaceDetail.tsx
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { 
+  FaSpinner, 
+  FaPlus, 
+  FaEdit, 
+  FaTrash, 
+  FaFolder, 
+  FaExclamationTriangle 
+} from 'react-icons/fa';
+import { formatDistanceToNow } from 'date-fns';
+import { Workspace, Project } from '../../types/workspace';
+import workspaceService from '../../services/workspaceService';
+
+const WorkspaceDetail: React.FC = () => {
+  const { workspaceId } = useParams<{ workspaceId: string }>();
+  const navigate = useNavigate();
+  
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [showCreateProjectModal, setShowCreateProjectModal] = useState<boolean>(false);
+  const [newProject, setNewProject] = useState({
+    name: '',
+    description: '',
+    baseUrl: ''
+  });
+
+  // Fetch workspace on component mount
+  useEffect(() => {
+    if (!workspaceId) return;
+    
+    const fetchWorkspace = async () => {
+      setLoading(true);
+      try {
+        const data = await workspaceService.getWorkspace(workspaceId);
+        setWorkspace(data);
+      } catch (error) {
+        console.error('Error fetching workspace:', error);
+        toast.error('Failed to load workspace');
+        navigate('/workspaces');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchWorkspace();
+  }, [workspaceId, navigate]);
+
+  // Handle create project
+  const handleCreateProject = async () => {
+    if (!workspaceId) return;
+    
+    try {
+      if (!newProject.name.trim()) {
+        toast.warning('Project name is required');
+        return;
+      }
+      
+      if (!newProject.baseUrl.trim()) {
+        toast.warning('Base URL is required');
+        return;
+      }
+
+      const createdProject = await workspaceService.createProject(
+        workspaceId,
+        newProject.name,
+        newProject.description,
+        newProject.baseUrl
+      );
+      
+      // Update workspace with new project
+      if (workspace) {
+        setWorkspace({
+          ...workspace,
+          projects: [...workspace.projects, createdProject]
+        });
+      }
+      
+      setShowCreateProjectModal(false);
+      setNewProject({ name: '', description: '', baseUrl: '' });
+      toast.success('Project created successfully');
+    } catch (error) {
+      console.error('Error creating project:', error);
+      toast.error('Failed to create project');
+    }
+  };
+
+  // Handle delete project
+  const handleDeleteProject = async (projectId: string) => {
+    if (!workspaceId) return;
+    
+    if (!window.confirm('Are you sure you want to delete this project?')) {
+      return;
+    }
+    
+    try {
+      // In a real implementation, this would call an API to delete the project
+      // await workspaceService.deleteProject(workspaceId, projectId);
+      
+      // Update workspace state by removing the deleted project
+      if (workspace) {
+        setWorkspace({
+          ...workspace,
+          projects: workspace.projects.filter(p => p.id !== projectId)
+        });
+      }
+      
+      toast.success('Project deleted successfully');
+    } catch (error) {
+      console.error('Error deleting project:', error);
+      toast.error('Failed to delete project');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading workspace...</p>
+      </div>
+    );
+  }
+
+  if (!workspace) {
+    return (
+      <div className="error-container">
+        <FaExclamationTriangle className="error-icon" />
+        <p>Workspace not found</p>
+        <Link to="/workspaces" className="btn btn-primary">
+          Back to Workspaces
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="workspace-detail-container">
+      <div className="page-header">
+        <h1>{workspace.name}</h1>
+        <button 
+          className="btn btn-primary" 
+          onClick={() => setShowCreateProjectModal(true)}
+        >
+          <FaPlus /> New Project
+        </button>
+      </div>
+      
+      <div className="workspace-info">
+        <div className="info-card">
+          <h2>Workspace Information</h2>
+          <div className="info-content">
+            <div className="info-item">
+              <span className="info-label">Name:</span>
+              <span className="info-value">{workspace.name}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Description:</span>
+              <span className="info-value">{workspace.description || 'No description'}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Created:</span>
+              <span className="info-value">{new Date(workspace.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Last Modified:</span>
+              <span className="info-value">{formatDistanceToNow(new Date(workspace.lastModifiedAt))} ago</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Location:</span>
+              <span className="info-value">{workspace.location}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Projects:</span>
+              <span className="info-value">{workspace.projects.length}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div className="workspace-projects">
+        <h2>Projects</h2>
+        
+        {workspace.projects.length === 0 ? (
+          <div className="empty-state">
+            <FaFolder size={48} />
+            <h3>No projects found</h3>
+            <p>Create a new project to get started</p>
+            <button 
+              className="btn btn-primary" 
+              onClick={() => setShowCreateProjectModal(true)}
+            >
+              <FaPlus /> New Project
+            </button>
+          </div>
+        ) : (
+          <div className="project-grid">
+            {workspace.projects.map(project => (
+              <div key={project.id} className="project-card">
+                <div className="project-card-header">
+                  <FaFolder size={24} />
+                  <div className="project-actions">
+                    <button 
+                      className="btn btn-icon edit-btn"
+                      onClick={() => toast.info('Edit functionality not implemented')}
+                      title="Edit project"
+                    >
+                      <FaEdit />
+                    </button>
+                    <button 
+                      className="btn btn-icon delete-btn"
+                      onClick={() => handleDeleteProject(project.id)}
+                      title="Delete project"
+                    >
+                      <FaTrash />
+                    </button>
+                  </div>
+                </div>
+                <Link to={`/workspaces/${workspaceId}/projects/${project.id}`} className="project-card-content">
+                  <h3>{project.name}</h3>
+                  <p className="project-description">{project.description || 'No description'}</p>
+                  <div className="project-meta">
+                    <span className="project-url">{project.baseUrl}</span>
+                    <span className="project-updated">Updated {formatDistanceToNow(new Date(project.lastModifiedAt))} ago</span>
+                  </div>
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* Create Project Modal */}
+      {showCreateProjectModal && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Create New Project</h2>
+              <button 
+                className="btn btn-icon close-btn"
+                onClick={() => setShowCreateProjectModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label htmlFor="project-name">Name</label>
+                <input 
+                  type="text" 
+                  id="project-name" 
+                  value={newProject.name}
+                  onChange={(e) => setNewProject({...newProject, name: e.target.value})}
+                  placeholder="Enter project name"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="project-description">Description</label>
+                <textarea 
+                  id="project-description" 
+                  value={newProject.description}
+                  onChange={(e) => setNewProject({...newProject, description: e.target.value})}
+                  placeholder="Enter project description"
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="project-baseUrl">Base URL</label>
+                <input 
+                  type="url" 
+                  id="project-baseUrl" 
+                  value={newProject.baseUrl}
+                  onChange={(e) => setNewProject({...newProject, baseUrl: e.target.value})}
+                  placeholder="https://example.com"
+                />
+                <div className="form-hint">The base URL of the application under test</div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowCreateProjectModal(false)}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleCreateProject}
+              >
+                Create Project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default WorkspaceDetail;
+
+
+
+// src/pages/project/ProjectDetail.tsx
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { 
+  FaSpinner, 
+  FaPlus, 
+  FaEdit, 
+  FaTrash, 
+  FaPlay, 
+  FaExclamationTriangle,
+  FaChartBar,
+  FaCode
+} from 'react-icons/fa';
+import { formatDistanceToNow } from 'date-fns';
+import { Workspace, Project, TestSuite } from '../../types/workspace';
+import workspaceService from '../../services/workspaceService';
+
+const ProjectDetail: React.FC = () => {
+  const { workspaceId, projectId } = useParams<{ workspaceId: string; projectId: string }>();
+  const navigate = useNavigate();
+  
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [showGenerateTestsModal, setShowGenerateTestsModal] = useState<boolean>(false);
+  const [testGeneration, setTestGeneration] = useState({
+    baseUrl: '',
+    maxPages: 10,
+    advanced: false
+  });
+
+  // Fetch workspace and project on component mount
+  useEffect(() => {
+    if (!workspaceId || !projectId) return;
+    
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const workspaceData = await workspaceService.getWorkspace(workspaceId);
+        setWorkspace(workspaceData);
+        
+        const projectData = workspaceData.projects.find(p => p.id === projectId);
+        if (projectData) {
+          setProject(projectData);
+          
+          // Initialize test generation form with project base URL
+          setTestGeneration(prev => ({
+            ...prev,
+            baseUrl: projectData.baseUrl
+          }));
+        } else {
+          toast.error('Project not found');
+          navigate(`/workspaces/${workspaceId}`);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast.error('Failed to load project');
+        navigate('/workspaces');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, [workspaceId, projectId, navigate]);
+
+  // Handle test suite execution
+  const handleExecuteTestSuite = (testSuiteId: string) => {
+    if (!workspaceId || !projectId) return;
+    navigate(`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}/execute`);
+  };
+
+  // Handle test suite deletion
+  const handleDeleteTestSuite = async (testSuiteId: string) => {
+    if (!workspaceId || !projectId) return;
+    
+    if (!window.confirm('Are you sure you want to delete this test suite?')) {
+      return;
+    }
+    
+    try {
+      // In a real implementation, this would call an API to delete the test suite
+      // await workspaceService.deleteTestSuite(workspaceId, projectId, testSuiteId);
+      
+      // Update project state by removing the deleted test suite
+      if (project) {
+        setProject({
+          ...project,
+          testSuites: project.testSuites.filter(ts => ts.id !== testSuiteId)
+        });
+      }
+      
+      toast.success('Test suite deleted successfully');
+    } catch (error) {
+      console.error('Error deleting test suite:', error);
+      toast.error('Failed to delete test suite');
+    }
+  };
+
+  // Handle generate tests form submission
+  const handleGenerateTests = async () => {
+    if (!workspaceId || !projectId) return;
+    
+    try {
+      if (!testGeneration.baseUrl.trim()) {
+        toast.warning('Base URL is required');
+        return;
+      }
+      
+      toast.info('Generating tests... This may take a moment.');
+      
+      // In a real implementation, this would call an API to generate tests
+      // const testSuite = await analyzerService.generateTests(
+      //   workspaceId,
+      //   projectId,
+      //   testGeneration.baseUrl,
+      //   testGeneration.maxPages,
+      //   testGeneration.advanced
+      // );
+      
+      // Simulate API call delay
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Create a mock test suite
+      const mockTestSuite: TestSuite = {
+        id: 'generated-' + Date.now(),
+        name: 'Generated Test Suite',
+        description: 'Automatically generated test suite from web analysis',
+        relativePath: '/test-suites/generated',
+        createdAt: new Date().toISOString(),
+        lastModifiedAt: new Date().toISOString(),
+        testCases: [],
+        tags: ['auto-generated', 'web-analysis']
+      };
+      
+      // Update project state with new test suite
+      if (project) {
+        setProject({
+          ...project,
+          testSuites: [...project.testSuites, mockTestSuite]
+        });
+      }
+      
+      setShowGenerateTestsModal(false);
+      toast.success('Tests generated successfully');
+    } catch (error) {
+      console.error('Error generating tests:', error);
+      toast.error('Failed to generate tests');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading project...</p>
+      </div>
+    );
+  }
+
+  if (!project || !workspace) {
+    return (
+      <div className="error-container">
+        <FaExclamationTriangle className="error-icon" />
+        <p>Project not found</p>
+        <Link to={`/workspaces/${workspaceId}`} className="btn btn-primary">
+          Back to Workspace
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="project-detail-container">
+      <div className="page-header">
+        <h1>{project.name}</h1>
+        <div className="header-actions">
+          <button 
+            className="btn btn-primary" 
+            onClick={() => setShowGenerateTestsModal(true)}
+          >
+            <FaCode /> Generate Tests
+          </button>
+          <Link 
+            to={`/workspaces/${workspaceId}/projects/${projectId}/reports`}
+            className="btn btn-secondary"
+          >
+            <FaChartBar /> View Reports
+          </Link>
+        </div>
+      </div>
+      
+      <div className="project-info">
+        <div className="info-card">
+          <h2>Project Information</h2>
+          <div className="info-content">
+            <div className="info-item">
+              <span className="info-label">Name:</span>
+              <span className="info-value">{project.name}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Description:</span>
+              <span className="info-value">{project.description || 'No description'}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Base URL:</span>
+              <span className="info-value">{project.baseUrl}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Created:</span>
+              <span className="info-value">{new Date(project.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Last Modified:</span>
+              <span className="info-value">{formatDistanceToNow(new Date(project.lastModifiedAt))} ago</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Test Suites:</span>
+              <span className="info-value">{project.testSuites.length}</span>
+            </div>
+          </div>
+        </div>
+        
+        {project.azureDevOpsConfig && (
+          <div className="info-card">
+            <h2>Azure DevOps Integration</h2>
+            <div className="info-content">
+              <div className="info-item">
+                <span className="info-label">Organization:</span>
+                <span className="info-value">{project.azureDevOpsConfig.organizationUrl}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Project:</span>
+                <span className="info-value">{project.azureDevOpsConfig.projectName}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Team:</span>
+                <span className="info-value">{project.azureDevOpsConfig.teamName}</span>
+              </div>
+              <div className="info-item">
+                <span className="info-label">Test Plan ID:</span>
+                <span className="info-value">{project.azureDevOpsConfig.testPlanId}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      <div className="project-test-suites">
+        <h2>Test Suites</h2>
+        
+        {project.testSuites.length === 0 ? (
+          <div className="empty-state">
+            <FaCode size={48} />
+            <h3>No test suites found</h3>
+            <p>Generate tests to create your first test suite</p>
+            <button 
+              className="btn btn-primary" 
+              onClick={() => setShowGenerateTestsModal(true)}
+            >
+              <FaCode /> Generate Tests
+            </button>
+          </div>
+        ) : (
+          <div className="test-suite-list">
+            {project.testSuites.map(testSuite => (
+              <div key={testSuite.id} className="test-suite-item">
+                <div className="test-suite-info">
+                  <Link 
+                    to={`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuite.id}`}
+                    className="test-suite-name"
+                  >
+                    {testSuite.name}
+                  </Link>
+                  <div className="test-suite-meta">
+                    <span className="test-case-count">{testSuite.testCases.length} test cases</span>
+                    <span className="test-suite-date">Created {formatDistanceToNow(new Date(testSuite.createdAt))} ago</span>
+                  </div>
+                  <p className="test-suite-description">{testSuite.description}</p>
+                  <div className="test-suite-tags">
+                    {testSuite.tags.map((tag, index) => (
+                      <span key={index} className="tag">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="test-suite-actions">
+                  <button 
+                    className="btn btn-primary btn-sm"
+                    onClick={() => handleExecuteTestSuite(testSuite.id)}
+                    title="Execute test suite"
+                  >
+                    <FaPlay /> Execute
+                  </button>
+                  <button 
+                    className="btn btn-icon edit-btn"
+                    onClick={() => toast.info('Edit functionality not implemented')}
+                    title="Edit test suite"
+                  >
+                    <FaEdit />
+                  </button>
+                  <button 
+                    className="btn btn-icon delete-btn"
+                    onClick={() => handleDeleteTestSuite(testSuite.id)}
+                    title="Delete test suite"
+                  >
+                    <FaTrash />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* Generate Tests Modal */}
+      {showGenerateTestsModal && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Generate Tests</h2>
+              <button 
+                className="btn btn-icon close-btn"
+                onClick={() => setShowGenerateTestsModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label htmlFor="baseUrl">Base URL</label>
+                <input 
+                  type="url" 
+                  id="baseUrl" 
+                  value={testGeneration.baseUrl}
+                  onChange={(e) => setTestGeneration({...testGeneration, baseUrl: e.target.value})}
+                  placeholder="https://example.com"
+                />
+                <div className="form-hint">The starting URL for application analysis</div>
+              </div>
+              <div className="form-group">
+                <label htmlFor="maxPages">Maximum Pages</label>
+                <input 
+                  type="number" 
+                  id="maxPages" 
+                  value={testGeneration.maxPages}
+                  onChange={(e) => setTestGeneration({...testGeneration, maxPages: Number(e.target.value)})}
+                  min={1}
+                  max={50}
+                />
+                <div className="form-hint">Maximum number of pages to analyze (1-50)</div>
+              </div>
+              <div className="form-group checkbox-group">
+                <label>
+                  <input 
+                    type="checkbox" 
+                    checked={testGeneration.advanced}
+                    onChange={(e) => setTestGeneration({...testGeneration, advanced: e.target.checked})}
+                  />
+                  <span>Generate advanced tests</span>
+                </label>
+                <div className="form-hint">
+                  Includes workflow tests, data-driven tests, and visual regression tests
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowGenerateTestsModal(false)}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleGenerateTests}
+              >
+                Generate Tests
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ProjectDetail;
+
+
+
+// src/pages/testsuite/TestSuiteDetail.tsx
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { 
+  FaSpinner, 
+  FaPlay, 
+  FaEdit, 
+  FaTrash, 
+  FaExclamationTriangle,
+  FaEye,
+  FaCode,
+  FaCheck,
+  FaTimes
+} from 'react-icons/fa';
+import { formatDistanceToNow } from 'date-fns';
+import { Workspace, Project, TestSuite, TestCase } from '../../types/workspace';
+import workspaceService from '../../services/workspaceService';
+
+const TestSuiteDetail: React.FC = () => {
+  const { workspaceId, projectId, testSuiteId } = useParams<{ 
+    workspaceId: string; 
+    projectId: string;
+    testSuiteId: string;
+  }>();
+  const navigate = useNavigate();
+  
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [testSuite, setTestSuite] = useState<TestSuite | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedTestCase, setSelectedTestCase] = useState<TestCase | null>(null);
+  const [showCodeModal, setShowCodeModal] = useState<boolean>(false);
+  const [testCaseContent, setTestCaseContent] = useState<string>('');
+  const [loadingCode, setLoadingCode] = useState<boolean>(false);
+
+  // Fetch data on component mount
+  useEffect(() => {
+    if (!workspaceId || !projectId || !testSuiteId) return;
+    
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const workspaceData = await workspaceService.getWorkspace(workspaceId);
+        setWorkspace(workspaceData);
+        
+        const projectData = workspaceData.projects.find(p => p.id === projectId);
+        if (projectData) {
+          setProject(projectData);
+          
+          const testSuiteData = projectData.testSuites.find(ts => ts.id === testSuiteId);
+          if (testSuiteData) {
+            setTestSuite(testSuiteData);
+          } else {
+            toast.error('Test suite not found');
+            navigate(`/workspaces/${workspaceId}/projects/${projectId}`);
+          }
+        } else {
+          toast.error('Project not found');
+          navigate(`/workspaces/${workspaceId}`);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast.error('Failed to load test suite');
+        navigate('/workspaces');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, [workspaceId, projectId, testSuiteId, navigate]);
+
+  // Handle test execution
+  const handleExecuteTestSuite = () => {
+    if (!workspaceId || !projectId || !testSuiteId) return;
+    navigate(`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}/execute`);
+  };
+
+  // Handle view test case code
+  const handleViewTestCaseCode = async (testCase: TestCase) => {
+    setSelectedTestCase(testCase);
+    setShowCodeModal(true);
+    setLoadingCode(true);
+    
+    try {
+      // In a real implementation, this would fetch actual code from the backend
+      // const response = await api.get(`/api/test-cases/${testCase.id}/code`);
+      // setTestCaseContent(response.data);
+      
+      // Simulate API call delay
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Generate mock code based on test case type
+      let mockCode: string;
+      
+      if (testCase.tags.includes('navigation')) {
+        mockCode = generateMockNavigationTest(testCase);
+      } else if (testCase.tags.includes('form')) {
+        mockCode = generateMockFormTest(testCase);
+      } else if (testCase.tags.includes('workflow')) {
+        mockCode = generateMockWorkflowTest(testCase);
+      } else if (testCase.tags.includes('visual-regression')) {
+        mockCode = generateMockVisualRegressionTest(testCase);
+      } else {
+        mockCode = generateMockGenericTest(testCase);
+      }
+      
+      setTestCaseContent(mockCode);
+    } catch (error) {
+      console.error('Error fetching test case code:', error);
+      toast.error('Failed to load test case code');
+      setTestCaseContent('// Error loading test case code');
+    } finally {
+      setLoadingCode(false);
+    }
+  };
+
+  // Generate mock code for different test types
+  const generateMockNavigationTest = (testCase: TestCase): string => {
+    return `import { test, expect } from '@playwright/test';
+
+test('${testCase.name}', async ({ page }) => {
+  // Navigate to the page
+  await page.goto('https://example.com');
+  
+  // Wait for the page to load completely
+  await page.waitForLoadState('networkidle');
+  
+  // Verify the page title
+  await expect(page).toHaveTitle(/Example Domain/);
+  
+  // Verify that key elements are present
+  await expect(page.locator('h1')).toBeVisible();
+  await expect(page.locator('p')).toBeVisible();
+  
+  // Take screenshot for verification
+  await page.screenshot({ path: 'navigation-test.png' });
+});`;
+  };
+  
+  const generateMockFormTest = (testCase: TestCase): string => {
+    return `import { test, expect } from '@playwright/test';
+
+test('${testCase.name}', async ({ page }) => {
+  // Navigate to the form page
+  await page.goto('https://example.com/contact');
+  
+  // Wait for the page to load completely
+  await page.waitForLoadState('networkidle');
+  
+  // Fill form fields
+  await page.fill('#name', 'Test User');
+  await page.fill('#email', 'test@example.com');
+  await page.fill('#message', 'This is a test message.');
+  
+  // Submit the form
+  await page.click('#submit-button');
+  
+  // Wait for the response
+  await page.waitForLoadState('networkidle');
+  
+  // Verify success message
+  await expect(page.locator('.success-message')).toBeVisible();
+  await expect(page.locator('.success-message')).toHaveText('Message sent successfully!');
+});`;
+  };
+  
+  const generateMockWorkflowTest = (testCase: TestCase): string => {
+    return `import { test, expect } from '@playwright/test';
+
+test('${testCase.name}', async ({ page }) => {
+  // Step 1: Navigate to the login page
+  await page.goto('https://example.com/login');
+  await page.waitForLoadState('networkidle');
+  
+  console.log('[Step] Navigating to login page');
+  
+  // Step 2: Fill login form
+  await page.fill('#username', 'testuser');
+  await page.fill('#password', 'password123');
+  await page.click('#login-button');
+  
+  console.log('[Step] Submitted login form');
+  
+  // Step 3: Verify user is logged in and redirected to dashboard
+  await page.waitForNavigation();
+  await expect(page).toHaveURL('https://example.com/dashboard');
+  await expect(page.locator('.user-profile')).toBeVisible();
+  
+  console.log('[Step] Verified successful login');
+  
+  // Step 4: Navigate to product page
+  await page.click('text=Products');
+  await page.waitForLoadState('networkidle');
+  
+  console.log('[Step] Navigated to products page');
+  
+  // Step 5: Add item to cart
+  await page.click('#product-1 .add-to-cart');
+  await expect(page.locator('.cart-count')).toHaveText('1');
+  
+  console.log('[Step] Added product to cart');
+  
+  // Step 6: Proceed to checkout
+  await page.click('.view-cart');
+  await page.waitForLoadState('networkidle');
+  await page.click('.checkout-button');
+  
+  console.log('[Step] Proceeded to checkout');
+  
+  // Step 7: Verify checkout page
+  await expect(page).toHaveURL('https://example.com/checkout');
+  await expect(page.locator('.checkout-form')).toBeVisible();
+  
+  console.log('[Step] Workflow completed successfully');
+});`;
+  };
+  
+  const generateMockVisualRegressionTest = (testCase: TestCase): string => {
+    return `import { test, expect } from '@playwright/test';
+
+test('${testCase.name}', async ({ page }) => {
+  // Navigate to the page
+  await page.goto('https://example.com');
+  
+  // Wait for the page to load completely
+  await page.waitForLoadState('networkidle');
+  
+  // Take a full page screenshot for visual comparison
+  await page.screenshot({ 
+    path: 'screenshots/full-page.png',
+    fullPage: true 
+  });
+  
+  // Take screenshots of important UI components
+  
+  // Header
+  await page.locator('header').screenshot({
+    path: 'screenshots/header.png'
+  });
+  
+  // Navigation menu
+  await page.locator('nav').screenshot({
+    path: 'screenshots/navigation.png'
+  });
+  
+  // Main content area
+  await page.locator('main').screenshot({
+    path: 'screenshots/content.png'
+  });
+  
+  // Footer
+  await page.locator('footer').screenshot({
+    path: 'screenshots/footer.png'
+  });
+  
+  // Check for any visual inconsistencies (implementation would depend on visual comparison library)
+  // This is a placeholder for actual visual comparison logic
+  console.log('Comparing screenshots with baseline images...');
+});`;
+  };
+  
+  const generateMockGenericTest = (testCase: TestCase): string => {
+    return `import { test, expect } from '@playwright/test';
+
+test('${testCase.name}', async ({ page }) => {
+  // Navigate to the application
+  await page.goto('https://example.com');
+  
+  // Wait for the page to load
+  await page.waitForLoadState('networkidle');
+  
+  // Perform test actions
+  // TODO: Implement test steps for ${testCase.name}
+  
+  // Verify expected results
+  await expect(page.locator('h1')).toBeVisible();
+});`;
+  };
+
+  // Handle delete test case
+  const handleDeleteTestCase = async (testCaseId: string) => {
+    if (!testSuite) return;
+    
+    if (!window.confirm('Are you sure you want to delete this test case?')) {
+      return;
+    }
+    
+    try {
+      // In a real implementation, this would call an API to delete the test case
+      // await workspaceService.deleteTestCase(workspaceId, projectId, testSuiteId, testCaseId);
+      
+      // Update test suite state by removing the deleted test case
+      setTestSuite({
+        ...testSuite,
+        testCases: testSuite.testCases.filter(tc => tc.id !== testCaseId)
+      });
+      
+      toast.success('Test case deleted successfully');
+    } catch (error) {
+      console.error('Error deleting test case:', error);
+      toast.error('Failed to delete test case');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading test suite...</p>
+      </div>
+    );
+  }
+
+  if (!testSuite || !project || !workspace) {
+    return (
+      <div className="error-container">
+        <FaExclamationTriangle className="error-icon" />
+        <p>Test suite not found</p>
+        <Link to={`/workspaces/${workspaceId}/projects/${projectId}`} className="btn btn-primary">
+          Back to Project
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="test-suite-detail-container">
+      <div className="page-header">
+        <h1>{testSuite.name}</h1>
+        <div className="header-actions">
+          <button 
+            className="btn btn-primary"
+            onClick={handleExecuteTestSuite}
+          >
+            <FaPlay /> Execute Test Suite
+          </button>
+        </div>
+      </div>
+      
+      <div className="test-suite-info">
+        <div className="info-card">
+          <h2>Test Suite Information</h2>
+          <div className="info-content">
+            <div className="info-item">
+              <span className="info-label">Name:</span>
+              <span className="info-value">{testSuite.name}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Description:</span>
+              <span className="info-value">{testSuite.description || 'No description'}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Created:</span>
+              <span className="info-value">{new Date(testSuite.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Last Modified:</span>
+              <span className="info-value">{formatDistanceToNow(new Date(testSuite.lastModifiedAt))} ago</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Test Cases:</span>
+              <span className="info-value">{testSuite.testCases.length}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Tags:</span>
+              <div className="tags-list">
+                {testSuite.tags.map((tag, index) => (
+                  <span key={index} className="tag">{tag}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div className="test-cases-section">
+        <h2>Test Cases</h2>
+        
+        {testSuite.testCases.length === 0 ? (
+          <div className="empty-state">
+            <FaCode size={48} />
+            <h3>No test cases found</h3>
+            <p>This test suite doesn't contain any test cases yet</p>
+          </div>
+        ) : (
+          <div className="test-cases-list">
+            {testSuite.testCases.map(testCase => (
+              <div key={testCase.id} className="test-case-item">
+                <div className="test-case-info">
+                  <h3 className="test-case-name">{testCase.name}</h3>
+                  <div className="test-case-meta">
+                    <span className="test-case-type">{testCase.type}</span>
+                    <span className="test-case-priority">Priority: {testCase.priority}</span>
+                    <span className="test-case-time">Est. Time: {testCase.estimatedExecutionTime}s</span>
+                    {testCase.autoGenerated && (
+                      <span className="test-case-auto-generated">Auto-generated</span>
+                    )}
+                  </div>
+                  <p className="test-case-description">{testCase.description}</p>
+                  <div className="test-case-tags">
+                    {testCase.tags.map((tag, index) => (
+                      <span key={index} className="tag">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+                <div className="test-case-actions">
+                  <button 
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => handleViewTestCaseCode(testCase)}
+                    title="View test case code"
+                  >
+                    <FaCode /> View Code
+                  </button>
+                  <button 
+                    className="btn btn-icon edit-btn"
+                    onClick={() => toast.info('Edit functionality not implemented')}
+                    title="Edit test case"
+                  >
+                    <FaEdit />
+                  </button>
+                  <button 
+                    className="btn btn-icon delete-btn"
+                    onClick={() => handleDeleteTestCase(testCase.id)}
+                    title="Delete test case"
+                  >
+                    <FaTrash />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* View Code Modal */}
+      {showCodeModal && selectedTestCase && (
+        <div className="modal-overlay">
+          <div className="modal modal-large">
+            <div className="modal-header">
+              <h2>Test Case Code: {selectedTestCase.name}</h2>
+              <button 
+                className="btn btn-icon close-btn"
+                onClick={() => setShowCodeModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              {loadingCode ? (
+                <div className="loading-code">
+                  <FaSpinner className="spinner" />
+                  <p>Loading code...</p>
+                </div>
+              ) : (
+                <div className="code-container">
+                  <pre className="code-block">
+                    <code>{testCaseContent}</code>
+                  </pre>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowCodeModal(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TestSuiteDetail;
+
+
+
+package com.ctgp.model.analyzer;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+/**
+ * Result of analyzing a single web page.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebAnalysisResult {
+    
+    /**
+     * URL of the analyzed page
+     */
+    private String url;
+    
+    /**
+     * Title of the page
+     */
+    private String title;
+    
+    /**
+     * Interactive elements found on the page
+     */
+    @Builder.Default
+    private List<WebElement> elements = List.of();
+    
+    /**
+     * Forms found on the page
+     */
+    @Builder.Default
+    private List<WebForm> forms = List.of();
+    
+    /**
+     * Timestamp of the analysis
+     */
+    private long timestamp;
+    
+    /**
+     * Screenshot of the page
+     */
+    private byte[] screenshot;
+}
+
+
+
+
+package com.ctgp.model.analyzer;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+/**
+ * Result of analyzing a web application (multiple pages).
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebApplicationAnalysis {
+    
+    /**
+     * Base URL of the application
+     */
+    private String baseUrl;
+    
+    /**
+     * Analysis results for individual pages
+     */
+    @Builder.Default
+    private List<WebAnalysisResult> pageResults = List.of();
+}
+
+
+
+
+package com.ctgp.model.analyzer;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Represents a web element identified during analysis.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebElement {
+    
+    /**
+     * HTML tag name of the element
+     */
+    private String tagName;
+    
+    /**
+     * Type of the element
+     */
+    private ElementType type;
+    
+    /**
+     * ID attribute of the element
+     */
+    private String id;
+    
+    /**
+     * Name attribute of the element
+     */
+    private String name;
+    
+    /**
+     * Value attribute of the element
+     */
+    private String value;
+    
+    /**
+     * Text content of the element
+     */
+    private String text;
+    
+    /**
+     * Whether the element is visible
+     */
+    private boolean visible;
+    
+    /**
+     * Different types of selectors that can be used to locate the element
+     */
+    @Builder.Default
+    private Map<SelectorType, String> selectors = new HashMap<>();
+    
+    /**
+     * All attributes of the element
+     */
+    @Builder.Default
+    private Map<String, String> attributes = new HashMap<>();
+}
+
+
+package com.ctgp.model.analyzer;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+/**
+ * Represents a web form identified during analysis.
+ */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class WebForm {
+    
+    /**
+     * ID attribute of the form
+     */
+    private String id;
+    
+    /**
+     * Name attribute of the form
+     */
+    private String name;
+    
+    /**
+     * Action attribute (form submission URL)
+     */
+    private String action;
+    
+    /**
+     * Method attribute (GET or POST)
+     */
+    private String method;
+    
+    /**
+     * Form fields
+     */
+    @Builder.Default
+    private List<WebElement> fields = List.of();
+    
+    /**
+     * Submit button
+     */
+    private WebElement submitButton;
+}
+
+
+package com.ctgp.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/**
+ * Application configuration.
+ */
+@Configuration
+public class AppConfig {
+
+    /**
+     * Configure CORS for the application.
+     *
+     * @return WebMvcConfigurer with CORS configuration
+     */
+    @Bean
+    public WebMvcConfigurer corsConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/api/**")
+                        .allowedOrigins("http://localhost:3000")
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        .allowCredentials(true);
+            }
+        };
+    }
+
+    /**
+     * Configure ObjectMapper for the application.
+     *
+     * @return Configured ObjectMapper
+     */
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.registerModule(new JavaTimeModule());
+        return objectMapper;
+    }
+}
+
+
+
+
+application.properties:
+--------------------------
+
+# Server configuration
+server.port=8080
+server.servlet.context-path=/
+spring.application.name=contextual-test-platform
+
+# Logging configuration
+logging.level.root=INFO
+logging.level.com.ctgp=DEBUG
+logging.pattern.console=%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n
+
+# Jackson configuration
+spring.jackson.serialization.write-dates-as-timestamps=false
+spring.jackson.deserialization.fail-on-unknown-properties=false
+
+# Application-specific configuration
+app.workspaces.root-directory=./workspaces
+
+# Actuator endpoints
+management.endpoints.web.exposure.include=health,info,metrics
+management.endpoint.health.show-details=when_authorized
+
+# CORS configuration
+spring.mvc.cors.allowed-origins=http://localhost:3000
+spring.mvc.cors.allowed-methods=GET,POST,PUT,DELETE,OPTIONS
+spring.mvc.cors.allowed-headers=*
+spring.mvc.cors.allow-credentials=true
+
+# File upload configuration
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=10MB
+
+
+// src/types/workspace.ts
+
+/**
+ * Workspace model
+ */
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  location: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  projects: Project[];
+  config: WorkspaceConfig;
+}
+
+/**
+ * Project model
+ */
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  relativePath: string;
+  baseUrl: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  testSuites: TestSuite[];
+  configuration: Record<string, any>;
+  azureDevOpsConfig?: AzureDevOpsConfig;
+}
+
+/**
+ * Test suite model
+ */
+export interface TestSuite {
+  id: string;
+  name: string;
+  description: string;
+  relativePath: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  testCases: TestCase[];
+  tags: string[];
+}
+
+/**
+ * Test case model
+ */
+export interface TestCase {
+  id: string;
+  name: string;
+  description: string;
+  scriptPath: string;
+  type: string;
+  priority: number;
+  createdAt: string;
+  lastModifiedAt: string;
+  tags: string[];
+  testData: Record<string, any>;
+  externalReferences: Record<string, string>;
+  autoGenerated: boolean;
+  estimatedExecutionTime: number;
+}
+
+/**
+ * Workspace configuration
+ */
+export interface WorkspaceConfig {
+  defaultBrowser: string;
+  defaultViewportWidth: number;
+  defaultViewportHeight: number;
+  defaultTimeout: number;
+  recordVideo: boolean;
+  screenshotOnFailure: boolean;
+  headless: boolean;
+  customProperties: Record<string, any>;
+}
+
+/**
+ * Azure DevOps integration configuration
+ */
+export interface AzureDevOpsConfig {
+  organizationUrl: string;
+  projectName: string;
+  personalAccessToken: string;
+  teamName: string;
+  testPlanId: string;
+  autoCreateWorkItems: boolean;
+  workItemType: string;
+  uploadArtifacts: boolean;
+  areaPath: string;
+  iterationPath: string;
+}
+
+
+
+// src/types/analyzer.ts
+
+/**
+ * Web element types
+ */
+export enum ElementType {
+  BUTTON = 'BUTTON',
+  LINK = 'LINK',
+  INPUT = 'INPUT',
+  TEXT_INPUT = 'TEXT_INPUT',
+  CHECKBOX = 'CHECKBOX',
+  RADIO = 'RADIO',
+  SELECT = 'SELECT',
+  TEXTAREA = 'TEXTAREA',
+  FILE_INPUT = 'FILE_INPUT',
+  DATE_INPUT = 'DATE_INPUT',
+  OTHER = 'OTHER'
+}
+
+/**
+ * Selector types
+ */
+export enum SelectorType {
+  ID = 'ID',
+  CSS = 'CSS',
+  XPATH = 'XPATH',
+  TEXT = 'TEXT'
+}
+
+/**
+ * Web element model
+ */
+export interface WebElement {
+  tagName: string;
+  type: ElementType;
+  id?: string;
+  name?: string;
+  value?: string;
+  text?: string;
+  visible: boolean;
+  selectors: Record<SelectorType, string>;
+  attributes: Record<string, string>;
+}
+
+/**
+ * Web form model
+ */
+export interface WebForm {
+  id?: string;
+  name?: string;
+  action?: string;
+  method?: string;
+  fields: WebElement[];
+  submitButton?: WebElement;
+}
+
+/**
+ * Web page analysis result
+ */
+export interface WebAnalysisResult {
+  url: string;
+  title: string;
+  elements: WebElement[];
+  forms: WebForm[];
+  timestamp: number;
+  screenshot?: string; // Base64 encoded image
+}
+
+/**
+ * Web application analysis result
+ */
+export interface WebApplicationAnalysis {
+  baseUrl: string;
+  pageResults: WebAnalysisResult[];
+}
+
+
+// src/types/execution.ts
+import { TestCase } from './workspace';
+
+/**
+ * Possible test execution statuses
+ */
+export enum TestStatus {
+  PASSED = 'PASSED',
+  FAILED = 'FAILED',
+  SKIPPED = 'SKIPPED',
+  BLOCKED = 'BLOCKED',
+  ERROR = 'ERROR'
+}
+
+/**
+ * Test step result
+ */
+export interface TestStepResult {
+  description: string;
+  passed: boolean;
+  durationMs: number;
+  errorMessage?: string;
+  screenshotPath?: string;
+}
+
+/**
+ * Test execution result
+ */
+export interface TestExecutionResult {
+  testCase: TestCase;
+  status: TestStatus;
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+  errorMessage?: string;
+  stackTrace?: string;
+  screenshotPath?: string;
+  videoPath?: string;
+  logs?: string;
+  metadata?: Record<string, any>;
+  steps: TestStepResult[];
+}
+
+/**
+ * Test execution summary
+ */
+export interface TestExecutionSummary {
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  skippedTests: number;
+  blockedTests: number;
+  errorTests: number;
+  totalDurationMs: number;
+  getSuccessRate: () => number;
+}
+
+/**
+ * Test execution session
+ */
+export interface TestExecutionSession {
+  id: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+  totalDurationMs: number;
+  results: TestExecutionResult[];
+  artifactsDirectory: string;
+  summary: TestExecutionSummary;
+}
+
+/**
+ * Test execution trend data point
+ */
+export interface ExecutionTrendData {
+  date: string;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  skippedTests: number;
+  successRate: number;
+  avgDurationMs: number;
+}
+
+
+// src/services/api.ts
+import axios from 'axios';
+import { toast } from 'react-toastify';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+
+// Create an axios instance
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Add request interceptor
+api.interceptors.request.use(
+  (config) => {
+    // You can add auth tokens here if needed
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor
+api.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  (error) => {
+    let errorMessage = 'An unexpected error occurred';
+    
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      const { status, data } = error.response;
+      
+      switch (status) {
+        case 400:
+          errorMessage = data.message || 'Bad request';
+          break;
+        case 401:
+          errorMessage = 'Unauthorized. Please log in again.';
+          break;
+        case 403:
+          errorMessage = 'You do not have permission to perform this action';
+          break;
+        case 404:
+          errorMessage = 'The requested resource was not found';
+          break;
+        case 500:
+          errorMessage = 'Server error. Please try again later.';
+          break;
+        default:
+          errorMessage = data.message || `Error ${status}: ${data}`;
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      errorMessage = 'No response received from server. Please check your network connection.';
+    }
+    
+    // Show toast notification for errors
+    toast.error(errorMessage);
+    
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+
+
+// src/services/workspaceService.ts
+import { Workspace, Project } from '../types/workspace';
+import api from './api';
+
+/**
+ * Service for workspace-related API calls
+ */
+const workspaceService = {
+  /**
+   * Get a list of all workspaces
+   */
+  async listWorkspaces(): Promise<Workspace[]> {
+    const response = await api.get('/api/workspaces');
+    return response.data;
+  },
+
+  /**
+   * Get a workspace by ID
+   * @param id Workspace ID
+   */
+  async getWorkspace(id: string): Promise<Workspace> {
+    const response = await api.get(`/api/workspaces/${id}`);
+    return response.data;
+  },
+
+  /**
+   * Create a new workspace
+   * @param name Workspace name
+   * @param description Workspace description
+   */
+  async createWorkspace(name: string, description: string): Promise<Workspace> {
+    const response = await api.post('/api/workspaces', { name, description });
+    return response.data;
+  },
+
+  /**
+   * Delete a workspace
+   * @param id Workspace ID
+   */
+  async deleteWorkspace(id: string): Promise<void> {
+    await api.delete(`/api/workspaces/${id}`);
+  },
+
+  /**
+   * Create a new project in a workspace
+   * @param workspaceId Workspace ID
+   * @param name Project name
+   * @param description Project description
+   * @param baseUrl Base URL of the application under test
+   */
+  async createProject(
+    workspaceId: string,
+    name: string,
+    description: string,
+    baseUrl: string
+  ): Promise<Project> {
+    const response = await api.post(`/api/workspaces/${workspaceId}/projects`, {
+      name,
+      description,
+      baseUrl
+    });
+    return response.data;
+  },
+
+  /**
+   * Delete a project
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   */
+  async deleteProject(workspaceId: string, projectId: string): Promise<void> {
+    await api.delete(`/api/workspaces/${workspaceId}/projects/${projectId}`);
+  },
+
+  /**
+   * Create a test suite
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param name Test suite name
+   * @param description Test suite description
+   */
+  async createTestSuite(
+    workspaceId: string,
+    projectId: string,
+    name: string,
+    description: string
+  ): Promise<any> {
+    const response = await api.post(
+      `/api/workspaces/${workspaceId}/projects/${projectId}/testsuites`,
+      { name, description }
+    );
+    return response.data;
+  },
+
+  /**
+   * Delete a test suite
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param testSuiteId Test suite ID
+   */
+  async deleteTestSuite(
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string
+  ): Promise<void> {
+    await api.delete(
+      `/api/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}`
+    );
+  },
+
+  /**
+   * Delete a test case
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param testSuiteId Test suite ID
+   * @param testCaseId Test case ID
+   */
+  async deleteTestCase(
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    testCaseId: string
+  ): Promise<void> {
+    await api.delete(
+      `/api/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}/testcases/${testCaseId}`
+    );
+  },
+
+  /**
+   * Get test case code
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param testSuiteId Test suite ID
+   * @param testCaseId Test case ID
+   */
+  async getTestCaseCode(
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    testCaseId: string
+  ): Promise<string> {
+    const response = await api.get(
+      `/api/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}/testcases/${testCaseId}/code`
+    );
+    return response.data;
+  }
+};
+
+export default workspaceService;
+
+
+// src/services/analyzerService.ts
+import { WebAnalysisResult, WebApplicationAnalysis } from '../types/analyzer';
+import { TestSuite } from '../types/workspace';
+import api from './api';
+
+/**
+ * Service for web application analysis and test generation
+ */
+const analyzerService = {
+  /**
+   * Analyze a single web page
+   * @param url URL to analyze
+   */
+  async analyzePage(url: string): Promise<WebAnalysisResult> {
+    const response = await api.post('/api/analyzer/analyze-page', { url });
+    return response.data;
+  },
+
+  /**
+   * Analyze a web application
+   * @param baseUrl Base URL of the application
+   * @param maxPages Maximum number of pages to analyze
+   */
+  async analyzeApplication(baseUrl: string, maxPages: number = 10): Promise<WebApplicationAnalysis> {
+    const response = await api.post('/api/analyzer/analyze-application', { baseUrl, maxPages });
+    return response.data;
+  },
+
+  /**
+   * Generate tests from a web application analysis
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param baseUrl Base URL of the application
+   * @param maxPages Maximum number of pages to analyze
+   */
+  async generateTests(
+    workspaceId: string,
+    projectId: string,
+    baseUrl: string,
+    maxPages: number = 10
+  ): Promise<TestSuite> {
+    const response = await api.post(
+      `/api/analyzer/generate-tests/${workspaceId}/${projectId}`,
+      { baseUrl, maxPages }
+    );
+    return response.data;
+  },
+
+  /**
+   * Generate advanced tests with workflow, data-driven, and visual regression tests
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param baseUrl Base URL of the application
+   * @param maxPages Maximum number of pages to analyze
+   */
+  async generateAdvancedTests(
+    workspaceId: string,
+    projectId: string,
+    baseUrl: string,
+    maxPages: number = 10
+  ): Promise<TestSuite[]> {
+    const response = await api.post(
+      `/api/generator/advanced/generate/${workspaceId}/${projectId}`,
+      { 
+        baseUrl, 
+        maxPages,
+        includeWorkflowTests: true,
+        includeDataDrivenTests: true,
+        includeVisualRegressionTests: true
+      }
+    );
+    return response.data;
+  }
+};
+
+export default analyzerService;
+
+
+
+// src/services/executionService.ts
+import { TestExecutionSession, TestExecutionResult } from '../types/execution';
+import api from './api';
+
+/**
+ * Service for test execution-related API calls
+ */
+const executionService = {
+  /**
+   * Execute a test suite
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param testSuiteId Test suite ID
+   * @param uploadToAzureDevOps Whether to upload results to Azure DevOps
+   */
+  async executeTestSuite(
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    uploadToAzureDevOps: boolean = false
+  ): Promise<TestExecutionSession> {
+    const response = await api.post(
+      `/api/execution/run/${workspaceId}/${projectId}/${testSuiteId}`,
+      null,
+      { params: { uploadToAzureDevOps } }
+    );
+    return response.data;
+  },
+
+  /**
+   * Get details of a test execution session
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param sessionId Session ID
+   */
+  async getExecutionSession(
+    workspaceId: string,
+    projectId: string,
+    sessionId: string
+  ): Promise<TestExecutionSession> {
+    const response = await api.get(
+      `/api/execution/sessions/${workspaceId}/${projectId}/${sessionId}`
+    );
+    return response.data;
+  },
+
+  /**
+   * Get recent test executions for a project
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param limit Maximum number of executions to return
+   */
+  async getRecentExecutions(
+    workspaceId: string,
+    projectId: string,
+    limit: number = 10
+  ): Promise<TestExecutionSession[]> {
+    const response = await api.get(
+      `/api/execution/recent/${workspaceId}/${projectId}`,
+      { params: { limit } }
+    );
+    return response.data;
+  },
+
+  /**
+   * Get test execution report as HTML
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param sessionId Session ID
+   */
+  async getExecutionReport(
+    workspaceId: string,
+    projectId: string,
+    sessionId: string
+  ): Promise<string> {
+    const response = await api.get(
+      `/api/execution/report/${workspaceId}/${projectId}/${sessionId}`,
+      { responseType: 'text' }
+    );
+    return response.data;
+  },
+
+  /**
+   * Get execution trends for a project
+   * @param workspaceId Workspace ID
+   * @param projectId Project ID
+   * @param days Number of days to include in trends
+   */
+  async getExecutionTrends(
+    workspaceId: string,
+    projectId: string,
+    days: number = 30
+  ): Promise<any> {
+    const response = await api.get(
+      `/api/execution/trends/${workspaceId}/${projectId}`,
+      { params: { days } }
+    );
+    return response.data;
+  }
+};
+
+export default executionService;
+
+
+
+// src/App.tsx
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
+// Components
+import Navbar from './components/Navbar';
+import Sidebar from './components/Sidebar';
+
+// Pages
+import Dashboard from './pages/Dashboard';
+import WorkspaceList from './pages/workspace/WorkspaceList';
+import WorkspaceDetail from './pages/workspace/WorkspaceDetail';
+import ProjectDetail from './pages/project/ProjectDetail';
+import TestSuiteDetail from './pages/testsuite/TestSuiteDetail';
+import TestExecution from './pages/execution/TestExecution';
+import WebAnalyzer from './pages/analyzer/WebAnalyzer';
+import ReportingDashboard from './pages/reporting/ReportingDashboard';
+import Settings from './pages/Settings';
+
+const App: React.FC = () => {
+  return (
+    <Router>
+      <div className="app">
+        <Navbar />
+        <div className="main-container">
+          <Sidebar />
+          <main className="content">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/workspaces" element={<WorkspaceList />} />
+              <Route path="/workspaces/:workspaceId" element={<WorkspaceDetail />} />
+              <Route path="/workspaces/:workspaceId/projects/:projectId" element={<ProjectDetail />} />
+              <Route path="/workspaces/:workspaceId/projects/:projectId/testsuites/:testSuiteId" element={<TestSuiteDetail />} />
+              <Route path="/workspaces/:workspaceId/projects/:projectId/testsuites/:testSuiteId/execute" element={<TestExecution />} />
+              <Route path="/workspaces/:workspaceId/projects/:projectId/reports" element={<ReportingDashboard />} />
+              <Route path="/analyzer" element={<WebAnalyzer />} />
+              <Route path="/settings" element={<Settings />} />
+            </Routes>
+          </main>
+        </div>
+      </div>
+      <ToastContainer position="bottom-right" />
+    </Router>
+  );
+};
+
+export default App;
+
+
+
+// src/index.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import './styles/App.css';
+
+const root = ReactDOM.createRoot(
+  document.getElementById('root') as HTMLElement
+);
+
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+package.json
+-----------------
+
+{
+  "name": "contextual-test-platform-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@testing-library/jest-dom": "^5.16.5",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "@types/jest": "^27.5.2",
+    "@types/node": "^16.18.3",
+    "@types/react": "^18.0.25",
+    "@types/react-dom": "^18.0.9",
+    "axios": "^1.2.0",
+    "date-fns": "^2.29.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-icons": "^4.7.1",
+    "react-router-dom": "^6.4.3",
+    "react-scripts": "5.0.1",
+    "react-toastify": "^9.1.1",
+    "recharts": "^2.1.16",
+    "typescript": "^4.9.3",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "proxy": "http://localhost:8080"
+}
+
+tsconfig.json
+---------------
+
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "src"
+  ]
+}
+
