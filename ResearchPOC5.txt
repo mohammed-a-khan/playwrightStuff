@@ -216,3 +216,34 @@ public class AdvancedTestGeneratorController {
         return ResponseEntity.ok(options);
     }
 }
+
+WorkspaceService.java (method addition)
+---------------------------------------
+
+/**
+ * Gets a project by ID, searching across all workspaces.
+ *
+ * @param projectId The project ID
+ * @return The project, or null if not found
+ */
+public Project getProject(String projectId) {
+    try {
+        // Get all workspaces
+        List<Workspace> workspaces = listWorkspaces();
+        
+        // Search for the project in each workspace
+        for (Workspace workspace : workspaces) {
+            for (Project project : workspace.getProjects()) {
+                if (project.getId().equals(projectId)) {
+                    return project;
+                }
+            }
+        }
+        
+        log.warn("Project not found: {}", projectId);
+        return null;
+    } catch (Exception e) {
+        log.error("Error retrieving project: {}", projectId, e);
+        return null;
+    }
+}
