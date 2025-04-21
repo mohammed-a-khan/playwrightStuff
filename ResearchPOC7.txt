@@ -1,0 +1,1254 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { toast } from 'react-toastify';
+import { 
+  FaSpinner, 
+  FaPlay, 
+  FaEdit, 
+  FaTrash, 
+  FaExclamationTriangle,
+  FaEye,
+  FaCode,
+  FaCheck,
+  FaTimes,
+  FaVideo
+} from 'react-icons/fa';
+import { formatDistanceToNow } from 'date-fns';
+import { Workspace, Project, TestSuite, TestCase } from '../../types/workspace';
+import workspaceService from '../../services/workspaceService';
+import executionService from '../../services/executionService';
+import PlaywrightRecorder from '../../components/PlaywrightRecorder';
+
+const TestSuiteDetail: React.FC = () => {
+  const { workspaceId, projectId, testSuiteId } = useParams<{ 
+    workspaceId: string; 
+    projectId: string;
+    testSuiteId: string;
+  }>();
+  const navigate = useNavigate();
+  
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [testSuite, setTestSuite] = useState<TestSuite | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedTestCase, setSelectedTestCase] = useState<TestCase | null>(null);
+  const [showCodeModal, setShowCodeModal] = useState<boolean>(false);
+  const [testCaseContent, setTestCaseContent] = useState<string>('');
+  const [loadingCode, setLoadingCode] = useState<boolean>(false);
+  const [executingTest, setExecutingTest] = useState<boolean>(false);
+  const [executingTestId, setExecutingTestId] = useState<string | null>(null);
+
+  // Fetch data on component mount
+  useEffect(() => {
+    if (!workspaceId || !projectId || !testSuiteId) return;
+    
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const workspaceData = await workspaceService.getWorkspace(workspaceId);
+        setWorkspace(workspaceData);
+        
+        const projectData = await workspaceService.getProject(workspaceId, projectId);
+        if (projectData) {
+          setProject(projectData);
+          
+          const testSuiteData = await workspaceService.getTestSuite(projectId, testSuiteId);
+          if (testSuiteData) {
+            // Fetch test cases for this test suite
+            const testCases = await workspaceService.getTestCasesByTestSuite(workspaceId, projectId, testSuiteId);
+            testSuiteData.testCases = testCases;
+            setTestSuite(testSuiteData);
+          } else {
+            toast.error('Test suite not found');
+            navigate(`/workspaces/${workspaceId}/projects/${projectId}`);
+          }
+        } else {
+          toast.error('Project not found');
+          navigate(`/workspaces/${workspaceId}`);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast.error('Failed to load test suite');
+        navigate('/workspaces');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, [workspaceId, projectId, testSuiteId, navigate]);
+
+  // Handle test execution
+  const handleExecuteTestSuite = async () => {
+    if (!workspaceId || !projectId || !testSuiteId) return;
+
+    try {
+      setExecutingTest(true);
+      
+      // Call the execution service to run all tests in the suite
+      const executionSession = await executionService.executeTestSuite(
+        workspaceId,
+        projectId,
+        testSuiteId,
+        'staging', // Default environment
+        'chrome'   // Default browser
+      );
+      
+      // Navigate to the execution results page
+      navigate(`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}/execution/${executionSession.id}`);
+    } catch (error) {
+      console.error('Error executing test suite:', error);
+      toast.error('Failed to execute test suite');
+      setExecutingTest(false);
+    }
+  };
+
+  // Handle executing a single test case
+  const handleExecuteSingleTestCase = async (testCase: TestCase) => {
+    if (!workspaceId || !projectId || !testSuiteId) return;
+    
+    try {
+      setExecutingTestId(testCase.id);
+      
+      // Call the execution service to run a single test
+      const executionResult = await executionService.executeTestCase(
+        workspaceId,
+        projectId,
+        testSuiteId,
+        testCase.id,
+        'staging', // Default environment
+        'chrome'   // Default browser
+      );
+      
+      // Show success or failure toast
+      if (executionResult.passed) {
+        toast.success(`Test case "${testCase.name}" executed successfully`);
+      } else {
+        toast.error(`Test case "${testCase.name}" failed: ${executionResult.errorMessage}`);
+      }
+      
+      // Update the test case with latest execution result
+      if (testSuite) {
+        const updatedTestCases = testSuite.testCases.map(tc => {
+          if (tc.id === testCase.id) {
+            return {
+              ...tc,
+              lastExecution: new Date().toISOString(),
+              lastExecutionStatus: executionResult.passed ? 'passed' : 'failed'
+            };
+          }
+          return tc;
+        });
+        
+        setTestSuite({
+          ...testSuite,
+          testCases: updatedTestCases
+        });
+      }
+    } catch (error) {
+      console.error('Error executing test case:', error);
+      toast.error('Failed to execute test case');
+    } finally {
+      setExecutingTestId(null);
+    }
+  };
+
+  // Handle view test case code
+  const handleViewTestCaseCode = async (testCase: TestCase) => {
+    setSelectedTestCase(testCase);
+    setShowCodeModal(true);
+    setLoadingCode(true);
+    
+    try {
+      // In a real implementation, we fetch the test steps and convert them to code
+      const testCaseDetails = await workspaceService.getTestCase(testCase.id);
+      
+      // Convert test steps to Playwright code
+      const code = convertTestStepsToPlaywrightCode(testCaseDetails.steps || [], testCase.name);
+      setTestCaseContent(code);
+    } catch (error) {
+      console.error('Error fetching test case code:', error);
+      toast.error('Failed to load test case code');
+      setTestCaseContent('// Error loading test case code');
+    } finally {
+      setLoadingCode(false);
+    }
+  };
+
+  // Convert test steps to Playwright code
+  const convertTestStepsToPlaywrightCode = (steps: any[], testName: string): string => {
+    let code = `import { test, expect } from '@playwright/test';\n\n`;
+    code += `test('${testName}', async ({ page }) => {\n`;
+    
+    // Process each step
+    steps.forEach((step, index) => {
+      code += `  // Step ${index + 1}: ${step.description}\n`;
+      
+      switch (step.action) {
+        case 'goto':
+          code += `  await page.goto('${step.url}');\n`;
+          break;
+        case 'click':
+          code += `  await page.click('${step.selector}');\n`;
+          break;
+        case 'fill':
+          code += `  await page.fill('${step.selector}', '${step.value}');\n`;
+          break;
+        case 'selectOption':
+          if (typeof step.option === 'object') {
+            const optionStr = JSON.stringify(step.option);
+            code += `  await page.selectOption('${step.selector}', ${optionStr});\n`;
+          } else {
+            code += `  await page.selectOption('${step.selector}', '${step.option}');\n`;
+          }
+          break;
+        case 'waitForNavigation':
+          code += `  await page.waitForNavigation();\n`;
+          break;
+        case 'waitForTimeout':
+          code += `  await page.waitForTimeout(${step.timeout});\n`;
+          break;
+        case 'waitForSelector':
+          code += `  await page.waitForSelector('${step.selector}');\n`;
+          break;
+        case 'expect':
+          switch (step.assertion) {
+            case 'exists':
+              code += `  await expect(page.locator('${step.selector}')).toBeVisible();\n`;
+              break;
+            case 'visible':
+              code += `  await expect(page.locator('${step.selector}')).toBeVisible();\n`;
+              break;
+            case 'contains':
+              code += `  await expect(page.locator('${step.selector}')).toContainText('${step.value}');\n`;
+              break;
+            default:
+              code += `  // Unsupported assertion: ${step.assertion}\n`;
+          }
+          break;
+        case 'screenshot':
+          code += `  await page.screenshot({ path: '${step.path}' });\n`;
+          break;
+        default:
+          code += `  // Unsupported action: ${step.action}\n`;
+      }
+      
+      code += '\n';
+    });
+    
+    code += '});';
+    return code;
+  };
+
+  // Handle delete test case
+  const handleDeleteTestCase = async (testCaseId: string) => {
+    if (!testSuite || !workspaceId || !projectId || !testSuiteId) return;
+    
+    if (!window.confirm('Are you sure you want to delete this test case?')) {
+      return;
+    }
+    
+    try {
+      await workspaceService.deleteTestCase(testCaseId);
+      
+      // Update test suite state by removing the deleted test case
+      setTestSuite({
+        ...testSuite,
+        testCases: testSuite.testCases.filter(tc => tc.id !== testCaseId)
+      });
+      
+      toast.success('Test case deleted successfully');
+    } catch (error) {
+      console.error('Error deleting test case:', error);
+      toast.error('Failed to delete test case');
+    }
+  };
+
+  // Handle completing a recording
+  const handleRecordingComplete = (newTestCase: TestCase) => {
+    if (!testSuite) return;
+    
+    toast.success(`New test case "${newTestCase.name}" created from recording`);
+    
+    // Add the new test case to the test suite
+    setTestSuite({
+      ...testSuite,
+      testCases: [...testSuite.testCases, newTestCase]
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <FaSpinner className="spinner" />
+        <p>Loading test suite...</p>
+      </div>
+    );
+  }
+
+  if (!testSuite || !project || !workspace) {
+    return (
+      <div className="error-container">
+        <FaExclamationTriangle className="error-icon" />
+        <p>Test suite not found</p>
+        <Link to={`/workspaces/${workspaceId}/projects/${projectId}`} className="btn btn-primary">
+          Back to Project
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="test-suite-detail-container">
+      <div className="page-header">
+        <h1>{testSuite.name}</h1>
+        <div className="header-actions">
+          <PlaywrightRecorder 
+            testSuiteId={testSuiteId!} 
+            onRecordingComplete={handleRecordingComplete} 
+          />
+          <button 
+            className="btn btn-primary ml-2"
+            onClick={handleExecuteTestSuite}
+            disabled={executingTest}
+          >
+            {executingTest ? (
+              <>
+                <FaSpinner className="spinner mr-1" /> Executing...
+              </>
+            ) : (
+              <>
+                <FaPlay /> Execute Test Suite
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+      
+      <div className="test-suite-info">
+        <div className="info-card">
+          <h2>Test Suite Information</h2>
+          <div className="info-content">
+            <div className="info-item">
+              <span className="info-label">Name:</span>
+              <span className="info-value">{testSuite.name}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Description:</span>
+              <span className="info-value">{testSuite.description || 'No description'}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Created:</span>
+              <span className="info-value">{new Date(testSuite.createdAt).toLocaleString()}</span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Last Modified:</span>
+              <span className="info-value">
+                {testSuite.updatedAt ? 
+                  formatDistanceToNow(new Date(testSuite.updatedAt)) + ' ago' : 
+                  'Not modified'}
+              </span>
+            </div>
+            <div className="info-item">
+              <span className="info-label">Test Cases:</span>
+              <span className="info-value">{testSuite.testCases.length}</span>
+            </div>
+            {testSuite.tags && (
+              <div className="info-item">
+                <span className="info-label">Tags:</span>
+                <div className="tags-list">
+                  {testSuite.tags.map((tag, index) => (
+                    <span key={index} className="tag">{tag}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      
+      <div className="test-cases-section">
+        <h2>Test Cases</h2>
+        
+        {testSuite.testCases.length === 0 ? (
+          <div className="empty-state">
+            <FaCode size={48} />
+            <h3>No test cases found</h3>
+            <p>This test suite doesn't contain any test cases yet. Click the "Record New Test" button to create one.</p>
+            <div className="mt-4">
+              <PlaywrightRecorder 
+                testSuiteId={testSuiteId!} 
+                onRecordingComplete={handleRecordingComplete} 
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="test-cases-list">
+            {testSuite.testCases.map(testCase => (
+              <div key={testCase.id} className="test-case-item">
+                <div className="test-case-info">
+                  <h3 className="test-case-name">{testCase.name}</h3>
+                  <div className="test-case-meta">
+                    <span className="test-case-type">{testCase.type || 'Functional'}</span>
+                    {testCase.priority && (
+                      <span className="test-case-priority">Priority: {testCase.priority}</span>
+                    )}
+                    {testCase.estimatedExecutionTime && (
+                      <span className="test-case-time">Est. Time: {testCase.estimatedExecutionTime}s</span>
+                    )}
+                    {testCase.automated && (
+                      <span className="test-case-automated">Automated</span>
+                    )}
+                  </div>
+                  <p className="test-case-description">{testCase.description}</p>
+                  {testCase.tags && testCase.tags.length > 0 && (
+                    <div className="test-case-tags">
+                      {testCase.tags.map((tag, index) => (
+                        <span key={index} className="tag">{tag}</span>
+                      ))}
+                    </div>
+                  )}
+                  {testCase.lastExecution && (
+                    <div className="test-case-last-execution">
+                      <span>Last execution: {new Date(testCase.lastExecution).toLocaleString()}</span>
+                      {testCase.lastExecutionStatus && (
+                        <span className={`execution-status ${testCase.lastExecutionStatus}`}>
+                          {testCase.lastExecutionStatus === 'passed' ? 
+                            <FaCheck className="status-icon success" /> : 
+                            <FaTimes className="status-icon failure" />}
+                          {testCase.lastExecutionStatus}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="test-case-actions">
+                  <button
+                    className="btn btn-success btn-sm mr-2"
+                    onClick={() => handleExecuteSingleTestCase(testCase)}
+                    disabled={executingTestId === testCase.id}
+                    title="Execute test case"
+                  >
+                    {executingTestId === testCase.id ? (
+                      <FaSpinner className="spinner" />
+                    ) : (
+                      <FaPlay />
+                    )} Run
+                  </button>
+                  <button 
+                    className="btn btn-secondary btn-sm mr-2"
+                    onClick={() => handleViewTestCaseCode(testCase)}
+                    title="View test case code"
+                  >
+                    <FaCode /> View Code
+                  </button>
+                  <button 
+                    className="btn btn-icon edit-btn"
+                    onClick={() => navigate(`/workspaces/${workspaceId}/projects/${projectId}/testsuites/${testSuiteId}/testcases/${testCase.id}/edit`)}
+                    title="Edit test case"
+                  >
+                    <FaEdit />
+                  </button>
+                  <button 
+                    className="btn btn-icon delete-btn"
+                    onClick={() => handleDeleteTestCase(testCase.id)}
+                    title="Delete test case"
+                  >
+                    <FaTrash />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* View Code Modal */}
+      {showCodeModal && selectedTestCase && (
+        <div className="modal-overlay">
+          <div className="modal modal-large">
+            <div className="modal-header">
+              <h2>Test Case Code: {selectedTestCase.name}</h2>
+              <button 
+                className="btn btn-icon close-btn"
+                onClick={() => setShowCodeModal(false)}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              {loadingCode ? (
+                <div className="loading-code">
+                  <FaSpinner className="spinner" />
+                  <p>Loading code...</p>
+                </div>
+              ) : (
+                <div className="code-container">
+                  <pre className="code-block">
+                    <code>{testCaseContent}</code>
+                  </pre>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button 
+                className="btn btn-primary mr-2" 
+                onClick={() => {
+                  navigator.clipboard.writeText(testCaseContent);
+                  toast.success('Code copied to clipboard');
+                }}
+              >
+                Copy Code
+              </button>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowCodeModal(false)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TestSuiteDetail;
+
+import React, { useState } from 'react';
+import { FaVideo, FaSpinner } from 'react-icons/fa';
+import { toast } from 'react-toastify';
+import axios from 'axios';
+
+interface PlaywrightRecorderProps {
+  testSuiteId: string;
+  onRecordingComplete: (testCase: any) => void;
+}
+
+const PlaywrightRecorder: React.FC<PlaywrightRecorderProps> = ({ testSuiteId, onRecordingComplete }) => {
+  const [show, setShow] = useState(false);
+  const [url, setUrl] = useState('');
+  const [testName, setTestName] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedScript, setRecordedScript] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [outputFormat, setOutputFormat] = useState('java');
+  
+  const handleClose = () => setShow(false);
+  const handleShow = () => setShow(true);
+  
+  const startRecording = async () => {
+    if (!url) {
+      setError('Please enter a URL');
+      return;
+    }
+    
+    if (!testName) {
+      setError('Please enter a test name');
+      return;
+    }
+    
+    setError(null);
+    setIsRecording(true);
+    
+    try {
+      // Call the backend API to start Playwright codegen recording
+      const response = await axios.post('/api/codegen/start-recording', null, {
+        params: {
+          url,
+          outputFormat
+        }
+      });
+      
+      setRecordedScript(response.data);
+      
+      // Convert the recorded script to a test case
+      const testCaseResponse = await axios.post('/api/codegen/convert-to-test-case', 
+        response.data,
+        {
+          params: {
+            testSuiteId,
+            testName
+          },
+          headers: {
+            'Content-Type': 'text/plain'
+          }
+        }
+      );
+      
+      // Pass the new test case back to the parent component
+      onRecordingComplete(testCaseResponse.data);
+      
+      // Close the modal
+      handleClose();
+      
+    } catch (error: any) {
+      console.error('Recording failed:', error);
+      setError('Recording failed: ' + (error.response?.data || error.message));
+    } finally {
+      setIsRecording(false);
+    }
+  };
+  
+  return (
+    <>
+      <button className="btn btn-primary" onClick={handleShow}>
+        <FaVideo className="mr-1" /> Record New Test
+      </button>
+      
+      {show && (
+        <div className="modal-overlay">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>Record Test with Playwright</h2>
+              <button
+                className="btn btn-icon close-btn"
+                onClick={handleClose}
+                disabled={isRecording}
+              >
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              {error && (
+                <div className="alert alert-danger">
+                  {error}
+                  <button
+                    className="btn btn-icon close-alert"
+                    onClick={() => setError(null)}
+                  >
+                    &times;
+                  </button>
+                </div>
+              )}
+              
+              <div className="form-group">
+                <label htmlFor="testName">Test Name</label>
+                <input
+                  type="text"
+                  id="testName"
+                  className="form-control"
+                  placeholder="Enter test name"
+                  value={testName}
+                  onChange={(e) => setTestName(e.target.value)}
+                  disabled={isRecording}
+                />
+              </div>
+              
+              <div className="form-group">
+                <label htmlFor="url">URL to Test</label>
+                <input
+                  type="url"
+                  id="url"
+                  className="form-control"
+                  placeholder="https://example.com"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={isRecording}
+                />
+              </div>
+              
+              <div className="form-group">
+                <label htmlFor="outputFormat">Output Format</label>
+                <select
+                  id="outputFormat"
+                  className="form-control"
+                  value={outputFormat}
+                  onChange={(e) => setOutputFormat(e.target.value)}
+                  disabled={isRecording}
+                >
+                  <option value="java">Java</option>
+                  <option value="javascript">JavaScript</option>
+                  <option value="python">Python</option>
+                </select>
+              </div>
+              
+              {isRecording && (
+                <div className="recording-indicator">
+                  <FaSpinner className="spinner" />
+                  <p>
+                    Recording in progress... A Playwright browser window has been opened.
+                    <br />
+                    Interact with the website and close the browser when finished.
+                  </p>
+                </div>
+              )}
+              
+              {recordedScript && !isRecording && (
+                <div className="recorded-script">
+                  <h4>Recorded Script:</h4>
+                  <pre className="code-block">
+                    <code>{recordedScript}</code>
+                  </pre>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="btn btn-secondary"
+                onClick={handleClose}
+                disabled={isRecording}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={startRecording}
+                disabled={isRecording || !url || !testName}
+              >
+                {isRecording ? (
+                  <>
+                    <FaSpinner className="spinner mr-1" />
+                    Recording...
+                  </>
+                ) : (
+                  'Start Recording'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {show && <div className="modal-backdrop"></div>}
+    </>
+  );
+};
+
+export default PlaywrightRecorder;
+
+import axios from 'axios';
+
+// Define types for execution
+interface TestExecutionResult {
+  id: string;
+  testCaseId: string;
+  testCaseName: string;
+  passed: boolean;
+  executionTime: string;
+  errorMessage?: string;
+  screenshot?: string;
+}
+
+interface TestExecutionSession {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  testSuiteId: string;
+  startTime: string;
+  endTime: string;
+  environment: string;
+  browser: string;
+  testResults: TestExecutionResult[];
+}
+
+interface TestExecutionSummary {
+  id: string;
+  sessionId: string;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  skippedTests: number;
+  totalDurationMs: number;
+  executionDate: string;
+}
+
+const executionService = {
+  /**
+   * Execute a test suite
+   */
+  executeTestSuite: async (
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    environment: string = 'staging',
+    browser: string = 'chrome'
+  ): Promise<TestExecutionSession> => {
+    try {
+      const response = await axios.post('/api/execution/execute-test-suite', null, {
+        params: {
+          workspaceId,
+          projectId,
+          testSuiteId,
+          environment,
+          browser
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error executing test suite:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Execute a single test case
+   */
+  executeTestCase: async (
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    testCaseId: string,
+    environment: string = 'staging',
+    browser: string = 'chrome'
+  ): Promise<TestExecutionResult> => {
+    try {
+      const response = await axios.post('/api/execution/execute-test-case', null, {
+        params: {
+          workspaceId,
+          projectId,
+          testSuiteId,
+          testCaseId,
+          environment,
+          browser
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error executing test case:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get execution session details
+   */
+  getExecutionSession: async (sessionId: string): Promise<TestExecutionSession> => {
+    try {
+      const response = await axios.get(`/api/execution/sessions/${sessionId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching execution session:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get execution summary for a session
+   */
+  getExecutionSummary: async (sessionId: string): Promise<TestExecutionSummary> => {
+    try {
+      const response = await axios.get(`/api/execution/sessions/${sessionId}/summary`);
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching execution summary:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get recent execution sessions
+   */
+  getRecentExecutions: async (
+    workspaceId: string,
+    limit: number = 10
+  ): Promise<TestExecutionSession[]> => {
+    try {
+      const response = await axios.get('/api/execution/recent', {
+        params: {
+          workspaceId,
+          limit
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching recent executions:', error);
+      throw error;
+    }
+  }
+};
+
+export default executionService;
+
+
+import axios from 'axios';
+import { Workspace, Project, TestSuite, TestCase } from '../types/workspace';
+
+const workspaceService = {
+  /**
+   * Get all workspaces
+   */
+  getAllWorkspaces: async (): Promise<Workspace[]> => {
+    try {
+      const response = await axios.get('/api/workspace');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching workspaces:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get a specific workspace by ID
+   */
+  getWorkspace: async (workspaceId: string): Promise<Workspace> => {
+    try {
+      const response = await axios.get(`/api/workspace/${workspaceId}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching workspace ${workspaceId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Create a new workspace
+   */
+  createWorkspace: async (workspace: Partial<Workspace>): Promise<Workspace> => {
+    try {
+      const response = await axios.post('/api/workspace', workspace);
+      return response.data;
+    } catch (error) {
+      console.error('Error creating workspace:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update an existing workspace
+   */
+  updateWorkspace: async (workspaceId: string, workspace: Partial<Workspace>): Promise<Workspace> => {
+    try {
+      const response = await axios.put(`/api/workspace/${workspaceId}`, workspace);
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating workspace ${workspaceId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a workspace
+   */
+  deleteWorkspace: async (workspaceId: string): Promise<void> => {
+    try {
+      await axios.delete(`/api/workspace/${workspaceId}`);
+    } catch (error) {
+      console.error(`Error deleting workspace ${workspaceId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get a project by ID
+   */
+  getProject: async (workspaceId: string, projectId: string): Promise<Project> => {
+    try {
+      const response = await axios.get(`/api/workspace/${workspaceId}/projects/${projectId}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching project ${projectId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get all projects for a workspace
+   */
+  getProjectsByWorkspace: async (workspaceId: string): Promise<Project[]> => {
+    try {
+      const response = await axios.get(`/api/workspace/${workspaceId}/projects`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching projects for workspace ${workspaceId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Create a new project
+   */
+  createProject: async (workspaceId: string, project: Partial<Project>): Promise<Project> => {
+    try {
+      const response = await axios.post(`/api/workspace/${workspaceId}/projects`, project);
+      return response.data;
+    } catch (error) {
+      console.error(`Error creating project in workspace ${workspaceId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update an existing project
+   */
+  updateProject: async (workspaceId: string, projectId: string, project: Partial<Project>): Promise<Project> => {
+    try {
+      const response = await axios.put(`/api/workspace/${workspaceId}/projects/${projectId}`, project);
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating project ${projectId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a project
+   */
+  deleteProject: async (workspaceId: string, projectId: string): Promise<void> => {
+    try {
+      await axios.delete(`/api/workspace/${workspaceId}/projects/${projectId}`);
+    } catch (error) {
+      console.error(`Error deleting project ${projectId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get a test suite by ID
+   */
+  getTestSuite: async (projectId: string, testSuiteId: string): Promise<TestSuite> => {
+    try {
+      const response = await axios.get(`/api/workspace/projects/${projectId}/test-suites/${testSuiteId}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching test suite ${testSuiteId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get all test suites for a project
+   */
+  getTestSuitesByProject: async (workspaceId: string, projectId: string): Promise<TestSuite[]> => {
+    try {
+      const response = await axios.get(`/api/workspace/${workspaceId}/projects/${projectId}/test-suites`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching test suites for project ${projectId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Create a new test suite
+   */
+  createTestSuite: async (workspaceId: string, projectId: string, testSuite: Partial<TestSuite>): Promise<TestSuite> => {
+    try {
+      const response = await axios.post(`/api/workspace/${workspaceId}/projects/${projectId}/test-suites`, testSuite);
+      return response.data;
+    } catch (error) {
+      console.error(`Error creating test suite in project ${projectId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update an existing test suite
+   */
+  updateTestSuite: async (
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    testSuite: Partial<TestSuite>
+  ): Promise<TestSuite> => {
+    try {
+      const response = await axios.put(
+        `/api/workspace/${workspaceId}/projects/${projectId}/test-suites/${testSuiteId}`,
+        testSuite
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating test suite ${testSuiteId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a test suite
+   */
+  deleteTestSuite: async (workspaceId: string, projectId: string, testSuiteId: string): Promise<void> => {
+    try {
+      await axios.delete(`/api/workspace/${workspaceId}/projects/${projectId}/test-suites/${testSuiteId}`);
+    } catch (error) {
+      console.error(`Error deleting test suite ${testSuiteId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get a test case by ID
+   */
+  getTestCase: async (testCaseId: string): Promise<TestCase> => {
+    try {
+      const response = await axios.get(`/api/test-cases/${testCaseId}`);
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching test case ${testCaseId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Get all test cases for a test suite
+   */
+  getTestCasesByTestSuite: async (
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string
+  ): Promise<TestCase[]> => {
+    try {
+      const response = await axios.get(
+        `/api/workspace/${workspaceId}/projects/${projectId}/test-suites/${testSuiteId}/test-cases`
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching test cases for test suite ${testSuiteId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Create a new test case
+   */
+  createTestCase: async (
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    testCase: Partial<TestCase>
+  ): Promise<TestCase> => {
+    try {
+      const response = await axios.post(
+        `/api/workspace/${workspaceId}/projects/${projectId}/test-suites/${testSuiteId}/test-cases`,
+        testCase
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error creating test case in test suite ${testSuiteId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update an existing test case
+   */
+  updateTestCase: async (
+    workspaceId: string,
+    projectId: string,
+    testSuiteId: string,
+    testCaseId: string,
+    testCase: Partial<TestCase>
+  ): Promise<TestCase> => {
+    try {
+      const response = await axios.put(
+        `/api/workspace/${workspaceId}/projects/${projectId}/test-suites/${testSuiteId}/test-cases/${testCaseId}`,
+        testCase
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating test case ${testCaseId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a test case
+   */
+  deleteTestCase: async (testCaseId: string): Promise<void> => {
+    try {
+      await axios.delete(`/api/test-cases/${testCaseId}`);
+    } catch (error) {
+      console.error(`Error deleting test case ${testCaseId}:`, error);
+      throw error;
+    }
+  }
+};
+
+export default workspaceService;
+
+
+// src/services/codegenService.ts
+import axios from 'axios';
+import { TestCase } from '../types/workspace';
+
+const codegenService = {
+  /**
+   * Start a recording session with Playwright codegen
+   */
+  startRecordingSession: async (url: string, outputFormat: string = 'java'): Promise<string> => {
+    try {
+      const response = await axios.post('/api/codegen/start-recording', null, {
+        params: {
+          url,
+          outputFormat
+        }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error starting recording session:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Convert a recorded script to a test case
+   */
+  convertToTestCase: async (
+    testSuiteId: string, 
+    testName: string, 
+    playwrightScript: string
+  ): Promise<TestCase> => {
+    try {
+      const response = await axios.post(
+        '/api/codegen/convert-to-test-case', 
+        playwrightScript,
+        {
+          params: {
+            testSuiteId,
+            testName
+          },
+          headers: {
+            'Content-Type': 'text/plain'
+          }
+        }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error converting script to test case:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Generate Playwright code from test steps
+   */
+  generatePlaywrightCode: async (testCaseId: string): Promise<string> => {
+    try {
+      const response = await axios.get(`/api/codegen/generate-code/${testCaseId}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error generating Playwright code:', error);
+      throw error;
+    }
+  }
+};
+
+export default codegenService;
+
+// Update in PlaywrightRecorder.tsx
+import codegenService from '../../services/codegenService';
+
+// Then replace the direct axios calls with:
+const startRecording = async () => {
+  // ...existing validation code...
+  
+  try {
+    // Call the service to start Playwright codegen recording
+    const recordedScript = await codegenService.startRecordingSession(url, outputFormat);
+    setRecordedScript(recordedScript);
+    
+    // Convert the recorded script to a test case
+    const newTestCase = await codegenService.convertToTestCase(testSuiteId, testName, recordedScript);
+    
+    // Pass the new test case back to the parent component
+    onRecordingComplete(newTestCase);
+    
+    // Close the modal
+    handleClose();
+    
+  } catch (error: any) {
+    console.error('Recording failed:', error);
+    setError('Recording failed: ' + (error.response?.data || error.message));
+  } finally {
+    setIsRecording(false);
+  }
+};
