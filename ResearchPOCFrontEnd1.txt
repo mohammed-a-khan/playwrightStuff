@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contextual Test Generation Platform</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .sidebar {
+            min-height: 100vh;
+            background-color: #212529;
+            color: white;
+        }
+        
+        .sidebar .nav-link {
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 5px;
+        }
+        
+        .sidebar .nav-link:hover {
+            color: white;
+        }
+        
+        .sidebar .nav-link.active {
+            color: white;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+        
+        .content {
+            padding: 20px;
+        }
+        
+        .step-card {
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .step-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .loader {
+            display: none;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .test-step {
+            padding: 10px;
+            margin-bottom: 5px;
+            border-left: 3px solid #6c757d;
+        }
+        
+        .test-step-pass {
+            border-left-color: #28a745;
+        }
+        
+        .test-step-fail {
+            border-left-color: #dc3545;
+        }
+        
+        .page-item {
+            cursor: pointer;
+            margin-bottom: 5px;
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        
+        .page-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .element-item {
+            cursor: pointer;
+            padding: 5px 10px;
+            margin: 2px 0;
+            border-radius: 4px;
+            border-left: 3px solid #6c757d;
+        }
+        
+        .element-item:hover {
+            background-color: #f8f9fa;
+        }
+        
+        .element-button {
+            border-left-color: #0d6efd;
+        }
+        
+        .element-input {
+            border-left-color: #198754;
+        }
+        
+        .element-select {
+            border-left-color: #6f42c1;
+        }
+        
+        .element-link {
+            border-left-color: #fd7e14;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar -->
+            <div class="col-md-2 p-0 sidebar">
+                <div class="py-4 px-3">
+                    <h5>CTGP Dashboard</h5>
+                </div>
+                <ul class="nav flex-column px-3">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#dashboard" data-bs-toggle="tab">
+                            <i class="fas fa-home me-2"></i> Dashboard
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#workspaces" data-bs-toggle="tab">
+                            <i class="fas fa-folder me-2"></i> Workspaces
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#analyzer" data-bs-toggle="tab">
+                            <i class="fas fa-search me-2"></i> Web Analyzer
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#generator" data-bs-toggle="tab">
+                            <i class="fas fa-code me-2"></i> Test Generator
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#execution" data-bs-toggle="tab">
+                            <i class="fas fa-play me-2"></i> Test Execution
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#reports" data-bs-toggle="tab">
+                            <i class="fas fa-chart-bar me-2"></i> Reports
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#settings" data-bs-toggle="tab">
+                            <i class="fas fa-cog me-2"></i> Settings
+                        </a>
+                    </li>
+                </ul>
+            </div>
+            
+            <!-- Main Content -->
+            <div class="col-md-10 content">
+                <div class="tab-content">
+                    <!-- Dashboard Tab -->
+                    <div class="tab-pane fade show active" id="dashboard">
+                        <h2 class="mb-4">Dashboard</h2>
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="card bg-primary text-white mb-4">
+                                    <div class="card-body">
+                                        <h5 class="card-title">3 Workspaces</h5>
+                                        <p class="card-text">Active testing workspaces</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-success text-white mb-4">
+                                    <div class="card-body">
+                                        <h5 class="card-title">8 Projects</h5>
+                                        <p class="card-text">Total testing projects</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-warning text-white mb-4">
+                                    <div class="card-body">
+                                        <h5 class="card-title">42 Test Suites</h5>
+                                        <p class="card-text">Across all projects</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-info text-white mb-4">
+                                    <div class="card-body">
+                                        <h5 class="card-title">327 Test Cases</h5>
+                                        <p class="card-text">Total test cases</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <i class="fas fa-chart-pie me-1"></i>
+                                        Test Execution Results
+                                    </div>
+                                    <div class="card-body">
+                                        <canvas id="executionResultChart" width="100%" height="40"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <i class="fas fa-chart-bar me-1"></i>
+                                        Test Coverage
+                                    </div>
+                                    <div class="card-body">
+                                        <canvas id="coverageChart" width="100%" height="40"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row">
+                            <div class="col-md-12">
+                                <div class="card mb-4">
+                                    <div class="card-header">
+                                        <i class="fas fa-table me-1"></i>
+                                        Recent Test Executions
+                                    </div>
+                                    <div class="card-body">
+                                        <table class="table table-striped">
+                                            <thead>
+                                                <tr>
+                                                    <th>Test Suite</th>
+                                                    <th>Project</th>
+                                                    <th>Execution Date</th>
+                                                    <th>Pass Rate</th>
+                                                    <th>Status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>Login Flow Tests</td>
+                                                    <td>E-commerce App</td>
+                                                    <td>2025-04-20 14:30:22</td>
+                                                    <td>92%</td>
+                                                    <td><span class="badge bg-success">Passed</span></td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Checkout Process</td>
+                                                    <td>E-commerce App</td>
+                                                    <td>2025-04-20 12:15:10</td>
+                                                    <td>85%</td>
+                                                    <td><span class="badge bg-success">Passed</span></td>
+                                                </tr>
+                                                <tr>
+                                                    <td>User Registration</td>
+                                                    <td>Customer Portal</td>
+                                                    <td>2025-04-19 16:42:33</td>
+                                                    <td>78%</td>
+                                                    <td><span class="badge bg-warning">Partial</span></td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Product Search</td>
+                                                    <td>E-commerce App</td>
+                                                    <td>2025-04-19 11:05:48</td>
+                                                    <td>100%</td>
+                                                    <td><span class="badge bg-success">Passed</span></td>
+                                                </tr>
+                                                <tr>
+                                                    <td>Admin Dashboard</td>
+                                                    <td>Admin Portal</td>
+                                                    <td>2025-04-18 15:22:09</td>
+                                                    <td>65%</td>
+                                                    <td><span class="badge bg-danger">Failed</span></td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <i class="fas fa-rocket me-1"></i>
+                                        Quick Actions
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-6 mb-3">
+                                                <div class="d-grid">
+                                                    <button class="btn btn-primary">
+                                                        <i class="fas fa-plus me-2"></i> New Workspace
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <div class="d-grid">
+                                                    <button class="btn btn-success">
+                                                        <i class="fas fa-plus me-2"></i> New Project
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <div class="d-grid">
+                                                    <button class="btn btn-info text-white">
+                                                        <i class="fas fa-search me-2"></i> Analyze Website
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <div class="d-grid">
+                                                    <button class="btn btn-warning text-white">
+                                                        <i class="fas fa-code me-2"></i> Generate Tests
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card">
+                                    <div class="card-header">
+                                        <i class="fas fa-bell me-1"></i>
+                                        Recent Notifications
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="alert alert-success mb-2">
+                                            <small class="float-end">20 minutes ago</small>
+                                            <strong>Test Suite Generated:</strong> Successfully created 12 test cases for E-commerce App
+                                        </div>
+                                        <div class="alert alert-info mb-2">
+                                            <small class="float-end">1 hour ago</small>
+                                            <strong>Web Analysis Complete:</strong> Analyzed 15 pages with 127 elements for Customer Portal
+                                        </div>
+                                        <div class="alert alert-warning mb-2">
+                                            <small class="float-end">3 hours ago</small>
+                                            <strong>Test Execution Warning:</strong> 3 tests failed in Admin Portal suite
+                                        </div>
+                                        <div class="alert alert-primary mb-2">
+                                            <small class="float-end">Yesterday</small>
+                                            <strong>Project Created:</strong> New "Mobile App Testing" project added to Workspace 1
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Web Analyzer Tab -->
+                    <div class="tab-pane fade" id="analyzer">
+                        <h2 class="mb-4">Web Analyzer</h2>
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <i class="fas fa-search me-1"></i>
+                                Analyze Website
+                            </div>
+                            <div class="card-body">
+                                <form id="analyzeForm">
+                                    <div class="row mb-3">
+                                        <div class="col-md-6">
+                                            <label for="websiteUrl" class="form-label">Website URL</label>
+                                            <input type="url" class="form-control" id="websiteUrl" placeholder="https://example.com" required>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="crawlDepth" class="form-label">Crawl Depth</label>
+                                            <select class="form-select" id="crawlDepth">
+                                                <option value="1">1 - Shallow</option>
+                                                <option value="2" selected>2 - Medium</option>
+                                                <option value="3">3 - Deep</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label for="projectSelect" class="form-label">Project (Optional)</label>
+                                            <select class="form-select" id="projectSelect">
+                                                <option value="">Select a project</option>
+                                                <option value="1">E-commerce App</option>
+                                                <option value="2">Customer Portal</option>
+                                                <option value="3">Admin Portal</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                        <button type="submit" class="btn btn-primary" id="analyzeButton">
+                                            <i class="fas fa-search me-2"></i> Analyze Website
+                                        </button>
+                                    </div>
+                                </form>
+                                
+                                <!-- Loader -->
+                                <div class="loader" id="analyzeLoader"></div>
+                                
+                                <!-- Analysis Results -->
+                                <div id="analysisResults" style="display: none;">
+                                    <hr>
+                                    <h4 class="mb-3">Analysis Results</h4>
+                                    
+                                    <div class="row">
+                                        <div class="col-md-3">
+                                            <div class="card bg-light mb-3">
+                                                <div class="card-body text-center">
+                                                    <h2 id="pageCount">0</h2>
+                                                    <p class="mb-0">Pages Analyzed</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card bg-light mb-3">
+                                                <div class="card-body text-center">
+                                                    <h2 id="elementCount">0</h2>
+                                                    <p class="mb-0">Elements Found</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card bg-light mb-3">
+                                                <div class="card-body text-center">
+                                                    <h2 id="formCount">0</h2>
+                                                    <p class="mb-0">Forms Detected</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card bg-light mb-3">
+                                                <div class="card-body text-center">
+                                                    <h2 id="interactiveCount">0</h2>
+                                                    <p class="mb-0">Interactive Elements</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="row mt-4">
+                                        <div class="col-md-4">
+                                            <div class="card">
+                                                <div class="card-header">Pages</div>
+                                                <div class="card-body p-0">
+                                                    <div class="list-group list-group-flush" id="pagesList">
+                                                        <!-- Pages will be listed here -->
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-8">
+                                            <div class="card">
+                                                <div class="card-header">Elements on Page</div>
+                                                <div class="card-body p-0">
+                                                    <div class="list-group list-group-flush" id="elementsList">
+                                                        <!-- Elements will be listed here -->
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+                                        <button class="btn btn-warning text-white" id="generateTestsBtn">
+                                            <i class="fas fa-code me-2"></i> Generate Tests
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Test Generator Tab -->
+                    <div class="tab-pane fade" id="generator">
+                        <h2 class="mb-4">Test Generator</h2>
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <i class="fas fa-code me-1"></i>
+                                Generate Test Cases
+                            </div>
+                            <div class="card-body">
+                                <div class="row mb-4">
+                                    <div class="col-md-12">
+                                        <h5>Generation Options</h5>
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <div class="form-check form-switch mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generateNavTests" checked>
+                                                    <label class="form-check-label" for="generateNavTests">Navigation Tests</label>
+                                                </div>
+                                                <div class="form-check form-switch mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generateFormTests" checked>
+                                                    <label class="form-check-label" for="generateFormTests">Form Tests</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <div class="form-check form-switch mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generateDataValidation" checked>
+                                                    <label class="form-check-label" for="generateDataValidation">Data Validation</label>
+                                                </div>
+                                                <div class="form-check form-switch mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generateNegativeCases" checked>
+                                                    <label class="form-check-label" for="generateNegativeCases">Negative Test Cases</label>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <div class="form-check form-switch mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generateVisualTests">
+                                                    <label class="form-check-label" for="generateVisualTests">Visual Tests</label>
+                                                </div>
+                                                <div class="form-check form-switch mb-2">
+                                                    <input class="form-check-input" type="checkbox" id="generatePerformanceTests">
+                                                    <label class="form-check-label" for="generatePerformanceTests">Performance Tests</label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="row mb-3">
+                                    <div class="col-md-6">
+                                        <label for="testSuiteName" class="form-label">Test Suite Name</label>
+                                        <input type="text" class="form-control" id="testSuiteName" value="Generated Test Suite for example.com">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="targetProject" class="form-label">Target Project</label>
+                                        <select class="form-select" id="targetProject">
+                                            <option value="1">E-commerce App</option>
+                                            <option value="2">Customer Portal</option>
+                                            <option value="3">Admin Portal</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                    <button class="btn btn-primary" id="startGenerationBtn">
+                                        <i class="fas fa-magic me-2"></i> Generate Test Suite
+                                    </button>
+                                </div>
+                                
+                                <!-- Loader -->
+                                <div class="loader" id="generatorLoader"></div>
+                                
+                                <!-- Generated Tests Results -->
+                                <div id="generatedTests" style="display: none;">
+                                    <hr>
+                                    <h4 class="mb-3">Generated Test Suite</h4>
+                                    
+                                    <div class="alert alert-success">
+                                        <i class="fas fa-check-circle me-2"></i> Successfully generated 15 test cases based on web analysis.
+                                    </div>
+                                    
+                                    <div class="card mb-4">
+                                        <div class="card-header">
+                                            Test Cases
+                                        </div>
+                                        <div class="card-body p-0">
+                                            <div class="accordion" id="testsAccordion">
+                                                <!-- Test Case 1 -->
+                                                <div class="accordion-item">
+                                                    <h2 class="accordion-header" id="testHeading1">
+                                                        <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#testCollapse1" aria-expanded="true" aria-controls="testCollapse1">
+                                                            <i class="fas fa-sign-in-alt me-2"></i> Login Form Test
+                                                        </button>
+                                                    </h2>
+                                                    <div id="testCollapse1" class="accordion-collapse collapse show" aria-labelledby="testHeading1" data-bs-parent="#testsAccordion">
+                                                        <div class="accordion-body">
+                                                            <h6>Description</h6>
+                                                            <p>Test login functionality with valid credentials</p>
+                                                            
+                                                            <h6>Test Steps</h6>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-arrow-right me-2"></i> Navigate to https://example.com/login
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-keyboard me-2"></i> Enter "testuser" in username field
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-keyboard me-2"></i> Enter "Password123!" in password field
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-mouse-pointer me-2"></i> Click Login button
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-check me-2"></i> Verify redirection to dashboard page
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-check me-2"></i> Verify welcome message contains username
+                                                            </div>
+                                                            
+                                                            <div class="mt-3">
+                                                                <button class="btn btn-sm btn-outline-primary me-2">
+                                                                    <i class="fas fa-edit me-1"></i> Edit
+                                                                </button>
+                                                                <button class="btn btn-sm btn-outline-success">
+                                                                    <i class="fas fa-play me-1"></i> Run Test
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Test Case 2 -->
+                                                <div class="accordion-item">
+                                                    <h2 class="accordion-header" id="testHeading2">
+                                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#testCollapse2" aria-expanded="false" aria-controls="testCollapse2">
+                                                            <i class="fas fa-shopping-cart me-2"></i> Add to Cart Test
+                                                        </button>
+                                                    </h2>
+                                                    <div id="testCollapse2" class="accordion-collapse collapse" aria-labelledby="testHeading2" data-bs-parent="#testsAccordion">
+                                                        <div class="accordion-body">
+                                                            <h6>Description</h6>
+                                                            <p>Test adding product to cart functionality</p>
+                                                            
+                                                            <h6>Test Steps</h6>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-arrow-right me-2"></i> Navigate to https://example.com/products
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-mouse-pointer me-2"></i> Click on first product
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-mouse-pointer me-2"></i> Click "Add to Cart" button
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-check me-2"></i> Verify success message appears
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-mouse-pointer me-2"></i> Navigate to cart page
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-check me-2"></i> Verify product appears in cart
+                                                            </div>
+                                                            
+                                                            <div class="mt-3">
+                                                                <button class="btn btn-sm btn-outline-primary me-2">
+                                                                    <i class="fas fa-edit me-1"></i> Edit
+                                                                </button>
+                                                                <button class="btn btn-sm btn-outline-success">
+                                                                    <i class="fas fa-play me-1"></i> Run Test
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                
+                                                <!-- Test Case 3 -->
+                                                <div class="accordion-item">
+                                                    <h2 class="accordion-header" id="testHeading3">
+                                                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#testCollapse3" aria-expanded="false" aria-controls="testCollapse3">
+                                                            <i class="fas fa-search me-2"></i> Product Search Test
+                                                        </button>
+                                                    </h2>
+                                                    <div id="testCollapse3" class="accordion-collapse collapse" aria-labelledby="testHeading3" data-bs-parent="#testsAccordion">
+                                                        <div class="accordion-body">
+                                                            <h6>Description</h6>
+                                                            <p>Test product search functionality</p>
+                                                            
+                                                            <h6>Test Steps</h6>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-arrow-right me-2"></i> Navigate to https://example.com
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-keyboard me-2"></i> Enter "smartphone" in search field
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-mouse-pointer me-2"></i> Click search button
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-check me-2"></i> Verify search results page loads
+                                                            </div>
+                                                            <div class="test-step">
+                                                                <i class="fas fa-check me-2"></i> Verify results contain keyword "smartphone"
+                                                            </div>
+                                                            
+                                                            <div class="mt-3">
+                                                                <button class="btn btn-sm btn-outline-primary me-2">
+                                                                    <i class="fas fa-edit me-1"></i> Edit
+                                                                </button>
+                                                                <button class="btn btn-sm btn-outline-success">
+                                                                    <i class="fas fa-play me-1"></i> Run Test
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                        <button class="btn btn-outline-primary me-2">
+                                            <i class="fas fa-file-export me-2"></i> Export Tests
+                                        </button>
+                                        <button class="btn btn-success" id="saveTestSuiteBtn">
+                                            <i class="fas fa-save me-2"></i> Save Test Suite
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Test Execution Tab -->
+                    <div class="tab-pane fade" id="execution">
+                        <h2 class="mb-4">Test Execution</h2>
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <i class="fas fa-play me-1"></i>
+                                Execute Tests
+                            </div>
+                            <div class="card-body">
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <label for="execWorkspace" class="form-label">Workspace</label>
+                                        <select class="form-select" id="execWorkspace">
+                                            <option value="1">Workspace 1</option>
+                                            <option value="2">Workspace 2</option>
+                                            <option value="3">Workspace 3</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="execProject" class="form-label">Project</label>
+                                        <select class="form-select" id="execProject">
+                                            <option value="1">E-commerce App</option>
+                                            <option value="2">Customer Portal</option>
+                                            <option value="3">Admin Portal</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="execTestSuite" class="form-label">Test Suite</label>
+                                        <select class="form-select" id="execTestSuite">
+                                            <option value="1">Login Flow Tests</option>
+                                            <option value="2">Checkout Process</option>
+                                            <option value="3">Product Search</option>
+                                            <option value="4">User Registration</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <div class="row mb-3">
+                                    <div class="col-md-4">
+                                        <label for="execEnvironment" class="form-label">Environment</label>
+                                        <select class="form-select" id="execEnvironment">
+                                            <option value="dev">Development</option>
+                                            <option value="staging" selected>Staging</option>
+                                            <option value="prod">Production</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="execBrowser" class="form-label">Browser</label>
+                                        <select class="form-select" id="execBrowser">
+                                            <option value="chrome" selected>Chrome</option>
+                                            <option value="firefox">Firefox</option>
+                                            <option value="edge">Edge</option>
+                                            <option value="safari">Safari</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label for="execParallel" class="form-label">Parallel Execution</label>
+                                        <select class="form-select" id="execParallel">
+                                            <option value="1" selected>Sequential</option>
+                                            <option value="2">2 Threads</option>
+                                            <option value="4">4 Threads</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                
+                                <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                    <button class="btn btn-primary" id="startExecutionBtn">
+                                        <i class="fas fa-play me-2"></i> Start Execution
+                                    </button>
+                                </div>
+                                
+                                <!-- Loader -->
+                                <div class="loader" id="executionLoader"></div>
+                                
+                                <!-- Execution Results -->
+                                <div id="executionResults" style="display: none;">
+                                    <hr>
+                                    <h4 class="mb-3">Execution Results</h4>
+                                    
+                                    <div class="row">
+                                        <div class="col-md-3">
+                                            <div class="card bg-light mb-3">
+                                                <div class="card-body text-center">
+                                                    <h3 id="totalTests">15</h3>
+                                                    <p class="mb-0">Total Tests</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card bg-success text-white mb-3">
+                                                <div class="card-body text-center">
+                                                    <h3 id="passedTests">12</h3>
+                                                    <p class="mb-0">Passed</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card bg-danger text-white mb-3">
+                                                <div class="card-body text-center">
+                                                    <h3 id="failedTests">3</h3>
+                                                    <p class="mb-0">Failed</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <div class="card bg-info text-white mb-3">
+                                                <div class="card-body text-center">
+                                                    <h3 id="executionTime">1:24</h3>
+                                                    <p class="mb-0">Duration (min:sec)</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="card mb-4">
+                                        <div class="card-header">
+                                            Test Results
+                                        </div>
+                                        <div class="card-body p-0">
+                                            <div class="table-responsive">
+                                                <table class="table table-hover mb-0">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Test Case</th>
+                                                            <th>Status</th>
+                                                            <th>Duration</th>
+                                                            <th>Details</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <tr class="table-success">
+                                                            <td>Login Form Test</td>
+                                                            <td><span class="badge bg-success">Passed</span></td>
+                                                            <td>5.2s</td>
+                                                            <td><button class="btn btn-sm btn-outline-primary">View</button></td>
+                                                        </tr>
+                                                        <tr class="table-success">
+                                                            <td>Add to Cart Test</td>
+                                                            <td><span class="badge bg-success">Passed</span></td>
+                                                            <td>7.8s</td>
+                                                            <td><button class="btn btn-sm btn-outline-primary">View</button></td>
+                                                        </tr>
+                                                        <tr class="table-danger">
+                                                            <td>Checkout Process Test</td>
+                                                            <td><span class="badge bg-danger">Failed</span></td>
+                                                            <td>12.3s</td>
+                                                            <td><button class="btn btn-sm btn-outline-primary">View</button></td>
+                                                        </tr>
+                                                        <tr class="table-success">
+                                                            <td>Product Search Test</td>
+                                                            <td><span class="badge bg-success">Passed</span></td>
+                                                            <td>4.5s</td>
+                                                            <td><button class="btn btn-sm btn-outline-primary">View</button></td>
+                                                        </tr>
+                                                        <tr class="table-success">
+                                                            <td>User Registration Test</td>
+                                                            <td><span class="badge bg-success">Passed</span></td>
+                                                            <td>8.7s</td>
+                                                            <td><button class="btn btn-sm btn-outline-primary">View</button></td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="card mb-4">
+                                        <div class="card-header">
+                                            <i class="fas fa-times-circle me-1 text-danger"></i>
+                                            Failed Test Details - Checkout Process Test
+                                        </div>
+                                        <div class="card-body">
+                                            <h6>Error Message</h6>
+                                            <div class="alert alert-danger">
+                                                Element not found: "complete-checkout-button" (Timeout: 10s)
+                                            </div>
+                                            
+                                            <h6>Test Steps</h6>
+                                            <div class="test-step test-step-pass">
+                                                <i class="fas fa-check-circle me-2 text-success"></i> Navigate to cart page
+                                            </div>
+                                            <div class="test-step test-step-pass">
+                                                <i class="fas fa-check-circle me-2 text-success"></i> Click "Proceed to Checkout" button
+                                            </div>
+                                            <div class="test-step test-step-pass">
+                                                <i class="fas fa-check-circle me-2 text-success"></i> Fill in shipping information
+                                            </div>
+                                            <div class="test-step test-step-pass">
+                                                <i class="fas fa-check-circle me-2 text-success"></i> Click "Continue to Payment" button
+                                            </div>
+                                            <div class="test-step test-step-pass">
+                                                <i class="fas fa-check-circle me-2 text-success"></i> Enter credit card details
+                                            </div>
+                                            <div class="test-step test-step-fail">
+                                                <i class="fas fa-times-circle me-2 text-danger"></i> Click "Complete Checkout" button
+                                                <div class="small text-danger mt-1">
+                                                    Element not found: "complete-checkout-button" (Timeout: 10s)
+                                                </div>
+                                            </div>
+                                            
+                                            <h6 class="mt-3">Screenshot at Failure</h6>
+                                            <img src="/api/placeholder/800/400" alt="Error Screenshot" class="img-fluid border mb-3" />
+                                            
+                                            <div class="mt-3">
+                                                <button class="btn btn-warning">
+                                                    <i class="fas fa-redo me-2"></i> Retry Test
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                        <button class="btn btn-outline-primary me-2">
+                                            <i class="fas fa-file-export me-2"></i> Export Results
+                                        </button>
+                                        <button class="btn btn-primary">
+                                            <i class="fas fa-chart-bar me-2"></i> Generate Report
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Other tabs (Workspaces, Reports, Settings) would be implemented similarly -->
+                    <div class="tab-pane fade" id="workspaces">
+                        <h2 class="mb-4">Workspaces</h2>
+                        <!-- Workspace management UI would go here -->
+                    </div>
+                    
+                    <div class="tab-pane fade" id="reports">
+                        <h2 class="mb-4">Reports</h2>
+                        <!-- Reports UI would go here -->
+                    </div>
+                    
+                    <div class="tab-pane fade" id="settings">
+                        <h2 class="mb-4">Settings</h2>
+                        <!-- Settings UI would go here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    
+    <script>
+        // Sample chart data
+        document.addEventListener('DOMContentLoaded', function() {
+            // Execution Result Chart
+            const executionCtx = document.getElementById('executionResultChart').getContext('2d');
+            const executionChart = new Chart(executionCtx, {
+                type: 'pie',
+                data: {
+                    labels: ['Passed', 'Failed', 'Skipped'],
+                    datasets: [{
+                        data: [253, 42, 32],
+                        backgroundColor: ['#28a745', '#dc3545', '#ffc107'],
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                        }
+                    }
+                }
+            });
+            
+            // Coverage Chart
+            const coverageCtx = document.getElementById('coverageChart').getContext('2d');
+            const coverageChart = new Chart(coverageCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['Login', 'Search', 'Cart', 'Checkout', 'Account', 'Admin'],
+                    datasets: [{
+                        label: 'Test Coverage (%)',
+                        data: [95, 88, 92, 76, 85, 68],
+                        backgroundColor: '#0d6efd',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+            
+            // Analyze Form Submit
+            document.getElementById('analyzeForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                // Show loader
+                document.getElementById('analyzeLoader').style.display = 'block';
+                
+                // Simulate analysis (would be an API call in real implementation)
+                setTimeout(function() {
+                    // Hide loader
+                    document.getElementById('analyzeLoader').style.display = 'none';
+                    
+                    // Show results
+                    document.getElementById('analysisResults').style.display = 'block';
+                    
+                    // Update counts
+                    document.getElementById('pageCount').textContent = '15';
+                    document.getElementById('elementCount').textContent = '127';
+                    document.getElementById('formCount').textContent = '8';
+                    document.getElementById('interactiveCount').textContent = '45';
+                    
+                    // Populate pages list
+                    const pagesList = document.getElementById('pagesList');
+                    pagesList.innerHTML = '';
+                    
+                    const pages = [
+                        'https://example.com/',
+                        'https://example.com/login',
+                        'https://example.com/products',
+                        'https://example.com/products/category/electronics',
+                        'https://example.com/cart',
+                        'https://example.com/checkout'
+                    ];
+                    
+                    pages.forEach(page => {
+                        const pageItem = document.createElement('div');
+                        pageItem.className = 'page-item list-group-item';
+                        pageItem.innerHTML = `<i class="fas fa-file me-2"></i> ${page}`;
+                        pagesList.appendChild(pageItem);
+                    });
+                    
+                    // Make first page active and show its elements
+                    const firstPage = pagesList.querySelector('.page-item');
+                    if (firstPage) {
+                        firstPage.classList.add('active');
+                        populateElements('https://example.com/');
+                    }
+                    
+                    // Add click handlers to pages
+                    document.querySelectorAll('.page-item').forEach(item => {
+                        item.addEventListener('click', function() {
+                            document.querySelectorAll('.page-item').forEach(p => p.classList.remove('active'));
+                            this.classList.add('active');
+                            const page = this.textContent.trim().substring(2);
+                            populateElements(page);
+                        });
+                    });
+                    
+                }, 2000);
+            });
+            
+            // Populate elements for a page
+            function populateElements(page) {
+                const elementsList = document.getElementById('elementsList');
+                elementsList.innerHTML = '';
+                
+                let elements = [];
+                
+                if (page.includes('login')) {
+                    elements = [
+                        { type: 'input', name: 'Username field', selector: '#username' },
+                        { type: 'input', name: 'Password field', selector: '#password' },
+                        { type: 'button', name: 'Login button', selector: '#loginButton' },
+                        { type: 'link', name: 'Forgot Password', selector: '.forgot-password' }
+                    ];
+                } else if (page.includes('products')) {
+                    elements = [
+                        { type: 'input', name: 'Search field', selector: '#productSearch' },
+                        { type: 'button', name: 'Search button', selector: '#searchButton' },
+                        { type: 'select', name: 'Category filter', selector: '#categoryFilter' },
+                        { type: 'button', name: 'Add to Cart (Product 1)', selector: '#product-1 .add-to-cart' },
+                        { type: 'button', name: 'Add to Cart (Product 2)', selector: '#product-2 .add-to-cart' },
+                        { type: 'link', name: 'Product Details', selector: '.product-link' }
+                    ];
+                } else if (page.includes('cart')) {
+                    elements = [
+                        { type: 'button', name: 'Update Quantity', selector: '.update-qty' },
+                        { type: 'button', name: 'Remove Item', selector: '.remove-item' },
+                        { type: 'button', name: 'Proceed to Checkout', selector: '#checkout-button' },
+                        { type: 'link', name: 'Continue Shopping', selector: '.continue-shopping' }
+                    ];
+                } else if (page.includes('checkout')) {
+                    elements = [
+                        { type: 'input', name: 'First Name', selector: '#firstName' },
+                        { type: 'input', name: 'Last Name', selector: '#lastName' },
+                        { type: 'input', name: 'Email Address', selector: '#email' },
+                        { type: 'input', name: 'Shipping Address', selector: '#address' },
+                        { type: 'select', name: 'Country', selector: '#country' },
+                        { type: 'input', name: 'Credit Card Number', selector: '#cardNumber' },
+                        { type: 'button', name: 'Complete Order', selector: '#complete-order' }
+                    ];
+                } else {
+                    // Homepage elements
+                    elements = [
+                        { type: 'link', name: 'Login Link', selector: '.login-link' },
+                        { type: 'link', name: 'Products Link', selector: '.products-link' },
+                        { type: 'input', name: 'Newsletter Email', selector: '#newsletter-email' },
+                        { type: 'button', name: 'Subscribe Button', selector: '#subscribe-button' },
+                        { type: 'link', name: 'Featured Product 1', selector: '#featured-1' },
+                        { type: 'link', name: 'Featured Product 2', selector: '#featured-2' }
+                    ];
+                }
+                
+                elements.forEach(element => {
+                    const elementItem = document.createElement('div');
+                    elementItem.className = `element-item list-group-item element-${element.type}`;
+                    elementItem.innerHTML = `
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <i class="fas fa-${getIconForType(element.type)} me-2"></i> 
+                                ${element.name}
+                            </div>
+                            <small class="text-muted">${element.selector}</small>
+                        </div>
+                    `;
+                    elementsList.appendChild(elementItem);
+                });
+            }
+            
+            function getIconForType(type) {
+                switch (type) {
+                    case 'button': return 'square';
+                    case 'input': return 'keyboard';
+                    case 'select': return 'caret-down';
+                    case 'link': return 'link';
+                    default: return 'code';
+                }
+            }
+            
+            // Generate Tests Button
+            document.getElementById('generateTestsBtn').addEventListener('click', function() {
+                // Switch to generator tab
+                document.querySelector('a[href="#generator"]').click();
+            });
+            
+            // Start Generation Button
+            document.getElementById('startGenerationBtn').addEventListener('click', function() {
+                // Show loader
+                document.getElementById('generatorLoader').style.display = 'block';
+                
+                // Simulate test generation (would be an API call in real implementation)
+                setTimeout(function() {
+                    // Hide loader
+                    document.getElementById('generatorLoader').style.display = 'none';
+                    
+                    // Show results
+                    document.getElementById('generatedTests').style.display = 'block';
+                    
+                    // Scroll to results
+                    document.getElementById('generatedTests').scrollIntoView({ behavior: 'smooth' });
+                }, 3000);
+            });
+            
+            // Start Execution Button
+            document.getElementById('startExecutionBtn').addEventListener('click', function() {
+                // Show loader
+                document.getElementById('executionLoader').style.display = 'block';
+                
+                // Simulate test execution (would be an API call in real implementation)
+                setTimeout(function() {
+                    // Hide loader
+                    document.getElementById('executionLoader').style.display = 'none';
+                    
+                    // Show results
+                    document.getElementById('executionResults').style.display = 'block';
+                    
+                    // Scroll to results
+                    document.getElementById('executionResults').scrollIntoView({ behavior: 'smooth' });
+                }, 4000);
+            });
+        });
+    </script>
+</body>
+</html>
