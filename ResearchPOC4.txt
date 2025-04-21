@@ -6496,3 +6496,239 @@ public class AdvancedTestGeneratorService {
     }
 }
 
+package com.ctgp.controller;
+
+import com.ctgp.model.analyzer.WebApplicationAnalysis;
+import com.ctgp.model.workspace.Project;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.service.analyzer.WebAnalyzerService;
+import com.ctgp.service.generator.AdvancedTestGeneratorService;
+import com.ctgp.service.workspace.WorkspaceService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/projects/{projectId}/advanced-test-generator")
+@RequiredArgsConstructor
+@Slf4j
+public class AdvancedTestGeneratorController {
+
+    private final WorkspaceService workspaceService;
+    private final WebAnalyzerService webAnalyzerService;
+    private final AdvancedTestGeneratorService advancedTestGeneratorService;
+
+    /**
+     * Generates advanced test suites for a project based on a web application URL
+     * @param projectId The project ID
+     * @param request The test generation request
+     * @return The generated test suites
+     */
+    @PostMapping("/generate")
+    public ResponseEntity<Map<String, Object>> generateTests(
+            @PathVariable String projectId, 
+            @RequestBody Map<String, Object> request) {
+        
+        String url = (String) request.get("url");
+        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
+        
+        log.info("Generating advanced tests for project: {}, URL: {}", projectId, url);
+        
+        // Get project
+        Project project = workspaceService.getProject(projectId);
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Analyze web application
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        
+        // Generate advanced test suites
+        List<TestSuite> testSuites = advancedTestGeneratorService.generateAdvancedTestSuites(project, analysis);
+        
+        // Create response
+        Map<String, Object> response = Map.of(
+            "testSuites", testSuites,
+            "message", "Successfully generated " + testSuites.size() + " advanced test suites"
+        );
+        
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Generates workflow tests for a project based on a web application URL
+     * @param projectId The project ID
+     * @param request The test generation request
+     * @return The generated workflow test suite
+     */
+    @PostMapping("/generate-workflow-tests")
+    public ResponseEntity<Map<String, Object>> generateWorkflowTests(
+            @PathVariable String projectId, 
+            @RequestBody Map<String, Object> request) {
+        
+        String url = (String) request.get("url");
+        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
+        
+        log.info("Generating workflow tests for project: {}, URL: {}", projectId, url);
+        
+        // Get project
+        Project project = workspaceService.getProject(projectId);
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Analyze web application
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        
+        // Generate workflow test suite
+        TestSuite workflowSuite = advancedTestGeneratorService.generateWorkflowTestSuite(project, analysis);
+        
+        // Create response
+        Map<String, Object> response = Map.of(
+            "testSuites", List.of(workflowSuite),
+            "message", "Successfully generated workflow test suite with " + 
+                     workflowSuite.getTestCases().size() + " test cases"
+        );
+        
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Generates data-driven tests for a project based on a web application URL
+     * @param projectId The project ID
+     * @param request The test generation request
+     * @return The generated data-driven test suite
+     */
+    @PostMapping("/generate-data-driven-tests")
+    public ResponseEntity<Map<String, Object>> generateDataDrivenTests(
+            @PathVariable String projectId, 
+            @RequestBody Map<String, Object> request) {
+        
+        String url = (String) request.get("url");
+        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
+        
+        log.info("Generating data-driven tests for project: {}, URL: {}", projectId, url);
+        
+        // Get project
+        Project project = workspaceService.getProject(projectId);
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Analyze web application
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        
+        // Generate data-driven test suite
+        TestSuite dataDrivenSuite = advancedTestGeneratorService.generateDataDrivenTestSuite(project, analysis);
+        
+        // Create response
+        Map<String, Object> response = Map.of(
+            "testSuites", List.of(dataDrivenSuite),
+            "message", "Successfully generated data-driven test suite with " + 
+                     dataDrivenSuite.getTestCases().size() + " test cases"
+        );
+        
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Generates visual regression tests for a project based on a web application URL
+     * @param projectId The project ID
+     * @param request The test generation request
+     * @return The generated visual regression test suite
+     */
+    @PostMapping("/generate-visual-regression-tests")
+    public ResponseEntity<Map<String, Object>> generateVisualRegressionTests(
+            @PathVariable String projectId, 
+            @RequestBody Map<String, Object> request) {
+        
+        String url = (String) request.get("url");
+        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
+        
+        log.info("Generating visual regression tests for project: {}, URL: {}", projectId, url);
+        
+        // Get project
+        Project project = workspaceService.getProject(projectId);
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Analyze web application
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        
+        // Generate visual regression test suite
+        TestSuite visualRegressionSuite = advancedTestGeneratorService.generateVisualRegressionTestSuite(project, analysis);
+        
+        // Create response
+        Map<String, Object> response = Map.of(
+            "testSuites", List.of(visualRegressionSuite),
+            "message", "Successfully generated visual regression test suite with " + 
+                     visualRegressionSuite.getTestCases().size() + " test cases"
+        );
+        
+        return ResponseEntity.ok(response);
+    }
+    
+    /**
+     * Gets information about possible test types and strategies
+     * @param projectId The project ID
+     * @return Information about available test generation options
+     */
+    @GetMapping("/options")
+    public ResponseEntity<Map<String, Object>> getTestGenerationOptions(@PathVariable String projectId) {
+        // Get project
+        Project project = workspaceService.getProject(projectId);
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Create options info
+        List<Map<String, String>> testTypes = List.of(
+            Map.of(
+                "id", "workflow",
+                "name", "Workflow Tests",
+                "description", "Detects user journeys and generates end-to-end workflow tests"
+            ),
+            Map.of(
+                "id", "data-driven",
+                "name", "Data-Driven Tests",
+                "description", "Generates tests with valid, invalid, and boundary data"
+            ),
+            Map.of(
+                "id", "visual-regression",
+                "name", "Visual Regression Tests",
+                "description", "Tests for visual appearance and layout consistency"
+            )
+        );
+        
+        List<Map<String, String>> strategies = List.of(
+            Map.of(
+                "id", "full",
+                "name", "Full Coverage",
+                "description", "Generates all possible test types for comprehensive coverage"
+            ),
+            Map.of(
+                "id", "critical-path",
+                "name", "Critical Path",
+                "description", "Focuses on the most important user workflows"
+            ),
+            Map.of(
+                "id", "regression",
+                "name", "Regression",
+                "description", "Optimized for regression testing with visual verification"
+            )
+        );
+        
+        Map<String, Object> options = Map.of(
+            "testTypes", testTypes,
+            "strategies", strategies
+        );
+        
+        return ResponseEntity.ok(options);
+    }
+}
+
