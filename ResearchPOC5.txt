@@ -1,249 +1,3093 @@
-package com.ctgp.controller;
+com.ctgp
+├── analyzer
+│   └── WebAnalyzerService
+├── config
+│   └── AppConfig
+├── controller
+│   ├── AdvancedTestGeneratorController
+│   ├── AnalyzerController
+│   ├── ExecutionController
+│   └── WorkspaceController
+├── model
+│   ├── analyzer
+│   │   ├── ElementType
+│   │   ├── SelectorType
+│   │   ├── WebAnalysisResult
+│   │   ├── WebApplicationAnalysis
+│   │   ├── WebElement
+│   │   └── WebForm
+│   ├── execution
+│   │   ├── TestExecutionResult
+│   │   ├── TestExecutionSession
+│   │   ├── TestExecutionSummary
+│   │   └── TestStepResult
+│   └── workspace
+│       ├── AzureDevOpsConfig
+│       ├── Project
+│       ├── TestCase
+│       ├── TestSuite
+│       ├── Workspace
+│       └── WorkspaceConfig
+├── service
+│   ├── analyzer
+│   │   └── WebAnalyzerService
+│   ├── execution
+│   │   └── TestExecutionService
+│   ├── generator
+│   │   ├── AdvancedTestGeneratorService
+│   │   ├── TestGeneratorService
+│   │   └── TestGeneratorUtils
+│   ├── integration
+│   │   └── AzureDevOpsIntegrationService
+│   └── workspace
+│       └── WorkspaceService
 
-import com.ctgp.model.analyzer.WebAnalysisResult;
-import com.ctgp.model.workspace.Project;
-import com.ctgp.model.workspace.TestSuite;
-import com.ctgp.service.analyzer.WebAnalyzerService;
-import com.ctgp.service.generator.AdvancedTestGeneratorService;
-import com.ctgp.service.workspace.WorkspaceService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
 
+// model/analyzer/ElementType.java
+package com.ctgp.model.analyzer;
+
+public enum ElementType {
+    BUTTON,
+    TEXT_INPUT,
+    SELECT,
+    CHECKBOX,
+    RADIO,
+    LINK,
+    IMAGE,
+    TABLE,
+    LABEL,
+    FORM,
+    CONTAINER,
+    OTHER
+}
+
+// model/analyzer/SelectorType.java
+package com.ctgp.model.analyzer;
+
+public enum SelectorType {
+    ID,
+    CLASS,
+    NAME,
+    TAG,
+    XPATH,
+    CSS_SELECTOR
+}
+
+// model/analyzer/WebElement.java
+package com.ctgp.model.analyzer;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+
+public class WebElement {
+    private String id;
+    private String tagName;
+    private String text;
+    private ElementType type;
+    private Map<String, String> attributes;
+    private Map<SelectorType, String> selectors;
+    private WebForm form;
+    private boolean isVisible;
+    private boolean isEnabled;
+    private boolean isRequired;
+
+    public WebElement() {
+        this.attributes = new HashMap<>();
+        this.selectors = new HashMap<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getTagName() {
+        return tagName;
+    }
+
+    public void setTagName(String tagName) {
+        this.tagName = tagName;
+    }
+
+    public String getText() {
+        return text;
+    }
+
+    public void setText(String text) {
+        this.text = text;
+    }
+
+    public ElementType getType() {
+        return type;
+    }
+
+    public void setType(ElementType type) {
+        this.type = type;
+    }
+
+    public Map<String, String> getAttributes() {
+        return attributes;
+    }
+
+    public void setAttributes(Map<String, String> attributes) {
+        this.attributes = attributes;
+    }
+
+    public Map<SelectorType, String> getSelectors() {
+        return selectors;
+    }
+
+    public void setSelectors(Map<SelectorType, String> selectors) {
+        this.selectors = selectors;
+    }
+
+    public WebForm getForm() {
+        return form;
+    }
+
+    public void setForm(WebForm form) {
+        this.form = form;
+    }
+
+    public boolean isVisible() {
+        return isVisible;
+    }
+
+    public void setVisible(boolean visible) {
+        isVisible = visible;
+    }
+
+    public boolean isEnabled() {
+        return isEnabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        isEnabled = enabled;
+    }
+
+    public boolean isRequired() {
+        return isRequired;
+    }
+
+    public void setRequired(boolean required) {
+        isRequired = required;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        WebElement that = (WebElement) o;
+        return Objects.equals(id, that.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+}
+
+// model/analyzer/WebForm.java
+package com.ctgp.model.analyzer;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+public class WebForm {
+    private String id;
+    private String formId;
+    private String formName;
+    private String action;
+    private String method;
+    private List<WebElement> elements;
+
+    public WebForm() {
+        this.elements = new ArrayList<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getFormId() {
+        return formId;
+    }
+
+    public void setFormId(String formId) {
+        this.formId = formId;
+    }
+
+    public String getFormName() {
+        return formName;
+    }
+
+    public void setFormName(String formName) {
+        this.formName = formName;
+    }
+
+    public String getAction() {
+        return action;
+    }
+
+    public void setAction(String action) {
+        this.action = action;
+    }
+
+    public String getMethod() {
+        return method;
+    }
+
+    public void setMethod(String method) {
+        this.method = method;
+    }
+
+    public List<WebElement> getElements() {
+        return elements;
+    }
+
+    public void setElements(List<WebElement> elements) {
+        this.elements = elements;
+    }
+
+    public void addElement(WebElement element) {
+        this.elements.add(element);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        WebForm webForm = (WebForm) o;
+        return Objects.equals(id, webForm.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+}
+
+// model/analyzer/WebApplicationAnalysis.java
+package com.ctgp.model.analyzer;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@RestController
-@RequestMapping("/api/projects/{projectId}/advanced-test-generator")
-@RequiredArgsConstructor
-@Slf4j
-public class AdvancedTestGeneratorController {
+public class WebApplicationAnalysis {
+    private String id;
+    private String url;
+    private LocalDateTime analysisDate;
+    private int depth;
+    private List<String> pages;
+    private List<WebElement> elements;
+    private List<WebForm> forms;
+    private Map<String, List<WebElement>> pageElementsMap;
+    private Map<String, List<WebForm>> pageFormsMap;
 
-    private final WorkspaceService workspaceService;
-    private final WebAnalyzerService webAnalyzerService;
-    private final AdvancedTestGeneratorService advancedTestGeneratorService;
+    public WebApplicationAnalysis() {
+        this.pages = new ArrayList<>();
+        this.elements = new ArrayList<>();
+        this.forms = new ArrayList<>();
+        this.pageElementsMap = new HashMap<>();
+        this.pageFormsMap = new HashMap<>();
+    }
 
-    /**
-     * Generates advanced test suites for a project based on a web application URL
-     */
-    @PostMapping("/generate")
-    public ResponseEntity<?> generateTests(
-            @PathVariable String projectId, 
-            @RequestBody Map<String, Object> request) {
-        
-        String url = (String) request.get("url");
-        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
-        
-        log.info("Generating advanced tests for project: {}, URL: {}", projectId, url);
-        
-        // Get project
-        Project project = workspaceService.getProject(projectId);
-        if (project == null) {
-            return ResponseEntity.notFound().build();
-        }
-        
-        // Analyze web application
-        WebAnalysisResult analysis = webAnalyzerService.analyzeApplication(url, depth);
-        
-        // Generate advanced test suites
-        List<TestSuite> testSuites = advancedTestGeneratorService.generateAdvancedTestSuites(project, analysis);
-        
-        // Create response
-        Map<String, Object> response = new HashMap<>();
-        response.put("testSuites", testSuites);
-        response.put("message", "Successfully generated " + testSuites.size() + " advanced test suites");
-        
-        return ResponseEntity.ok(response);
+    public String getId() {
+        return id;
     }
-    
-    /**
-     * Generates workflow tests for a project based on a web application URL
-     */
-    @PostMapping("/generate-workflow-tests")
-    public ResponseEntity<?> generateWorkflowTests(
-            @PathVariable String projectId, 
-            @RequestBody Map<String, Object> request) {
-        
-        String url = (String) request.get("url");
-        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
-        
-        log.info("Generating workflow tests for project: {}, URL: {}", projectId, url);
-        
-        // Get project
-        Project project = workspaceService.getProject(projectId);
-        if (project == null) {
-            return ResponseEntity.notFound().build();
-        }
-        
-        // Analyze web application
-        WebAnalysisResult analysis = webAnalyzerService.analyzeApplication(url, depth);
-        
-        // Generate workflow test suite
-        TestSuite workflowSuite = advancedTestGeneratorService.generateWorkflowTestSuite(project, analysis);
-        
-        // Create response
-        Map<String, Object> response = new HashMap<>();
-        response.put("testSuite", workflowSuite);
-        response.put("message", "Successfully generated workflow test suite with " + 
-                 workflowSuite.getTestCases().size() + " test cases");
-        
-        return ResponseEntity.ok(response);
+
+    public void setId(String id) {
+        this.id = id;
     }
-    
-    /**
-     * Generates data-driven tests for a project based on a web application URL
-     */
-    @PostMapping("/generate-data-driven-tests")
-    public ResponseEntity<?> generateDataDrivenTests(
-            @PathVariable String projectId, 
-            @RequestBody Map<String, Object> request) {
-        
-        String url = (String) request.get("url");
-        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
-        
-        log.info("Generating data-driven tests for project: {}, URL: {}", projectId, url);
-        
-        // Get project
-        Project project = workspaceService.getProject(projectId);
-        if (project == null) {
-            return ResponseEntity.notFound().build();
-        }
-        
-        // Analyze web application
-        WebAnalysisResult analysis = webAnalyzerService.analyzeApplication(url, depth);
-        
-        // Generate data-driven test suite
-        TestSuite dataDrivenSuite = advancedTestGeneratorService.generateDataDrivenTestSuite(project, analysis);
-        
-        // Create response
-        Map<String, Object> response = new HashMap<>();
-        response.put("testSuite", dataDrivenSuite);
-        response.put("message", "Successfully generated data-driven test suite with " + 
-                 dataDrivenSuite.getTestCases().size() + " test cases");
-        
-        return ResponseEntity.ok(response);
+
+    public String getUrl() {
+        return url;
     }
-    
-    /**
-     * Generates visual regression tests for a project based on a web application URL
-     */
-    @PostMapping("/generate-visual-regression-tests")
-    public ResponseEntity<?> generateVisualRegressionTests(
-            @PathVariable String projectId, 
-            @RequestBody Map<String, Object> request) {
-        
-        String url = (String) request.get("url");
-        Integer depth = request.get("depth") != null ? (Integer) request.get("depth") : 3;
-        
-        log.info("Generating visual regression tests for project: {}, URL: {}", projectId, url);
-        
-        // Get project
-        Project project = workspaceService.getProject(projectId);
-        if (project == null) {
-            return ResponseEntity.notFound().build();
-        }
-        
-        // Analyze web application
-        WebAnalysisResult analysis = webAnalyzerService.analyzeApplication(url, depth);
-        
-        // Generate visual regression test suite
-        TestSuite visualRegressionSuite = advancedTestGeneratorService.generateVisualRegressionTestSuite(project, analysis);
-        
-        // Create response
-        Map<String, Object> response = new HashMap<>();
-        response.put("testSuite", visualRegressionSuite);
-        response.put("message", "Successfully generated visual regression test suite with " + 
-                 visualRegressionSuite.getTestCases().size() + " test cases");
-        
-        return ResponseEntity.ok(response);
+
+    public void setUrl(String url) {
+        this.url = url;
     }
-    
-    /**
-     * Gets information about possible test types and strategies
-     */
-    @GetMapping("/options")
-    public ResponseEntity<?> getTestGenerationOptions(@PathVariable String projectId) {
-        // Get project
-        Project project = workspaceService.getProject(projectId);
-        if (project == null) {
-            return ResponseEntity.notFound().build();
-        }
-        
-        Map<String, Object> options = new HashMap<>();
-        
-        // Add test types
-        List<Map<String, String>> testTypes = List.of(
-            Map.of(
-                "id", "workflow",
-                "name", "Workflow Tests",
-                "description", "Detects user journeys and generates end-to-end workflow tests"
-            ),
-            Map.of(
-                "id", "data-driven",
-                "name", "Data-Driven Tests",
-                "description", "Generates tests with valid, invalid, and boundary data"
-            ),
-            Map.of(
-                "id", "visual-regression",
-                "name", "Visual Regression Tests",
-                "description", "Tests for visual appearance and layout consistency"
-            )
-        );
-        options.put("testTypes", testTypes);
-        
-        // Add strategies
-        List<Map<String, String>> strategies = List.of(
-            Map.of(
-                "id", "full",
-                "name", "Full Coverage",
-                "description", "Generates all possible test types for comprehensive coverage"
-            ),
-            Map.of(
-                "id", "critical-path",
-                "name", "Critical Path",
-                "description", "Focuses on the most important user workflows"
-            ),
-            Map.of(
-                "id", "regression",
-                "name", "Regression",
-                "description", "Optimized for regression testing with visual verification"
-            )
-        );
-        options.put("strategies", strategies);
-        
-        return ResponseEntity.ok(options);
+
+    public LocalDateTime getAnalysisDate() {
+        return analysisDate;
+    }
+
+    public void setAnalysisDate(LocalDateTime analysisDate) {
+        this.analysisDate = analysisDate;
+    }
+
+    public int getDepth() {
+        return depth;
+    }
+
+    public void setDepth(int depth) {
+        this.depth = depth;
+    }
+
+    public List<String> getPages() {
+        return pages;
+    }
+
+    public void setPages(List<String> pages) {
+        this.pages = pages;
+    }
+
+    public List<WebElement> getElements() {
+        return elements;
+    }
+
+    public void setElements(List<WebElement> elements) {
+        this.elements = elements;
+    }
+
+    public List<WebForm> getForms() {
+        return forms;
+    }
+
+    public void setForms(List<WebForm> forms) {
+        this.forms = forms;
+    }
+
+    public Map<String, List<WebElement>> getPageElementsMap() {
+        return pageElementsMap;
+    }
+
+    public void setPageElementsMap(Map<String, List<WebElement>> pageElementsMap) {
+        this.pageElementsMap = pageElementsMap;
+    }
+
+    public Map<String, List<WebForm>> getPageFormsMap() {
+        return pageFormsMap;
+    }
+
+    public void setPageFormsMap(Map<String, List<WebForm>> pageFormsMap) {
+        this.pageFormsMap = pageFormsMap;
+    }
+
+    public void addPage(String page) {
+        this.pages.add(page);
+        this.pageElementsMap.putIfAbsent(page, new ArrayList<>());
+        this.pageFormsMap.putIfAbsent(page, new ArrayList<>());
+    }
+
+    public void addElement(String page, WebElement element) {
+        this.elements.add(element);
+        this.pageElementsMap.computeIfAbsent(page, k -> new ArrayList<>()).add(element);
+    }
+
+    public void addForm(String page, WebForm form) {
+        this.forms.add(form);
+        this.pageFormsMap.computeIfAbsent(page, k -> new ArrayList<>()).add(form);
     }
 }
 
-WorkspaceService.java (method addition)
----------------------------------------
+// model/analyzer/WebAnalysisResult.java
+package com.ctgp.model.analyzer;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Gets a project by ID, searching across all workspaces.
- *
- * @param projectId The project ID
- * @return The project, or null if not found
+ * A simplified version of WebApplicationAnalysis for API responses
  */
-public Project getProject(String projectId) {
-    try {
-        // Get all workspaces
-        List<Workspace> workspaces = listWorkspaces();
+public class WebAnalysisResult {
+    private String id;
+    private String url;
+    private LocalDateTime analysisDate;
+    private int depth;
+    private int totalPages;
+    private int totalElements;
+    private int totalForms;
+    private List<String> pages;
+    private Map<ElementType, Integer> elementTypeCounts;
+
+    public WebAnalysisResult() {
+    }
+
+    // Constructor that converts from WebApplicationAnalysis
+    public WebAnalysisResult(WebApplicationAnalysis analysis) {
+        this.id = analysis.getId();
+        this.url = analysis.getUrl();
+        this.analysisDate = analysis.getAnalysisDate();
+        this.depth = analysis.getDepth();
+        this.pages = analysis.getPages();
+        this.totalPages = analysis.getPages().size();
+        this.totalElements = analysis.getElements().size();
+        this.totalForms = analysis.getForms().size();
         
-        // Search for the project in each workspace
-        for (Workspace workspace : workspaces) {
-            for (Project project : workspace.getProjects()) {
-                if (project.getId().equals(projectId)) {
-                    return project;
+        // Count elements by type
+        Map<ElementType, Integer> typeCounts = new java.util.HashMap<>();
+        for (WebElement element : analysis.getElements()) {
+            typeCounts.put(element.getType(), 
+                           typeCounts.getOrDefault(element.getType(), 0) + 1);
+        }
+        this.elementTypeCounts = typeCounts;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getUrl() {
+        return url;
+    }
+
+    public void setUrl(String url) {
+        this.url = url;
+    }
+
+    public LocalDateTime getAnalysisDate() {
+        return analysisDate;
+    }
+
+    public void setAnalysisDate(LocalDateTime analysisDate) {
+        this.analysisDate = analysisDate;
+    }
+
+    public int getDepth() {
+        return depth;
+    }
+
+    public void setDepth(int depth) {
+        this.depth = depth;
+    }
+
+    public int getTotalPages() {
+        return totalPages;
+    }
+
+    public void setTotalPages(int totalPages) {
+        this.totalPages = totalPages;
+    }
+
+    public int getTotalElements() {
+        return totalElements;
+    }
+
+    public void setTotalElements(int totalElements) {
+        this.totalElements = totalElements;
+    }
+
+    public int getTotalForms() {
+        return totalForms;
+    }
+
+    public void setTotalForms(int totalForms) {
+        this.totalForms = totalForms;
+    }
+
+    public List<String> getPages() {
+        return pages;
+    }
+
+    public void setPages(List<String> pages) {
+        this.pages = pages;
+    }
+
+    public Map<ElementType, Integer> getElementTypeCounts() {
+        return elementTypeCounts;
+    }
+
+    public void setElementTypeCounts(Map<ElementType, Integer> elementTypeCounts) {
+        this.elementTypeCounts = elementTypeCounts;
+    }
+}
+
+// model/execution/TestExecutionResult.java
+package com.ctgp.model.execution;
+
+import java.time.LocalDateTime;
+
+public class TestExecutionResult {
+    private String id;
+    private String testCaseId;
+    private String testCaseName;
+    private boolean passed;
+    private LocalDateTime executionTime;
+    private String errorMessage;
+    private String screenshot;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getTestCaseId() {
+        return testCaseId;
+    }
+
+    public void setTestCaseId(String testCaseId) {
+        this.testCaseId = testCaseId;
+    }
+
+    public String getTestCaseName() {
+        return testCaseName;
+    }
+
+    public void setTestCaseName(String testCaseName) {
+        this.testCaseName = testCaseName;
+    }
+
+    public boolean isPassed() {
+        return passed;
+    }
+
+    public void setPassed(boolean passed) {
+        this.passed = passed;
+    }
+
+    public LocalDateTime getExecutionTime() {
+        return executionTime;
+    }
+
+    public void setExecutionTime(LocalDateTime executionTime) {
+        this.executionTime = executionTime;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public String getScreenshot() {
+        return screenshot;
+    }
+
+    public void setScreenshot(String screenshot) {
+        this.screenshot = screenshot;
+    }
+}
+
+// model/execution/TestStepResult.java
+package com.ctgp.model.execution;
+
+public class TestStepResult {
+    private String id;
+    private String testExecutionId;
+    private String stepDescription;
+    private boolean passed;
+    private String errorMessage;
+    private String screenshot;
+    private long executionTimeMs;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getTestExecutionId() {
+        return testExecutionId;
+    }
+
+    public void setTestExecutionId(String testExecutionId) {
+        this.testExecutionId = testExecutionId;
+    }
+
+    public String getStepDescription() {
+        return stepDescription;
+    }
+
+    public void setStepDescription(String stepDescription) {
+        this.stepDescription = stepDescription;
+    }
+
+    public boolean isPassed() {
+        return passed;
+    }
+
+    public void setPassed(boolean passed) {
+        this.passed = passed;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+
+    public String getScreenshot() {
+        return screenshot;
+    }
+
+    public void setScreenshot(String screenshot) {
+        this.screenshot = screenshot;
+    }
+
+    public long getExecutionTimeMs() {
+        return executionTimeMs;
+    }
+
+    public void setExecutionTimeMs(long executionTimeMs) {
+        this.executionTimeMs = executionTimeMs;
+    }
+}
+
+// model/execution/TestExecutionSession.java
+package com.ctgp.model.execution;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+public class TestExecutionSession {
+    private String id;
+    private String workspaceId;
+    private String projectId;
+    private String testSuiteId;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
+    private String environment;
+    private String browser;
+    private List<TestExecutionResult> testResults;
+
+    public TestExecutionSession() {
+        this.testResults = new ArrayList<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getWorkspaceId() {
+        return workspaceId;
+    }
+
+    public void setWorkspaceId(String workspaceId) {
+        this.workspaceId = workspaceId;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(String projectId) {
+        this.projectId = projectId;
+    }
+
+    public String getTestSuiteId() {
+        return testSuiteId;
+    }
+
+    public void setTestSuiteId(String testSuiteId) {
+        this.testSuiteId = testSuiteId;
+    }
+
+    public LocalDateTime getStartTime() {
+        return startTime;
+    }
+
+    public void setStartTime(LocalDateTime startTime) {
+        this.startTime = startTime;
+    }
+
+    public LocalDateTime getEndTime() {
+        return endTime;
+    }
+
+    public void setEndTime(LocalDateTime endTime) {
+        this.endTime = endTime;
+    }
+
+    public String getEnvironment() {
+        return environment;
+    }
+
+    public void setEnvironment(String environment) {
+        this.environment = environment;
+    }
+
+    public String getBrowser() {
+        return browser;
+    }
+
+    public void setBrowser(String browser) {
+        this.browser = browser;
+    }
+
+    public List<TestExecutionResult> getTestResults() {
+        return testResults;
+    }
+
+    public void setTestResults(List<TestExecutionResult> testResults) {
+        this.testResults = testResults;
+    }
+
+    public void addTestResult(TestExecutionResult result) {
+        this.testResults.add(result);
+    }
+}
+
+// model/execution/TestExecutionSummary.java
+package com.ctgp.model.execution;
+
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+
+public class TestExecutionSummary {
+    private String id;
+    private String sessionId;
+    private int totalTests;
+    private int passedTests;
+    private int failedTests;
+    private int skippedTests;
+    private long totalDurationMs;
+    private LocalDateTime executionDate;
+
+    public TestExecutionSummary() {
+    }
+
+    // Constructor that builds summary from a TestExecutionSession
+    public TestExecutionSummary(TestExecutionSession session) {
+        this.sessionId = session.getId();
+        this.totalTests = session.getTestResults().size();
+        this.passedTests = (int) session.getTestResults().stream()
+                .filter(TestExecutionResult::isPassed)
+                .count();
+        this.failedTests = totalTests - passedTests;
+        this.skippedTests = 0; // Assuming no skipped tests in this implementation
+        
+        if (session.getStartTime() != null && session.getEndTime() != null) {
+            this.totalDurationMs = ChronoUnit.MILLIS.between(session.getStartTime(), session.getEndTime());
+        }
+        
+        this.executionDate = session.getStartTime();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    public int getTotalTests() {
+        return totalTests;
+    }
+
+    public void setTotalTests(int totalTests) {
+        this.totalTests = totalTests;
+    }
+
+    public int getPassedTests() {
+        return passedTests;
+    }
+
+    public void setPassedTests(int passedTests) {
+        this.passedTests = passedTests;
+    }
+
+    public int getFailedTests() {
+        return failedTests;
+    }
+
+    public void setFailedTests(int failedTests) {
+        this.failedTests = failedTests;
+    }
+
+    public int getSkippedTests() {
+        return skippedTests;
+    }
+
+    public void setSkippedTests(int skippedTests) {
+        this.skippedTests = skippedTests;
+    }
+
+    public long getTotalDurationMs() {
+        return totalDurationMs;
+    }
+
+    public void setTotalDurationMs(long totalDurationMs) {
+        this.totalDurationMs = totalDurationMs;
+    }
+
+    public LocalDateTime getExecutionDate() {
+        return executionDate;
+    }
+
+    public void setExecutionDate(LocalDateTime executionDate) {
+        this.executionDate = executionDate;
+    }
+
+    public double getPassRate() {
+        return totalTests > 0 ? (double) passedTests / totalTests : 0;
+    }
+}
+
+// model/workspace/AzureDevOpsConfig.java
+package com.ctgp.model.workspace;
+
+public class AzureDevOpsConfig {
+    private String id;
+    private String organizationUrl;
+    private String project;
+    private String personalAccessToken;
+    private boolean enabled;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getOrganizationUrl() {
+        return organizationUrl;
+    }
+
+    public void setOrganizationUrl(String organizationUrl) {
+        this.organizationUrl = organizationUrl;
+    }
+
+    public String getProject() {
+        return project;
+    }
+
+    public void setProject(String project) {
+        this.project = project;
+    }
+
+    public String getPersonalAccessToken() {
+        return personalAccessToken;
+    }
+
+    public void setPersonalAccessToken(String personalAccessToken) {
+        this.personalAccessToken = personalAccessToken;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
+}
+
+// model/workspace/Project.java
+package com.ctgp.model.workspace;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+public class Project {
+    private String id;
+    private String name;
+    private String description;
+    private String baseUrl;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    private String workspaceId;
+    private List<TestSuite> testSuites;
+
+    public Project() {
+        this.testSuites = new ArrayList<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public String getWorkspaceId() {
+        return workspaceId;
+    }
+
+    public void setWorkspaceId(String workspaceId) {
+        this.workspaceId = workspaceId;
+    }
+
+    public List<TestSuite> getTestSuites() {
+        return testSuites;
+    }
+
+    public void setTestSuites(List<TestSuite> testSuites) {
+        this.testSuites = testSuites;
+    }
+
+    public void addTestSuite(TestSuite testSuite) {
+        this.testSuites.add(testSuite);
+    }
+}
+
+// model/workspace/TestCase.java
+package com.ctgp.model.workspace;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+public class TestCase {
+    private String id;
+    private String name;
+    private String description;
+    private List<Map<String, Object>> steps;
+    private String testSuiteId;
+    private boolean automated;
+    private String createdBy;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    private Map<String, String> metadata;
+    private String preconditions;
+
+    public TestCase() {
+        this.steps = new ArrayList<>();
+        this.metadata = new java.util.HashMap<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public List<Map<String, Object>> getSteps() {
+        return steps;
+    }
+
+    public void setSteps(List<Map<String, Object>> steps) {
+        this.steps = steps;
+    }
+
+    public void addStep(Map<String, Object> step) {
+        this.steps.add(step);
+    }
+
+    public String getTestSuiteId() {
+        return testSuiteId;
+    }
+
+    public void setTestSuiteId(String testSuiteId) {
+        this.testSuiteId = testSuiteId;
+    }
+
+    public boolean isAutomated() {
+        return automated;
+    }
+
+    public void setAutomated(boolean automated) {
+        this.automated = automated;
+    }
+
+    public String getCreatedBy() {
+        return createdBy;
+    }
+
+    public void setCreatedBy(String createdBy) {
+        this.createdBy = createdBy;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public Map<String, String> getMetadata() {
+        return metadata;
+    }
+
+    public void setMetadata(Map<String, String> metadata) {
+        this.metadata = metadata;
+    }
+
+    public void addMetadata(String key, String value) {
+        this.metadata.put(key, value);
+    }
+
+    public String getPreconditions() {
+        return preconditions;
+    }
+
+    public void setPreconditions(String preconditions) {
+        this.preconditions = preconditions;
+    }
+}
+
+// model/workspace/TestSuite.java
+package com.ctgp.model.workspace;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+public class TestSuite {
+    private String id;
+    private String name;
+    private String description;
+    private String projectId;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    private List<TestCase> testCases;
+    
+    public TestSuite() {
+        this.testCases = new ArrayList<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public String getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(String projectId) {
+        this.projectId = projectId;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public List<TestCase> getTestCases() {
+        return testCases;
+    }
+
+    public void setTestCases(List<TestCase> testCases) {
+        this.testCases = testCases;
+    }
+
+    public void addTestCase(TestCase testCase) {
+        this.testCases.add(testCase);
+    }
+}
+
+// model/workspace/Workspace.java
+package com.ctgp.model.workspace;
+
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+public class Workspace {
+    private String id;
+    private String name;
+    private String description;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    private String createdBy;
+    private WorkspaceConfig config;
+    private List<Project> projects;
+
+    public Workspace() {
+        this.projects = new ArrayList<>();
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public String getCreatedBy() {
+        return createdBy;
+    }
+
+    public void setCreatedBy(String createdBy) {
+        this.createdBy = createdBy;
+    }
+
+    public WorkspaceConfig getConfig() {
+        return config;
+    }
+
+    public void setConfig(WorkspaceConfig config) {
+        this.config = config;
+    }
+
+    public List<Project> getProjects() {
+        return projects;
+    }
+
+    public void setProjects(List<Project> projects) {
+        this.projects = projects;
+    }
+
+    public void addProject(Project project) {
+        this.projects.add(project);
+    }
+}
+
+// model/workspace/WorkspaceConfig.java
+package com.ctgp.model.workspace;
+
+public class WorkspaceConfig {
+    private String id;
+    private String workspaceId;
+    private AzureDevOpsConfig azureDevOpsConfig;
+    private boolean autoSyncEnabled;
+    private String defaultBrowser;
+    private String defaultEnvironment;
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public String getWorkspaceId() {
+        return workspaceId;
+    }
+
+    public void setWorkspaceId(String workspaceId) {
+        this.workspaceId = workspaceId;
+    }
+
+    public AzureDevOpsConfig getAzureDevOpsConfig() {
+        return azureDevOpsConfig;
+    }
+
+    public void setAzureDevOpsConfig(AzureDevOpsConfig azureDevOpsConfig) {
+        this.azureDevOpsConfig = azureDevOpsConfig;
+    }
+
+    public boolean isAutoSyncEnabled() {
+        return autoSyncEnabled;
+    }
+
+    public void setAutoSyncEnabled(boolean autoSyncEnabled) {
+        this.autoSyncEnabled = autoSyncEnabled;
+    }
+
+    public String getDefaultBrowser() {
+        return defaultBrowser;
+    }
+
+    public void setDefaultBrowser(String defaultBrowser) {
+        this.defaultBrowser = defaultBrowser;
+    }
+
+    public String getDefaultEnvironment() {
+        return defaultEnvironment;
+    }
+
+    public void setDefaultEnvironment(String defaultEnvironment) {
+        this.defaultEnvironment = defaultEnvironment;
+    }
+}
+
+// service/analyzer/WebAnalyzerService.java
+package com.ctgp.service.analyzer;
+
+import com.ctgp.model.analyzer.*;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+
+@Service
+public class WebAnalyzerService {
+    
+    /**
+     * Analyzes a web application and returns detailed analysis result
+     * 
+     * @param url The base URL of the web application
+     * @param depth The depth of the crawl
+     * @return WebApplicationAnalysis containing detailed analysis results
+     */
+    public WebApplicationAnalysis analyzeApplication(String url, int depth) {
+        // In a real implementation, this would use Selenium or similar to analyze the web app
+        // This is a simplified mock implementation
+        
+        WebApplicationAnalysis analysis = new WebApplicationAnalysis();
+        analysis.setId(UUID.randomUUID().toString());
+        analysis.setUrl(url);
+        analysis.setDepth(depth);
+        analysis.setAnalysisDate(LocalDateTime.now());
+        
+        // Mock pages
+        List<String> pages = new ArrayList<>();
+        pages.add(url);
+        pages.add(url + "/login");
+        pages.add(url + "/dashboard");
+        analysis.setPages(pages);
+        
+        // For each page, create some mock elements and forms
+        for (String page : pages) {
+            analysis.addPage(page);
+            createMockElementsForPage(analysis, page);
+            createMockFormsForPage(analysis, page);
+        }
+        
+        return analysis;
+    }
+    
+    /**
+     * Convert detailed WebApplicationAnalysis to simplified WebAnalysisResult 
+     * for API responses
+     */
+    public WebAnalysisResult getAnalysisResult(WebApplicationAnalysis analysis) {
+        return new WebAnalysisResult(analysis);
+    }
+    
+    private void createMockElementsForPage(WebApplicationAnalysis analysis, String page) {
+        // Create different mock elements based on page type
+        if (page.contains("login")) {
+            createLoginPageElements(analysis, page);
+        } else if (page.contains("dashboard")) {
+            createDashboardPageElements(analysis, page);
+        } else {
+            createHomepageElements(analysis, page);
+        }
+    }
+    
+    private void createLoginPageElements(WebApplicationAnalysis analysis, String page) {
+        // Username field
+        WebElement usernameField = createInputElement(
+            "username", "Username", ElementType.TEXT_INPUT, "username"
+        );
+        analysis.addElement(page, usernameField);
+        
+        // Password field
+        WebElement passwordField = createInputElement(
+            "password", "Password", ElementType.TEXT_INPUT, "password"
+        );
+        analysis.addElement(page, passwordField);
+        
+        // Login button
+        WebElement loginButton = createButtonElement(
+            "loginButton", "Login", ElementType.BUTTON
+        );
+        analysis.addElement(page, loginButton);
+    }
+    
+    private void createDashboardPageElements(WebApplicationAnalysis analysis, String page) {
+        // Dashboard header
+        WebElement header = new WebElement();
+        header.setId(UUID.randomUUID().toString());
+        header.setTagName("h1");
+        header.setText("Dashboard");
+        header.setType(ElementType.LABEL);
+        header.setVisible(true);
+        header.setEnabled(true);
+        
+        Map<SelectorType, String> selectors = new HashMap<>();
+        selectors.put(SelectorType.CSS_SELECTOR, ".dashboard-header");
+        header.setSelectors(selectors);
+        
+        analysis.addElement(page, header);
+        
+        // Dashboard table
+        WebElement table = new WebElement();
+        table.setId(UUID.randomUUID().toString());
+        table.setTagName("table");
+        table.setType(ElementType.TABLE);
+        table.setVisible(true);
+        table.setEnabled(true);
+        
+        selectors = new HashMap<>();
+        selectors.put(SelectorType.ID, "data-table");
+        selectors.put(SelectorType.CSS_SELECTOR, ".dashboard-table");
+        table.setSelectors(selectors);
+        
+        analysis.addElement(page, table);
+    }
+    
+    private void createHomepageElements(WebApplicationAnalysis analysis, String page) {
+        // Navigation links
+        String[] navItems = {"Home", "Products", "About", "Contact"};
+        
+        for (String item : navItems) {
+            WebElement navLink = new WebElement();
+            navLink.setId(UUID.randomUUID().toString());
+            navLink.setTagName("a");
+            navLink.setText(item);
+            navLink.setType(ElementType.LINK);
+            navLink.setVisible(true);
+            navLink.setEnabled(true);
+            
+            Map<SelectorType, String> selectors = new HashMap<>();
+            selectors.put(SelectorType.CSS_SELECTOR, ".nav-item");
+            selectors.put(SelectorType.XPATH, "//a[text()='" + item + "']");
+            navLink.setSelectors(selectors);
+            
+            analysis.addElement(page, navLink);
+        }
+    }
+    
+    private WebElement createInputElement(String name, String placeholder, ElementType type, String inputType) {
+        WebElement element = new WebElement();
+        element.setId(UUID.randomUUID().toString());
+        element.setTagName("input");
+        element.setType(type);
+        element.setVisible(true);
+        element.setEnabled(true);
+        
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("name", name);
+        attributes.put("placeholder", placeholder);
+        attributes.put("type", inputType);
+        element.setAttributes(attributes);
+        
+        Map<SelectorType, String> selectors = new HashMap<>();
+        selectors.put(SelectorType.NAME, name);
+        selectors.put(SelectorType.ID, name);
+        selectors.put(SelectorType.CSS_SELECTOR, "input[name='" + name + "']");
+        selectors.put(SelectorType.XPATH, "//input[@name='" + name + "']");
+        element.setSelectors(selectors);
+        
+        return element;
+    }
+    
+    private WebElement createButtonElement(String id, String text, ElementType type) {
+        WebElement element = new WebElement();
+        element.setId(UUID.randomUUID().toString());
+        element.setTagName("button");
+        element.setText(text);
+        element.setType(type);
+        element.setVisible(true);
+        element.setEnabled(true);
+        
+        Map<SelectorType, String> selectors = new HashMap<>();
+        selectors.put(SelectorType.ID, id);
+        selectors.put(SelectorType.CSS_SELECTOR, "#" + id);
+        selectors.put(SelectorType.XPATH, "//button[@id='" + id + "']");
+        element.setSelectors(selectors);
+        
+        return element;
+    }
+    
+    private void createMockFormsForPage(WebApplicationAnalysis analysis, String page) {
+        if (page.contains("login")) {
+            WebForm loginForm = new WebForm();
+            loginForm.setId(UUID.randomUUID().toString());
+            loginForm.setFormId("loginForm");
+            loginForm.setFormName("Login Form");
+            loginForm.setAction("/api/login");
+            loginForm.setMethod("POST");
+            
+            // Add username and password fields that were already created
+            for (WebElement element : analysis.getPageElementsMap().get(page)) {
+                if (element.getType() == ElementType.TEXT_INPUT || element.getType() == ElementType.BUTTON) {
+                    loginForm.addElement(element);
+                    element.setForm(loginForm);
                 }
+            }
+            
+            analysis.addForm(page, loginForm);
+        }
+    }
+}
+
+// service/execution/TestExecutionService.java
+package com.ctgp.service.execution;
+
+import com.ctgp.model.execution.TestExecutionResult;
+import com.ctgp.model.execution.TestExecutionSession;
+import com.ctgp.model.execution.TestExecutionSummary;
+import com.ctgp.model.execution.TestStepResult;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.service.workspace.WorkspaceService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+
+@Service
+public class TestExecutionService {
+    
+    private final WorkspaceService workspaceService;
+    
+    @Autowired
+    public TestExecutionService(WorkspaceService workspaceService) {
+        this.workspaceService = workspaceService;
+    }
+    
+    /**
+     * Execute a test suite and return execution session results
+     */
+    public TestExecutionSession executeTestSuite(String workspaceId, String projectId, String testSuiteId, 
+                                                String environment, String browser) {
+        // Get the test suite from workspace service
+        TestSuite testSuite = workspaceService.getTestSuite(projectId, testSuiteId);
+        
+        if (testSuite == null) {
+            throw new IllegalArgumentException("Test suite not found");
+        }
+        
+        // Create new execution session
+        TestExecutionSession session = new TestExecutionSession();
+        session.setId(UUID.randomUUID().toString());
+        session.setWorkspaceId(workspaceId);
+        session.setProjectId(projectId);
+        session.setTestSuiteId(testSuiteId);
+        session.setStartTime(LocalDateTime.now());
+        session.setEnvironment(environment);
+        session.setBrowser(browser);
+        
+        // Execute each test case in the suite
+        for (TestCase testCase : testSuite.getTestCases()) {
+            TestExecutionResult result = executeTestCase(testCase, browser, environment);
+            session.addTestResult(result);
+        }
+        
+        session.setEndTime(LocalDateTime.now());
+        
+        return session;
+    }
+    
+    /**
+     * Get summary of test execution session
+     */
+    public TestExecutionSummary getExecutionSummary(TestExecutionSession session) {
+        return new TestExecutionSummary(session);
+    }
+    
+    /**
+     * Execute a single test case
+     */
+    private TestExecutionResult executeTestCase(TestCase testCase, String browser, String environment) {
+        // This would use a test automation framework like Selenium in a real implementation
+        // Mock implementation for demo purposes
+        
+        TestExecutionResult result = new TestExecutionResult();
+        result.setId(UUID.randomUUID().toString());
+        result.setTestCaseId(testCase.getId());
+        result.setTestCaseName(testCase.getName());
+        result.setExecutionTime(LocalDateTime.now());
+        
+        // Simulate test execution with 80% pass rate
+        boolean passed = Math.random() > 0.2;
+        result.setPassed(passed);
+        
+        if (!passed) {
+            result.setErrorMessage("Simulated test failure for demonstration purposes");
+            result.setScreenshot("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEA..."); // Mock screenshot data
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Execute the steps of a test case and record results
+     */
+    private List<TestStepResult> executeTestSteps(TestCase testCase, String browser) {
+        List<TestStepResult> stepResults = new ArrayList<>();
+        
+        // For each step in the test case
+        for (Map<String, Object> step : testCase.getSteps()) {
+            TestStepResult stepResult = new TestStepResult();
+            stepResult.setId(UUID.randomUUID().toString());
+            stepResult.setStepDescription(step.get("description").toString());
+            
+            // Simulate step execution with 90% pass rate
+            boolean passed = Math.random() > 0.1;
+            stepResult.setPassed(passed);
+            
+            if (!passed) {
+                stepResult.setErrorMessage("Failed to execute: " + step.get("description"));
+                stepResult.setScreenshot("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEA..."); // Mock screenshot
+            }
+            
+            // Simulate execution time between 100-500ms
+            stepResult.setExecutionTimeMs((long) (Math.random() * 400 + 100));
+            
+            stepResults.add(stepResult);
+            
+            // If a step fails, don't execute subsequent steps
+            if (!passed) {
+                break;
             }
         }
         
-        log.warn("Project not found: {}", projectId);
-        return null;
-    } catch (Exception e) {
-        log.error("Error retrieving project: {}", projectId, e);
-        return null;
+        return stepResults;
     }
 }
+
+// service/generator/AdvancedTestGeneratorService.java
+package com.ctgp.service.generator;
+
+import com.ctgp.model.analyzer.ElementType;
+import com.ctgp.model.analyzer.WebApplicationAnalysis;
+import com.ctgp.model.analyzer.WebElement;
+import com.ctgp.model.analyzer.WebForm;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+
+@Service
+public class AdvancedTestGeneratorService {
+    
+    /**
+     * Generate a test suite from web application analysis
+     */
+    public TestSuite generateTestSuite(WebApplicationAnalysis analysis, String projectId) {
+        TestSuite testSuite = new TestSuite();
+        testSuite.setId(UUID.randomUUID().toString());
+        testSuite.setName("Generated Test Suite for " + analysis.getUrl());
+        testSuite.setDescription("Automatically generated test suite based on web analysis");
+        testSuite.setProjectId(projectId);
+        testSuite.setCreatedAt(LocalDateTime.now());
+        testSuite.setUpdatedAt(LocalDateTime.now());
+        
+        // Generate form submission tests
+        List<TestCase> formTests = generateFormSubmissionTests(analysis);
+        formTests.forEach(testSuite::addTestCase);
+        
+        // Generate navigation tests
+        List<TestCase> navigationTests = generateNavigationTests(analysis);
+        navigationTests.forEach(testSuite::addTestCase);
+        
+        return testSuite;
+    }
+    
+    /**
+     * Generate test cases for form submissions
+     */
+    private List<TestCase> generateFormSubmissionTests(WebApplicationAnalysis analysis) {
+        List<TestCase> testCases = new ArrayList<>();
+        
+        for (WebForm form : analysis.getForms()) {
+            TestCase testCase = new TestCase();
+            testCase.setId(UUID.randomUUID().toString());
+            testCase.setName("Form Submission Test: " + form.getFormName());
+            testCase.setDescription("Test form submission for " + form.getFormName());
+            testCase.setAutomated(true);
+            testCase.setCreatedAt(LocalDateTime.now());
+            testCase.setUpdatedAt(LocalDateTime.now());
+            
+            // Create test steps for filling out form fields
+            List<Map<String, Object>> steps = new ArrayList<>();
+            
+            // First step: navigate to page
+            String formPage = "";
+            for (Map.Entry<String, List<WebForm>> entry : analysis.getPageFormsMap().entrySet()) {
+                if (entry.getValue().contains(form)) {
+                    formPage = entry.getKey();
+                    break;
+                }
+            }
+            
+            // Add navigation step
+            steps.add(createNavigationStep(formPage));
+            
+            // For each form element, create a step to fill it
+            for (WebElement element : form.getElements()) {
+                if (element.getType() == ElementType.TEXT_INPUT) {
+                    steps.add(createInputStep(element));
+                } else if (element.getType() == ElementType.SELECT) {
+                    steps.add(createSelectStep(element));
+                } else if (element.getType() == ElementType.CHECKBOX) {
+                    steps.add(createCheckboxStep(element));
+                }
+            }
+            
+            // Add submission step
+            steps.add(createSubmitStep(form));
+            
+            // Add verification step
+            steps.add(createVerificationStep());
+            
+            testCase.setSteps(steps);
+            testCases.add(testCase);
+        }
+        
+        return testCases;
+    }
+    
+    /**
+     * Generate test cases for navigation between pages
+     */
+    private List<TestCase> generateNavigationTests(WebApplicationAnalysis analysis) {
+        List<TestCase> testCases = new ArrayList<>();
+        
+        // Create a navigation test case
+        TestCase testCase = new TestCase();
+        testCase.setId(UUID.randomUUID().toString());
+        testCase.setName("Navigation Test: " + analysis.getUrl());
+        testCase.setDescription("Test navigation through all discovered pages");
+        testCase.setAutomated(true);
+        testCase.setCreatedAt(LocalDateTime.now());
+        testCase.setUpdatedAt(LocalDateTime.now());
+        
+        // Create test steps for navigation
+        List<Map<String, Object>> steps = new ArrayList<>();
+        
+        // For each page, add a navigation step
+        for (String page : analysis.getPages()) {
+            steps.add(createNavigationStep(page));
+            
+            // Add verification step for each page
+            steps.add(Map.of(
+                "type", "verification",
+                "description", "Verify page loaded correctly",
+                "action", "verify",
+                "selector", "body",
+                "condition", "exists"
+            ));
+        }
+        
+        testCase.setSteps(steps);
+        testCases.add(testCase);
+        
+        return testCases;
+    }
+    
+    private Map<String, Object> createNavigationStep(String url) {
+        return Map.of(
+            "type", "navigation",
+            "description", "Navigate to " + url,
+            "action", "navigate",
+            "url", url
+        );
+    }
+    
+    private Map<String, Object> createInputStep(WebElement element) {
+        return Map.of(
+            "type", "input",
+            "description", "Enter text in " + getElementDescription(element),
+            "action", "input",
+            "selector", getElementSelector(element),
+            "value", generateSampleValue(element)
+        );
+    }
+    
+    private Map<String, Object> createSelectStep(WebElement element) {
+        return Map.of(
+            "type", "select",
+            "description", "Select option in " + getElementDescription(element),
+            "action", "select",
+            "selector", getElementSelector(element),
+            "option", "1" // Select first option by default
+        );
+    }
+    
+    private Map<String, Object> createCheckboxStep(WebElement element) {
+        return Map.of(
+            "type", "checkbox",
+            "description", "Check " + getElementDescription(element),
+            "action", "click",
+            "selector", getElementSelector(element)
+        );
+    }
+    
+    private Map<String, Object> createSubmitStep(WebForm form) {
+        // Find submit button in form
+        Optional<WebElement> submitButton = form.getElements().stream()
+            .filter(e -> e.getType() == ElementType.BUTTON)
+            .findFirst();
+        
+        return Map.of(
+            "type", "submit",
+            "description", "Submit the form",
+            "action", "click",
+            "selector", submitButton.isPresent() ? 
+                    getElementSelector(submitButton.get()) : 
+                    "button[type='submit']"
+        );
+    }
+    
+    private Map<String, Object> createVerificationStep() {
+        return Map.of(
+            "type", "verification",
+            "description", "Verify successful submission",
+            "action", "verify",
+            "selector", "body",
+            "condition", "contains",
+            "value", "Success"
+        );
+    }
+    
+    private String getElementDescription(WebElement element) {
+        if (element.getText() != null && !element.getText().isEmpty()) {
+            return "'" + element.getText() + "'";
+        } else if (element.getAttributes().get("name") != null) {
+            return element.getAttributes().get("name");
+        } else if (element.getAttributes().get("id") != null) {
+            return element.getAttributes().get("id");
+        } else {
+            return element.getType().toString().toLowerCase();
+        }
+    }
+    
+    private String getElementSelector(WebElement element) {
+        // Use best available selector
+        if (element.getSelectors().containsKey(com.ctgp.model.analyzer.SelectorType.ID)) {
+            return "#" + element.getSelectors().get(com.ctgp.model.analyzer.SelectorType.ID);
+        } else if (element.getSelectors().containsKey(com.ctgp.model.analyzer.SelectorType.CSS_SELECTOR)) {
+            return element.getSelectors().get(com.ctgp.model.analyzer.SelectorType.CSS_SELECTOR);
+        } else if (element.getSelectors().containsKey(com.ctgp.model.analyzer.SelectorType.XPATH)) {
+            return element.getSelectors().get(com.ctgp.model.analyzer.SelectorType.XPATH);
+        } else {
+            return element.getTagName();
+        }
+    }
+    
+    private String generateSampleValue(WebElement element) {
+        // Generate appropriate test data based on element attributes
+        String elementName = element.getAttributes().getOrDefault("name", "").toLowerCase();
+        
+        if (elementName.contains("email")) {
+            return "test@example.com";
+        } else if (elementName.contains("password")) {
+            return "TestPassword123!";
+        } else if (elementName.contains("phone")) {
+            return "123-456-7890";
+        } else if (elementName.contains("name")) {
+            if (elementName.contains("first")) {
+                return "John";
+            } else if (elementName.contains("last")) {
+                return "Doe";
+            } else {
+                return "John Doe";
+            }
+        } else if (elementName.contains("address")) {
+            return "123 Test Street";
+        } else if (elementName.contains("city")) {
+            return "Test City";
+        } else if (elementName.contains("zip") || elementName.contains("postal")) {
+            return "12345";
+        } else {
+            return "Test Input";
+        }
+    }
+}
+
+// service/generator/TestGeneratorService.java
+package com.ctgp.service.generator;
+
+import com.ctgp.model.analyzer.WebApplicationAnalysis;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class TestGeneratorService {
+    
+    private final AdvancedTestGeneratorService advancedGenerator;
+    
+    @Autowired
+    public TestGeneratorService(AdvancedTestGeneratorService advancedGenerator) {
+        this.advancedGenerator = advancedGenerator;
+    }
+    
+    /**
+     * Generate test suite from web analysis
+     */
+    public TestSuite generateTestSuite(WebApplicationAnalysis analysis, String projectId) {
+        return advancedGenerator.generateTestSuite(analysis, projectId);
+    }
+    
+    /**
+     * Generate individual test cases
+     */
+    public List<TestCase> generateTestCases(WebApplicationAnalysis analysis, String testSuiteId) {
+        TestSuite generatedSuite = advancedGenerator.generateTestSuite(analysis, "temp");
+        
+        // Set the requested test suite ID on all generated test cases
+        generatedSuite.getTestCases().forEach(testCase -> testCase.setTestSuiteId(testSuiteId));
+        
+        return generatedSuite.getTestCases();
+    }
+}
+
+// service/generator/TestGeneratorUtils.java
+package com.ctgp.service.generator;
+
+import com.ctgp.model.analyzer.WebElement;
+import com.ctgp.model.analyzer.SelectorType;
+import java.util.Map;
+
+public class TestGeneratorUtils {
+    
+    /**
+     * Get the best selector for an element
+     */
+    public static String getBestSelector(WebElement element) {
+        Map<SelectorType, String> selectors = element.getSelectors();
+        
+        // Preferred selector order: ID, CSS, XPATH, NAME
+        if (selectors.containsKey(SelectorType.ID)) {
+            return "#" + selectors.get(SelectorType.ID);
+        } else if (selectors.containsKey(SelectorType.CSS_SELECTOR)) {
+            return selectors.get(SelectorType.CSS_SELECTOR);
+        } else if (selectors.containsKey(SelectorType.XPATH)) {
+            return selectors.get(SelectorType.XPATH);
+        } else if (selectors.containsKey(SelectorType.NAME)) {
+            return "[name='" + selectors.get(SelectorType.NAME) + "']";
+        } else {
+            return element.getTagName();
+        }
+    }
+    
+    /**
+     * Generate a test data value for an element based on its attributes
+     */
+    public static String generateTestData(WebElement element) {
+        String name = element.getAttributes().getOrDefault("name", "").toLowerCase();
+        String placeholder = element.getAttributes().getOrDefault("placeholder", "").toLowerCase();
+        String type = element.getAttributes().getOrDefault("type", "").toLowerCase();
+        
+        // Generate appropriate test data based on input type and attributes
+        if (type.equals("email") || name.contains("email")) {
+            return "test@example.com";
+        } else if (type.equals("password") || name.contains("password")) {
+            return "Password123!";
+        } else if (type.equals("tel") || name.contains("phone")) {
+            return "123-456-7890";
+        } else if (name.contains("username")) {
+            return "testuser";
+        } else if (name.contains("name")) {
+            if (name.contains("first")) {
+                return "John";
+            } else if (name.contains("last")) {
+                return "Doe";
+            } else {
+                return "John Doe";
+            }
+        } else if (name.contains("address")) {
+            return "123 Test St";
+        } else if (name.contains("city")) {
+            return "Test City";
+        } else if (name.contains("state")) {
+            return "CA";
+        } else if (name.contains("zip")) {
+            return "12345";
+        } else if (name.contains("comment") || name.contains("message")) {
+            return "This is a test message.";
+        } else {
+            return "Test Input";
+        }
+    }
+}
+
+// service/integration/AzureDevOpsIntegrationService.java
+package com.ctgp.service.integration;
+
+import com.ctgp.model.workspace.AzureDevOpsConfig;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Service
+public class AzureDevOpsIntegrationService {
+    
+    /**
+     * Export a test suite to Azure DevOps
+     */
+    public Map<String, String> exportTestSuiteToAzureDevOps(TestSuite testSuite, AzureDevOpsConfig config) {
+        // In a real implementation, this would use the Azure DevOps REST API
+        // This is a simulated implementation for demonstration
+        
+        Map<String, String> results = new HashMap<>();
+        
+        if (!config.isEnabled()) {
+            throw new IllegalStateException("Azure DevOps integration is not enabled");
+        }
+        
+        // Simulated successful export
+        results.put("testSuiteId", "ADO-" + testSuite.getId());
+        results.put("testSuiteUrl", config.getOrganizationUrl() + "/" + config.getProject() + "/_testPlans/suites/" + "ADO-" + testSuite.getId());
+        
+        // Export individual test cases
+        for (TestCase testCase : testSuite.getTestCases()) {
+            String adoTestCaseId = exportTestCaseToAzureDevOps(testCase, config);
+            results.put("testCaseId-" + testCase.getId(), adoTestCaseId);
+        }
+        
+        return results;
+    }
+    
+    /**
+     * Export a test case to Azure DevOps
+     */
+    private String exportTestCaseToAzureDevOps(TestCase testCase, AzureDevOpsConfig config) {
+        // Simulate exporting test case to Azure DevOps and returning its ID
+        return "ADO-TC-" + testCase.getId();
+    }
+    
+    /**
+     * Import test cases from Azure DevOps
+     */
+    public TestSuite importTestSuiteFromAzureDevOps(String azureTestSuiteId, AzureDevOpsConfig config, String projectId) {
+        // Mock implementation
+        TestSuite testSuite = new TestSuite();
+        testSuite.setId(java.util.UUID.randomUUID().toString());
+        testSuite.setName("Imported from Azure DevOps: " + azureTestSuiteId);
+        testSuite.setDescription("Test suite imported from Azure DevOps");
+        testSuite.setProjectId(projectId);
+        testSuite.setCreatedAt(java.time.LocalDateTime.now());
+        testSuite.setUpdatedAt(java.time.LocalDateTime.now());
+        
+        // Create some mock test cases
+        for (int i = 1; i <= 3; i++) {
+            TestCase testCase = new TestCase();
+            testCase.setId(java.util.UUID.randomUUID().toString());
+            testCase.setName("Imported Test Case " + i);
+            testCase.setDescription("Test case imported from Azure DevOps");
+            testCase.setTestSuiteId(testSuite.getId());
+            testCase.setAutomated(i % 2 == 0); // Every other test is automated
+            testCase.setCreatedAt(java.time.LocalDateTime.now());
+            testCase.setUpdatedAt(java.time.LocalDateTime.now());
+            
+            testSuite.addTestCase(testCase);
+        }
+        
+        return testSuite;
+    }
+}
+
+
+// service/workspace/WorkspaceService.java
+package com.ctgp.service.workspace;
+
+import com.ctgp.model.workspace.*;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+public class WorkspaceService {
+    
+    // In-memory storage for demonstration
+    private final Map<String, Workspace> workspaces = new HashMap<>();
+    private final Map<String, Project> projects = new HashMap<>();
+    private final Map<String, TestSuite> testSuites = new HashMap<>();
+    private final Map<String, TestCase> testCases = new HashMap<>();
+    
+    /**
+     * Create a new workspace
+     */
+    public Workspace createWorkspace(Workspace workspace) {
+        workspace.setId(UUID.randomUUID().toString());
+        workspace.setCreatedAt(LocalDateTime.now());
+        workspace.setUpdatedAt(LocalDateTime.now());
+        
+        // Initialize workspace configuration
+        if (workspace.getConfig() == null) {
+            WorkspaceConfig config = new WorkspaceConfig();
+            config.setId(UUID.randomUUID().toString());
+            config.setWorkspaceId(workspace.getId());
+            config.setAutoSyncEnabled(false);
+            config.setDefaultBrowser("chrome");
+            config.setDefaultEnvironment("staging");
+            workspace.setConfig(config);
+        }
+        
+        workspaces.put(workspace.getId(), workspace);
+        return workspace;
+    }
+    
+    /**
+     * Get a workspace by ID
+     */
+    public Workspace getWorkspace(String workspaceId) {
+        return workspaces.get(workspaceId);
+    }
+    
+    /**
+     * Get all workspaces
+     */
+    public List<Workspace> getAllWorkspaces() {
+        return new ArrayList<>(workspaces.values());
+    }
+    
+    /**
+     * Update a workspace
+     */
+    public Workspace updateWorkspace(String workspaceId, Workspace updatedWorkspace) {
+        Workspace existingWorkspace = workspaces.get(workspaceId);
+        
+        if (existingWorkspace == null) {
+            return null;
+        }
+        
+        updatedWorkspace.setId(workspaceId);
+        updatedWorkspace.setCreatedAt(existingWorkspace.getCreatedAt());
+        updatedWorkspace.setUpdatedAt(LocalDateTime.now());
+        
+        workspaces.put(workspaceId, updatedWorkspace);
+        return updatedWorkspace;
+    }
+    
+    /**
+     * Delete a workspace
+     */
+    public boolean deleteWorkspace(String workspaceId) {
+        if (!workspaces.containsKey(workspaceId)) {
+            return false;
+        }
+        
+        workspaces.remove(workspaceId);
+        
+        // Remove associated projects
+        List<String> projectsToRemove = projects.values().stream()
+                .filter(p -> p.getWorkspaceId().equals(workspaceId))
+                .map(Project::getId)
+                .collect(Collectors.toList());
+        
+        projectsToRemove.forEach(this::deleteProject);
+        
+        return true;
+    }
+    
+    /**
+     * Create a new project
+     */
+    public Project createProject(Project project) {
+        project.setId(UUID.randomUUID().toString());
+        project.setCreatedAt(LocalDateTime.now());
+        project.setUpdatedAt(LocalDateTime.now());
+        
+        projects.put(project.getId(), project);
+        
+        // Add to workspace
+        Workspace workspace = workspaces.get(project.getWorkspaceId());
+        if (workspace != null) {
+            workspace.addProject(project);
+        }
+        
+        return project;
+    }
+    
+    /**
+     * Get a project by ID
+     */
+    public Project getProject(String projectId) {
+        return projects.get(projectId);
+    }
+    
+    /**
+     * Get all projects for a workspace
+     */
+    public List<Project> getProjectsByWorkspace(String workspaceId) {
+        return projects.values().stream()
+                .filter(p -> p.getWorkspaceId().equals(workspaceId))
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Update a project
+     */
+    public Project updateProject(String projectId, Project updatedProject) {
+        Project existingProject = projects.get(projectId);
+        
+        if (existingProject == null) {
+            return null;
+        }
+        
+        updatedProject.setId(projectId);
+        updatedProject.setCreatedAt(existingProject.getCreatedAt());
+        updatedProject.setUpdatedAt(LocalDateTime.now());
+        
+        projects.put(projectId, updatedProject);
+        return updatedProject;
+    }
+    
+    /**
+     * Delete a project
+     */
+    public boolean deleteProject(String projectId) {
+        if (!projects.containsKey(projectId)) {
+            return false;
+        }
+        
+        Project project = projects.get(projectId);
+        
+        // Remove from workspace
+        Workspace workspace = workspaces.get(project.getWorkspaceId());
+        if (workspace != null) {
+            workspace.getProjects().removeIf(p -> p.getId().equals(projectId));
+        }
+        
+        projects.remove(projectId);
+        
+        // Remove associated test suites
+        List<String> suitesToRemove = testSuites.values().stream()
+                .filter(ts -> ts.getProjectId().equals(projectId))
+                .map(TestSuite::getId)
+                .collect(Collectors.toList());
+        
+        suitesToRemove.forEach(this::deleteTestSuite);
+        
+        return true;
+    }
+    
+    /**
+     * Create a new test suite
+     */
+    public TestSuite createTestSuite(TestSuite testSuite) {
+        testSuite.setId(UUID.randomUUID().toString());
+        testSuite.setCreatedAt(LocalDateTime.now());
+        testSuite.setUpdatedAt(LocalDateTime.now());
+        
+        testSuites.put(testSuite.getId(), testSuite);
+        
+        // Add to project
+        Project project = projects.get(testSuite.getProjectId());
+        if (project != null) {
+            project.addTestSuite(testSuite);
+        }
+        
+        return testSuite;
+    }
+    
+    /**
+     * Get a test suite by ID
+     */
+    public TestSuite getTestSuite(String projectId, String testSuiteId) {
+        TestSuite testSuite = testSuites.get(testSuiteId);
+        
+        if (testSuite == null || !testSuite.getProjectId().equals(projectId)) {
+            return null;
+        }
+        
+        return testSuite;
+    }
+    
+    /**
+     * Get all test suites for a project
+     */
+    public List<TestSuite> getTestSuitesByProject(String projectId) {
+        return testSuites.values().stream()
+                .filter(ts -> ts.getProjectId().equals(projectId))
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Update a test suite
+     */
+    public TestSuite updateTestSuite(String testSuiteId, TestSuite updatedTestSuite) {
+        TestSuite existingTestSuite = testSuites.get(testSuiteId);
+        
+        if (existingTestSuite == null) {
+            return null;
+        }
+        
+        updatedTestSuite.setId(testSuiteId);
+        updatedTestSuite.setCreatedAt(existingTestSuite.getCreatedAt());
+        updatedTestSuite.setUpdatedAt(LocalDateTime.now());
+        
+        testSuites.put(testSuiteId, updatedTestSuite);
+        return updatedTestSuite;
+    }
+    
+    /**
+     * Delete a test suite
+     */
+    public boolean deleteTestSuite(String testSuiteId) {
+        if (!testSuites.containsKey(testSuiteId)) {
+            return false;
+        }
+        
+        TestSuite testSuite = testSuites.get(testSuiteId);
+        
+        // Remove from project
+        Project project = projects.get(testSuite.getProjectId());
+        if (project != null) {
+            project.getTestSuites().removeIf(ts -> ts.getId().equals(testSuiteId));
+        }
+        
+        testSuites.remove(testSuiteId);
+        
+        // Remove associated test cases
+        List<String> casesToRemove = testCases.values().stream()
+                .filter(tc -> tc.getTestSuiteId().equals(testSuiteId))
+                .map(TestCase::getId)
+                .collect(Collectors.toList());
+        
+        casesToRemove.forEach(testCases::remove);
+        
+        return true;
+    }
+    
+    /**
+     * Create a new test case
+     */
+    public TestCase createTestCase(TestCase testCase) {
+        testCase.setId(UUID.randomUUID().toString());
+        testCase.setCreatedAt(LocalDateTime.now());
+        testCase.setUpdatedAt(LocalDateTime.now());
+        
+        testCases.put(testCase.getId(), testCase);
+        
+        // Add to test suite
+        TestSuite testSuite = testSuites.get(testCase.getTestSuiteId());
+        if (testSuite != null) {
+            testSuite.addTestCase(testCase);
+        }
+        
+        return testCase;
+    }
+    
+    /**
+     * Get a test case by ID
+     */
+    public TestCase getTestCase(String testCaseId) {
+        return testCases.get(testCaseId);
+    }
+    
+    /**
+     * Get all test cases for a test suite
+     */
+    public List<TestCase> getTestCasesByTestSuite(String testSuiteId) {
+        return testCases.values().stream()
+                .filter(tc -> tc.getTestSuiteId().equals(testSuiteId))
+                .collect(Collectors.toList());
+    }
+    
+    /**
+     * Update a test case
+     */
+    public TestCase updateTestCase(String testCaseId, TestCase updatedTestCase) {
+        TestCase existingTestCase = testCases.get(testCaseId);
+        
+        if (existingTestCase == null) {
+            return null;
+        }
+        
+        updatedTestCase.setId(testCaseId);
+        updatedTestCase.setCreatedAt(existingTestCase.getCreatedAt());
+        updatedTestCase.setUpdatedAt(LocalDateTime.now());
+        
+        testCases.put(testCaseId, updatedTestCase);
+        return updatedTestCase;
+    }
+    
+    /**
+     * Delete a test case
+     */
+    public boolean deleteTestCase(String testCaseId) {
+        if (!testCases.containsKey(testCaseId)) {
+            return false;
+        }
+        
+        TestCase testCase = testCases.get(testCaseId);
+        
+        // Remove from test suite
+        TestSuite testSuite = testSuites.get(testCase.getTestSuiteId());
+        if (testSuite != null) {
+            testSuite.getTestCases().removeIf(tc -> tc.getId().equals(testCaseId));
+        }
+        
+        testCases.remove(testCaseId);
+        return true;
+    }
+    
+    /**
+     * Update workspace configuration
+     */
+    public WorkspaceConfig updateWorkspaceConfig(String workspaceId, WorkspaceConfig config) {
+        Workspace workspace = workspaces.get(workspaceId);
+        
+        if (workspace == null) {
+            return null;
+        }
+        
+        config.setWorkspaceId(workspaceId);
+        
+        if (config.getId() == null) {
+            config.setId(UUID.randomUUID().toString());
+        }
+        
+        workspace.setConfig(config);
+        return config;
+    }
+    
+    /**
+     * Get workspace configuration
+     */
+    public WorkspaceConfig getWorkspaceConfig(String workspaceId) {
+        Workspace workspace = workspaces.get(workspaceId);
+        
+        if (workspace == null) {
+            return null;
+        }
+        
+        return workspace.getConfig();
+    }
+}
+
+
+// controller/AdvancedTestGeneratorController.java
+package com.ctgp.controller;
+
+import com.ctgp.model.analyzer.WebAnalysisResult;
+import com.ctgp.model.analyzer.WebApplicationAnalysis;
+import com.ctgp.model.workspace.TestCase;
+import com.ctgp.model.workspace.TestSuite;
+import com.ctgp.service.analyzer.WebAnalyzerService;
+import com.ctgp.service.generator.TestGeneratorService;
+import com.ctgp.service.workspace.WorkspaceService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/generator")
+public class AdvancedTestGeneratorController {
+    
+    private final WebAnalyzerService webAnalyzerService;
+    private final TestGeneratorService testGeneratorService;
+    private final WorkspaceService workspaceService;
+    
+    @Autowired
+    public AdvancedTestGeneratorController(WebAnalyzerService webAnalyzerService,
+                                         TestGeneratorService testGeneratorService,
+                                         WorkspaceService workspaceService) {
+        this.webAnalyzerService = webAnalyzerService;
+        this.testGeneratorService = testGeneratorService;
+        this.workspaceService = workspaceService;
+    }
+    
+    /**
+     * Generate test suite from URL analysis
+     */
+    @PostMapping("/analyze-and-generate")
+    public ResponseEntity<TestSuite> analyzeAndGenerateTests(
+            @RequestParam String url,
+            @RequestParam(defaultValue = "2") int depth,
+            @RequestParam String projectId) {
+        
+        // Fixed the type mismatch issue by using WebApplicationAnalysis
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        
+        // Generate test suite from analysis
+        TestSuite testSuite = testGeneratorService.generateTestSuite(analysis, projectId);
+        
+        // Save test suite to workspace
+        testSuite = workspaceService.createTestSuite(testSuite);
+        
+        return ResponseEntity.ok(testSuite);
+    }
+    
+    /**
+     * Generate test cases for an existing test suite
+     */
+    @PostMapping("/generate-test-cases")
+    public ResponseEntity<List<TestCase>> generateTestCases(
+            @RequestParam String url,
+            @RequestParam(defaultValue = "2") int depth,
+            @RequestParam String testSuiteId) {
+        
+        // Fixed the type mismatch issue by using WebApplicationAnalysis
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        
+        // Generate test cases
+        List<TestCase> testCases = testGeneratorService.generateTestCases(analysis, testSuiteId);
+        
+        // Save test cases
+        for (TestCase testCase : testCases) {
+            workspaceService.createTestCase(testCase);
+        }
+        
+        return ResponseEntity.ok(testCases);
+    }
+    
+    /**
+     * Get analysis result in a simplified format
+     */
+    @GetMapping("/analysis-result")
+    public ResponseEntity<WebAnalysisResult> getAnalysisResult(
+            @RequestParam String url,
+            @RequestParam(defaultValue = "2") int depth) {
+        
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        WebAnalysisResult result = webAnalyzerService.getAnalysisResult(analysis);
+        
+        return ResponseEntity.ok(result);
+    }
+}
+
+// controller/AnalyzerController.java
+package com.ctgp.controller;
+
+import com.ctgp.model.analyzer.WebAnalysisResult;
+import com.ctgp.model.analyzer.WebApplicationAnalysis;
+import com.ctgp.service.analyzer.WebAnalyzerService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/analyzer")
+public class AnalyzerController {
+    
+    private final WebAnalyzerService webAnalyzerService;
+    
+    @Autowired
+    public AnalyzerController(WebAnalyzerService webAnalyzerService) {
+        this.webAnalyzerService = webAnalyzerService;
+    }
+    
+    /**
+     * Analyze a web application
+     */
+    @PostMapping("/analyze")
+    public ResponseEntity<WebAnalysisResult> analyzeWebApplication(
+            @RequestParam String url,
+            @RequestParam(defaultValue = "2") int depth) {
+        
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        WebAnalysisResult result = webAnalyzerService.getAnalysisResult(analysis);
+        
+        return ResponseEntity.ok(result);
+    }
+    
+    /**
+     * Get detailed analysis data
+     */
+    @GetMapping("/analysis-details/{analysisId}")
+    public ResponseEntity<WebApplicationAnalysis> getAnalysisDetails(
+            @PathVariable String analysisId,
+            @RequestParam String url,
+            @RequestParam(defaultValue = "2") int depth) {
+        
+        // In a real implementation, this would retrieve analysis by ID from storage
+        // For now, we'll just generate a fresh analysis
+        WebApplicationAnalysis analysis = webAnalyzerService.analyzeApplication(url, depth);
+        analysis.setId(analysisId);
+        
+        return ResponseEntity.ok(analysis);
+    }
+}
+
+// controller/ExecutionController.java
+package com.ctgp.controller;
+
+import com.ctgp.model.execution.TestExecutionSession;
+import com.ctgp.model.execution.TestExecutionSummary;
+import com.ctgp.service.execution.TestExecutionService;
+import com.ctgp.service.workspace.WorkspaceService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/execution")
+public class ExecutionController {
+    
+    private final TestExecutionService testExecutionService;
+    private final WorkspaceService workspaceService;
+    
+    @Autowired
+    public ExecutionController(TestExecutionService testExecutionService,
+                              WorkspaceService workspaceService) {
+        this.testExecutionService = testExecutionService;
+        this.workspaceService = workspaceService;
+    }
+    
+    /**
+     * Execute tests in a test suite
+     */
+    @PostMapping("/execute-test-suite")
+    public ResponseEntity<TestExecutionSession> executeTestSuite(
+            @RequestParam String workspaceId,
+            @RequestParam String projectId,
+            @RequestParam String testSuiteId,
+            @RequestParam(defaultValue = "staging") String environment,
+            @RequestParam(defaultValue = "chrome") String browser) {
+        
+        // Validate that the test suite exists
+        if (workspaceService.getTestSuite(projectId, testSuiteId) == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        TestExecutionSession session = testExecutionService.executeTestSuite(
+                workspaceId, projectId, testSuiteId, environment, browser);
+        
+        return ResponseEntity.ok(session);
+    }
+    
+    /**
+     * Get execution summary
+     */
+    @GetMapping("/execution-summary/{sessionId}")
+    public ResponseEntity<TestExecutionSummary> getExecutionSummary(
+            @PathVariable String sessionId,
+            @RequestParam String workspaceId,
+            @RequestParam String projectId,
+            @RequestParam String testSuiteId) {
+        
+        // In a real implementation, we would retrieve the session by ID
+        // For now, we'll create a fresh execution session and get its summary
+        TestExecutionSession session = testExecutionService.executeTestSuite(
+                workspaceId, projectId, testSuiteId, "staging", "chrome");
+        
+        TestExecutionSummary summary = testExecutionService.getExecutionSummary(session);
+        
+        return ResponseEntity.ok(summary);
+    }
+}
+
+// controller/WorkspaceController.java
+package com.ctgp.controller;
+
+import com.ctgp.model.workspace.*;
+import com.ctgp.service.integration.AzureDevOpsIntegrationService;
+import com.ctgp.service.workspace.WorkspaceService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/workspace")
+public class WorkspaceController {
+    
+    private final WorkspaceService workspaceService;
+    private final AzureDevOpsIntegrationService azureDevOpsService;
+    
+    @Autowired
+    public WorkspaceController(WorkspaceService workspaceService,
+                             AzureDevOpsIntegrationService azureDevOpsService) {
+        this.workspaceService = workspaceService;
+        this.azureDevOpsService = azureDevOpsService;
+    }
+    
+    /**
+     * Create a new workspace
+     */
+    @PostMapping
+    public ResponseEntity<Workspace> createWorkspace(@RequestBody Workspace workspace) {
+        Workspace createdWorkspace = workspaceService.createWorkspace(workspace);
+        return ResponseEntity.ok(createdWorkspace);
+    }
+    
+    /**
+     * Get a workspace by ID
+     */
+    @GetMapping("/{workspaceId}")
+    public ResponseEntity<Workspace> getWorkspace(@PathVariable String workspaceId) {
+        Workspace workspace = workspaceService.getWorkspace(workspaceId);
+        
+        if (workspace == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        return ResponseEntity.ok(workspace);
+    }
+    
+    /**
+     * Get all workspaces
+     */
+    @GetMapping
+    public ResponseEntity<List<Workspace>> getAllWorkspaces() {
+        List<Workspace> workspaces = workspaceService.getAllWorkspaces();
+        return ResponseEntity.ok(workspaces);
+    }
+    
+    /**
+     * Update a workspace
+     */
+    @PutMapping("/{workspaceId}")
+    public ResponseEntity<Workspace> updateWorkspace(
+            @PathVariable String workspaceId,
+            @RequestBody Workspace workspace) {
+        
+        Workspace updatedWorkspace = workspaceService.updateWorkspace(workspaceId, workspace);
+        
+        if (updatedWorkspace == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        return ResponseEntity.ok(updatedWorkspace);
+    }
+    
+    /**
+     * Delete a workspace
+     */
+    @DeleteMapping("/{workspaceId}")
+    public ResponseEntity<Void> deleteWorkspace(@PathVariable String workspaceId) {
+        boolean deleted = workspaceService.deleteWorkspace(workspaceId);
+        
+        if (!deleted) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        return ResponseEntity.noContent().build();
+    }
+    
+    /**
+     * Create a new project
+     */
+    @PostMapping("/{workspaceId}/projects")
+    public ResponseEntity<Project> createProject(
+            @PathVariable String workspaceId,
+            @RequestBody Project project) {
+        
+        // Check if workspace exists
+        if (workspaceService.getWorkspace(workspaceId) == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        project.setWorkspaceId(workspaceId);
+        Project createdProject = workspaceService.createProject(project);
+        
+        return ResponseEntity.ok(createdProject);
+    }
+    
+    /**
+     * Get a project by ID
+     */
+    @GetMapping("/{workspaceId}/projects/{projectId}")
+    public ResponseEntity<Project> getProject(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId) {
+        
+        Project project = workspaceService.getProject(projectId);
+        
+        if (project == null || !project.getWorkspaceId().equals(workspaceId)) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        return ResponseEntity.ok(project);
+    }
+    
+    /**
+     * Get all projects for a workspace
+     */
+    @GetMapping("/{workspaceId}/projects")
+    public ResponseEntity<List<Project>> getProjectsByWorkspace(@PathVariable String workspaceId) {
+        // Check if workspace exists
+        if (workspaceService.getWorkspace(workspaceId) == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        List<Project> projects = workspaceService.getProjectsByWorkspace(workspaceId);
+        return ResponseEntity.ok(projects);
+    }
+    
+    /**
+     * Create a new test suite
+     */
+    @PostMapping("/{workspaceId}/projects/{projectId}/test-suites")
+    public ResponseEntity<TestSuite> createTestSuite(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @RequestBody TestSuite testSuite) {
+        
+        // Check if project exists
+        Project project = workspaceService.getProject(projectId);
+        if (project == null || !project.getWorkspaceId().equals(workspaceId)) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        testSuite.setProjectId(projectId);
+        TestSuite createdTestSuite = workspaceService.createTestSuite(testSuite);
+        
+        return ResponseEntity.ok(createdTestSuite);
+    }
+    
+    /**
+     * Get all test suites for a project
+     */
+    @GetMapping("/{workspaceId}/projects/{projectId}/test-suites")
+    public ResponseEntity<List<TestSuite>> getTestSuitesByProject(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId) {
+        
+        // Check if project exists
+        Project project = workspaceService.getProject(projectId);
+        if (project == null || !project.getWorkspaceId().equals(workspaceId)) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        List<TestSuite> testSuites = workspaceService.getTestSuitesByProject(projectId);
+        return ResponseEntity.ok(testSuites);
+    }
+    
+    /**
+     * Create a new test case
+     */
+    @PostMapping("/{workspaceId}/projects/{projectId}/test-suites/{testSuiteId}/test-cases")
+    public ResponseEntity<TestCase> createTestCase(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @PathVariable String testSuiteId,
+            @RequestBody TestCase testCase) {
+        
+        // Check if test suite exists
+        TestSuite testSuite = workspaceService.getTestSuite(projectId, testSuiteId);
+        if (testSuite == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        testCase.setTestSuiteId(testSuiteId);
+        TestCase createdTestCase = workspaceService.createTestCase(testCase);
+        
+        return ResponseEntity.ok(createdTestCase);
+    }
+    
+    /**
+     * Get all test cases for a test suite
+     */
+    @GetMapping("/{workspaceId}/projects/{projectId}/test-suites/{testSuiteId}/test-cases")
+    public ResponseEntity<List<TestCase>> getTestCasesByTestSuite(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @PathVariable String testSuiteId) {
+        
+        // Check if test suite exists
+        TestSuite testSuite = workspaceService.getTestSuite(projectId, testSuiteId);
+        if (testSuite == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        List<TestCase> testCases = workspaceService.getTestCasesByTestSuite(testSuiteId);
+        return ResponseEntity.ok(testCases);
+    }
+    
+    /**
+     * Update workspace configuration
+     */
+    @PutMapping("/{workspaceId}/config")
+    public ResponseEntity<WorkspaceConfig> updateWorkspaceConfig(
+            @PathVariable String workspaceId,
+            @RequestBody WorkspaceConfig config) {
+        
+        WorkspaceConfig updatedConfig = workspaceService.updateWorkspaceConfig(workspaceId, config);
+        
+        if (updatedConfig == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        return ResponseEntity.ok(updatedConfig);
+    }
+    
+    /**
+     * Export test suite to Azure DevOps
+     */
+    @PostMapping("/{workspaceId}/projects/{projectId}/test-suites/{testSuiteId}/export-to-azure")
+    public ResponseEntity<Map<String, String>> exportToAzureDevOps(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @PathVariable String testSuiteId) {
+        
+        // Get test suite
+        TestSuite testSuite = workspaceService.getTestSuite(projectId, testSuiteId);
+        if (testSuite == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Get workspace config with Azure DevOps settings
+        WorkspaceConfig config = workspaceService.getWorkspaceConfig(workspaceId);
+        if (config == null || config.getAzureDevOpsConfig() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        
+        Map<String, String> exportResults = azureDevOpsService.exportTestSuiteToAzureDevOps(
+                testSuite, config.getAzureDevOpsConfig());
+        
+        return ResponseEntity.ok(exportResults);
+    }
+    
+    /**
+     * Import test suite from Azure DevOps
+     */
+    @PostMapping("/{workspaceId}/projects/{projectId}/import-from-azure")
+    public ResponseEntity<TestSuite> importFromAzureDevOps(
+            @PathVariable String workspaceId,
+            @PathVariable String projectId,
+            @RequestParam String azureTestSuiteId) {
+        
+        // Check if project exists
+        Project project = workspaceService.getProject(projectId);
+        if (project == null) {
+            return ResponseEntity.notFound().build();
+        }
+        
+        // Get workspace config with Azure DevOps settings
+        WorkspaceConfig config = workspaceService.getWorkspaceConfig(workspaceId);
+        if (config == null || config.getAzureDevOpsConfig() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        
+        TestSuite importedTestSuite = azureDevOpsService.importTestSuiteFromAzureDevOps(
+                azureTestSuiteId, config.getAzureDevOpsConfig(), projectId);
+        
+        // Save the imported test suite
+        importedTestSuite = workspaceService.createTestSuite(importedTestSuite);
+        
+        return ResponseEntity.ok(importedTestSuite);
+    }
+}
+
+
+// config/AppConfig.java
+package com.ctgp.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
+
+@Configuration
+public class AppConfig {
+    
+    /**
+     * Configure CORS to allow requests from frontend applications
+     */
+    @Bean
+    public CorsFilter corsFilter() {
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        CorsConfiguration config = new CorsConfiguration();
+        
+        // Allow all origins, headers, and methods for demonstration
+        // In production, this should be restricted
+        config.addAllowedOrigin("*");
+        config.addAllowedHeader("*");
+        config.addAllowedMethod("*");
+        
+        source.registerCorsConfiguration("/**", config);
+        return new CorsFilter(source);
+    }
+}
+
+// ContextualTestPlatformApplication.java
+package com.ctgp;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class ContextualTestPlatformApplication {
+    
+    public static void main(String[] args) {
+        SpringApplication.run(ContextualTestPlatformApplication.class, args);
+    }
+}
+
+// application.properties
+# Server configuration
+server.port=8080
+server.servlet.context-path=/ctgp
+
+# Logging configuration
+logging.level.root=INFO
+logging.level.com.ctgp=DEBUG
+logging.pattern.console=%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n
+
+# JSON pretty print for development
+spring.jackson.serialization.indent_output=true
+
+# H2 Database configuration (for demonstration)
+spring.datasource.url=jdbc:h2:mem:ctgpdb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+spring.h2.console.enabled=true
+spring.h2.console.path=/h2-console
+
+# JPA/Hibernate configuration
+spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
+
+# Web analyzer configuration
+analyzer.default-depth=2
+analyzer.timeout=30000
+analyzer.user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36
+
+# Test execution configuration
+execution.browser=chrome
+execution.environment=staging
+execution.default-timeout=30000
+
+# Azure DevOps integration configuration
+azure.integration.enabled=true
+
+
