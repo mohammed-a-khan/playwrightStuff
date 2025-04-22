@@ -7191,4 +7191,404 @@ websocket.current.onmessage = (event) => {
 };
 
 
+package com.cssmart.ui.service;
+
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.POMTestCase;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.HashMap;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.UUID;
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+
+@Slf4j
+@Service
+public class TestRecordingService {
+    
+    // In-memory storage for recorded tests and steps
+    private final Map<String, TestCase> recordedTests = new HashMap<>();
+    private final Map<String, POMTestCase> pomTestCases = new HashMap<>();
+    private final Map<String, List<RecordedStep>> recordedStepsBySessionId = new HashMap<>();
+    
+    private static final String RECORDED_TESTS_DIR = "recorded-tests";
+    private static final String POM_TESTS_DIR = "pom-tests";
+    
+    public TestRecordingService() {
+        // Ensure directories exist
+        new File(RECORDED_TESTS_DIR).mkdirs();
+        new File(POM_TESTS_DIR).mkdirs();
+        
+        // Load any existing tests
+        loadExistingTests();
+    }
+    
+    /**
+     * Load existing tests from disk
+     */
+    private void loadExistingTests() {
+        try {
+            File recordedDir = new File(RECORDED_TESTS_DIR);
+            if (recordedDir.exists() && recordedDir.isDirectory()) {
+                File[] files = recordedDir.listFiles((dir, name) -> name.endsWith(".json"));
+                if (files != null) {
+                    for (File file : files) {
+                        try {
+                            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                            mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+                            mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+                            
+                            TestCase testCase = mapper.readValue(file, TestCase.class);
+                            recordedTests.put(testCase.getId(), testCase);
+                        } catch (Exception e) {
+                            log.error("Error loading test from file: {}", file.getName(), e);
+                        }
+                    }
+                }
+            }
+            
+            File pomDir = new File(POM_TESTS_DIR);
+            if (pomDir.exists() && pomDir.isDirectory()) {
+                File[] files = pomDir.listFiles((dir, name) -> name.endsWith(".json"));
+                if (files != null) {
+                    for (File file : files) {
+                        try {
+                            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                            mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+                            mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+                            
+                            POMTestCase pomTestCase = mapper.readValue(file, POMTestCase.class);
+                            pomTestCases.put(pomTestCase.getId(), pomTestCase);
+                        } catch (Exception e) {
+                            log.error("Error loading POM test from file: {}", file.getName(), e);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Error loading existing tests", e);
+        }
+    }
+    
+    /**
+     * Store recorded steps by session ID
+     * @param sessionId WebSocket session ID
+     * @param steps List of recorded steps
+     */
+    public void storeRecordedSteps(String sessionId, List<RecordedStep> steps) {
+        recordedStepsBySessionId.put(sessionId, new ArrayList<>(steps));
+        log.info("Stored {} steps for session {}", steps.size(), sessionId);
+    }
+    
+    /**
+     * Get recorded steps by session ID
+     * @param sessionId WebSocket session ID
+     * @return List of recorded steps or empty list if none found
+     */
+    public List<RecordedStep> getRecordedStepsBySessionId(String sessionId) {
+        return recordedStepsBySessionId.getOrDefault(sessionId, new ArrayList<>());
+    }
+    
+    /**
+     * Get a recorded test by ID
+     * @param id Test ID
+     * @return The test case or null if not found
+     */
+    public TestCase getRecordedTest(String id) {
+        return recordedTests.get(id);
+    }
+    
+    /**
+     * Get all recorded tests
+     * @return List of all recorded tests
+     */
+    public List<TestCase> getAllRecordedTests() {
+        return new ArrayList<>(recordedTests.values());
+    }
+    
+    /**
+     * Delete a recorded test
+     * @param id Test ID
+     * @return true if deleted, false otherwise
+     */
+    public boolean deleteRecordedTest(String id) {
+        TestCase testCase = recordedTests.remove(id);
+        if (testCase == null) {
+            return false;
+        }
+        
+        try {
+            // Delete file
+            File file = new File(RECORDED_TESTS_DIR, id + ".json");
+            if (file.exists()) {
+                file.delete();
+            }
+            
+            // Delete Java file if it exists
+            String packageDir = "src/main/java/com/cssmart/tests/generated";
+            File javaFile = new File(packageDir, testCase.getClassName() + ".java");
+            if (javaFile.exists()) {
+                javaFile.delete();
+            }
+            
+            return true;
+        } catch (Exception e) {
+            log.error("Error deleting test file", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Delete a POM test case
+     * @param id Test ID
+     * @return true if deleted, false otherwise
+     */
+    public boolean deletePOMTestCase(String id) {
+        POMTestCase pomTestCase = pomTestCases.remove(id);
+        if (pomTestCase == null) {
+            return false;
+        }
+        
+        try {
+            // Delete file
+            File file = new File(POM_TESTS_DIR, id + ".json");
+            if (file.exists()) {
+                file.delete();
+            }
+            
+            // Delete Java file if it exists
+            String packageDir = "src/main/java/com/cssmart/tests/generated";
+            File javaFile = new File(packageDir, pomTestCase.getClassName() + ".java");
+            if (javaFile.exists()) {
+                javaFile.delete();
+            }
+            
+            return true;
+        } catch (Exception e) {
+            log.error("Error deleting POM test file", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Create a test case from recorded steps
+     * @param sessionId WebSocket session ID
+     * @param testName Name for the test
+     * @param description Description for the test
+     * @return Created test case
+     */
+    public TestCase createTestCase(String sessionId, String testName, String description) {
+        List<RecordedStep> steps = getRecordedStepsBySessionId(sessionId);
+        
+        if (steps == null || steps.isEmpty()) {
+            log.warn("No steps found for session {}", sessionId);
+            return null;
+        }
+        
+        TestCase testCase = new TestCase();
+        testCase.setId(UUID.randomUUID().toString());
+        testCase.setName(testName != null ? testName : "Recorded Test " + sessionId);
+        testCase.setDescription(description != null ? description : "Test recorded on " + LocalDateTime.now());
+        testCase.setSteps(steps);
+        testCase.setStartTime(steps.get(0).getTimestamp());
+        testCase.setEndTime(LocalDateTime.now());
+        
+        // Generate class and method names
+        String className = testCase.getName().replaceAll("[^a-zA-Z0-9]", "") + "Test";
+        String methodName = "test" + testCase.getName().replaceAll("[^a-zA-Z0-9]", "");
+        testCase.setClassName(className);
+        testCase.setMethodName(methodName);
+        
+        // Generate code based on steps
+        testCase.setCode(generateTestCode(testCase));
+        
+        // Store in memory
+        recordedTests.put(testCase.getId(), testCase);
+        
+        log.info("Created test case {} with {} steps", testCase.getId(), steps.size());
+        return testCase;
+    }
+    
+    /**
+     * Get a POM test case by ID
+     * @param id Test ID
+     * @return The POM test case or null if not found
+     */
+    public POMTestCase getPOMTestCase(String id) {
+        return pomTestCases.get(id);
+    }
+    
+    /**
+     * Get all POM test cases
+     * @return List of all POM test cases
+     */
+    public List<POMTestCase> getAllPOMTestCases() {
+        return new ArrayList<>(pomTestCases.values());
+    }
+    
+    /**
+     * Save a recorded test
+     * @param testCase Test case to save
+     * @return The saved test case
+     */
+    public TestCase saveRecordedTest(TestCase testCase) {
+        if (testCase.getId() == null || testCase.getId().isEmpty()) {
+            testCase.setId(UUID.randomUUID().toString());
+        }
+        
+        // Store in memory
+        recordedTests.put(testCase.getId(), testCase);
+        
+        // Save to file
+        try {
+            File file = new File(RECORDED_TESTS_DIR, testCase.getId() + ".json");
+            
+            // Using Jackson for JSON serialization
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            mapper.writeValue(file, testCase);
+            log.info("Saved test case to {}", file.getAbsolutePath());
+            
+            // Save Java file if code is present
+            if (testCase.getCode() != null && !testCase.getCode().isEmpty()) {
+                String packageDir = "src/main/java/com/cssmart/tests/generated";
+                new File(packageDir).mkdirs();
+                
+                File javaFile = new File(packageDir, testCase.getClassName() + ".java");
+                Files.writeString(javaFile.toPath(), testCase.getCode());
+                log.info("Saved Java code to {}", javaFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.error("Error saving test case to file", e);
+        }
+        
+        return testCase;
+    }
+    
+    /**
+     * Save a POM test case
+     * @param pomTestCase POM test case to save
+     * @return The saved POM test case
+     */
+    public POMTestCase savePOMTestCase(POMTestCase pomTestCase) {
+        if (pomTestCase.getId() == null || pomTestCase.getId().isEmpty()) {
+            pomTestCase.setId(UUID.randomUUID().toString());
+        }
+        
+        // Store in memory
+        pomTestCases.put(pomTestCase.getId(), pomTestCase);
+        
+        // Save to file
+        try {
+            File file = new File(POM_TESTS_DIR, pomTestCase.getId() + ".json");
+            
+            // Using Jackson for JSON serialization
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            mapper.writeValue(file, pomTestCase);
+            log.info("Saved POM test case to {}", file.getAbsolutePath());
+            
+            // Save Java file if code is present
+            if (pomTestCase.getCode() != null && !pomTestCase.getCode().isEmpty()) {
+                String packageDir = "src/main/java/com/cssmart/tests/generated";
+                new File(packageDir).mkdirs();
+                
+                File javaFile = new File(packageDir, pomTestCase.getClassName() + ".java");
+                Files.writeString(javaFile.toPath(), pomTestCase.getCode());
+                log.info("Saved Java code to {}", javaFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.error("Error saving POM test case to file", e);
+        }
+        
+        return pomTestCase;
+    }
+    
+    /**
+     * Generate test code from a test case
+     * @param testCase Test case
+     * @return Generated code
+     */
+    private String generateTestCode(TestCase testCase) {
+        StringBuilder code = new StringBuilder();
+        
+        // Add imports and class declaration
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.CSSmartTestBase;\n");
+        code.append("import com.cssmart.core.annotations.CSSmartTest;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        code.append("import org.openqa.selenium.WebElement;\n");
+        code.append("import org.testng.Assert;\n");
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        code.append("@Slf4j\n");
+        code.append("public class ").append(testCase.getClassName()).append(" extends CSSmartTestBase {\n\n");
+        
+        // Add test method
+        code.append("    @Test\n");
+        code.append("    @CSSmartTest(description = \"").append(testCase.getDescription()).append("\")\n");
+        code.append("    public void ").append(testCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(testCase.getDescription()).append("\");\n\n");
+        
+        // Add test steps
+        if (testCase.getSteps() != null && !testCase.getSteps().isEmpty()) {
+            for (RecordedStep step : testCase.getSteps()) {
+                if (step.getDescription() != null) {
+                    code.append("        // ").append(step.getDescription()).append("\n");
+                }
+                
+                if ("NAVIGATE".equals(step.getAction())) {
+                    code.append("        driver.get(\"").append(step.getValue()).append("\");\n");
+                } else if ("CLICK".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.click();\n");
+                } else if ("TYPE".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        element.clear();\n");
+                    code.append("        element.sendKeys(\"").append(step.getValue()).append("\");\n");
+                } else if ("SELECT".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        new org.openqa.selenium.support.ui.Select(element)")
+                        .append(".selectByVisibleText(\"").append(step.getValue()).append("\");\n");
+                } else if ("VERIFY_PRESENCE".equals(step.getAction())) {
+                    code.append("        WebElement element = elementFinder.findElement(\"")
+                        .append(step.getElement()).append("\");\n");
+                    code.append("        Assert.assertTrue(element.isDisplayed(), \"")
+                        .append(step.getElement()).append(" should be present\");\n");
+                }
+                
+                code.append("\n");
+            }
+        }
+        
+        code.append("        log.info(\"Test completed successfully\");\n");
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    /**
+     * Clear all in-memory data for a session
+     * @param sessionId Session ID
+     */
+    public void clearSession(String sessionId) {
+        recordedStepsBySessionId.remove(sessionId);
+    }
+}
+
 
