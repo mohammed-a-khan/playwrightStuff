@@ -1,0 +1,826 @@
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.core.pom.PageObjectModel;
+import com.cssmart.core.pom.PageElement;
+import com.cssmart.core.pom.PageAction;
+import com.cssmart.core.pom.PageVerification;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.By;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Enhanced test recorder that generates Page Object Models
+ * from the pages visited during test recording
+ */
+@Slf4j
+public class POMTestRecorder extends TestRecorder {
+    
+    private final Map<String, PageObjectModel> pageObjects = new HashMap<>();
+    private String currentUrl;
+    private String currentPageTitle;
+    private PageObjectModel currentPageObject;
+    private final AIEngine aiEngine;
+    
+    /**
+     * Constructor
+     */
+    public POMTestRecorder() {
+        super();
+        this.aiEngine = AIEngine.getInstance();
+        log.info("POMTestRecorder initialized");
+    }
+    
+    /**
+     * Alternative constructor with recorder API URL
+     * @param recorderApiUrl URL of the recorder API
+     */
+    public POMTestRecorder(String recorderApiUrl) {
+        super(recorderApiUrl);
+        this.aiEngine = AIEngine.getInstance();
+        log.info("POMTestRecorder initialized with API URL: {}", recorderApiUrl);
+    }
+    
+    /**
+     * Start recording with page object detection
+     * @param browserType Browser type (chrome, firefox, etc.)
+     * @param url URL to navigate to
+     */
+    @Override
+    public void startRecording(String browserType, String url) {
+        log.info("Starting POM recording with browser: {} and URL: {}", browserType, url);
+        super.startRecording(browserType, url);
+        
+        // Initialize current URL and page title
+        WebDriver driver = getDriver();
+        if (driver != null) {
+            currentUrl = driver.getCurrentUrl();
+            currentPageTitle = driver.getTitle();
+            detectPageObject();
+            log.info("Initial page detected: {} - {}", currentPageTitle, currentUrl);
+        } else {
+            log.error("Failed to get WebDriver instance");
+        }
+    }
+    
+    /**
+     * Stop recording
+     * @return Test case with page objects
+     */
+    @Override
+    public TestCase stopRecording() {
+        log.info("Stopping POM recording");
+        TestCase testCase = super.stopRecording();
+        
+        // Add page objects to test case
+        testCase.setPageObjects(new ArrayList<>(pageObjects.values()));
+        
+        // Generate page object code for all page objects
+        generatePageObjectCode();
+        
+        return testCase;
+    }
+    
+    /**
+     * Record an action with page object detection
+     * @param action Action to record
+     * @param element Element locator
+     * @param value Value (if applicable)
+     */
+    @Override
+    public void recordAction(Action action, String element, String value) {
+        log.info("Recording action: {} on element: {} with value: {}", action, element, value);
+        super.recordAction(action, element, value);
+        
+        // Check if page has changed
+        WebDriver driver = getDriver();
+        if (driver != null) {
+            String newUrl = driver.getCurrentUrl();
+            String newTitle = driver.getTitle();
+            
+            if (!newUrl.equals(currentUrl) || !newTitle.equals(currentPageTitle)) {
+                log.info("Page changed from: {} to: {}", currentUrl, newUrl);
+                // Update current URL and title
+                currentUrl = newUrl;
+                currentPageTitle = newTitle;
+                
+                // Detect page object for new page
+                detectPageObject();
+            }
+            
+            // Detect element for the action
+            if (element != null && !element.isEmpty()) {
+                detectElement(element, action, value);
+            }
+        } else {
+            log.error("Failed to get WebDriver instance for action recording");
+        }
+    }
+    
+    /**
+     * Detect page object for the current page
+     */
+    private void detectPageObject() {
+        WebDriver driver = getDriver();
+        if (driver == null) {
+            log.error("WebDriver is null, cannot detect page object");
+            return;
+        }
+        
+        try {
+            // Generate a page name from the title or URL
+            String pageName = currentPageTitle;
+            if (pageName == null || pageName.isEmpty()) {
+                pageName = extractPageNameFromUrl(currentUrl);
+            }
+            
+            // Check if this page already has a page object
+            String pageKey = generatePageKey(currentUrl);
+            if (pageObjects.containsKey(pageKey)) {
+                log.info("Using existing page object for: {}", pageName);
+                currentPageObject = pageObjects.get(pageKey);
+                return;
+            }
+            
+            // Create a new page object model using the Lombok @Builder annotation
+            log.info("Creating new page object for: {}", pageName);
+            
+            currentPageObject = PageObjectModel.builder()
+                .id(UUID.randomUUID().toString())
+                .name(pageName)
+                .pageUrl(currentUrl)
+                .packageName("com.cssmart.pom.pages")
+                .className(generateClassName(pageName))
+                .description("Page Object for " + pageName)
+                .elements(new ArrayList<>())
+                .actions(new ArrayList<>())
+                .verifications(new ArrayList<>())
+                .build();
+            
+            // Store the page object
+            pageObjects.put(pageKey, currentPageObject);
+            
+            // Detect important elements on the page
+            detectImportantElements();
+            
+        } catch (Exception e) {
+            log.error("Error detecting page object", e);
+        }
+    }
+    
+    /**
+     * Detect important elements on the current page
+     */
+    private void detectImportantElements() {
+        WebDriver driver = getDriver();
+        if (driver == null) {
+            log.error("WebDriver is null, cannot detect elements");
+            return;
+        }
+        
+        try {
+            log.info("Detecting important elements on page: {}", currentPageObject.getName());
+            
+            // Find form elements (inputs, buttons, selects)
+            List<WebElement> formElements = new ArrayList<>();
+            formElements.addAll(driver.findElements(By.tagName("input")));
+            formElements.addAll(driver.findElements(By.tagName("button")));
+            formElements.addAll(driver.findElements(By.tagName("select")));
+            formElements.addAll(driver.findElements(By.tagName("textarea")));
+            
+            for (WebElement element : formElements) {
+                // Skip hidden elements
+                if (!element.isDisplayed()) {
+                    continue;
+                }
+                
+                String elementId = element.getAttribute("id");
+                String elementName = element.getAttribute("name");
+                String elementType = element.getTagName();
+                String elementText = element.getText();
+                String elementClass = element.getAttribute("class");
+                
+                // Skip elements with no identifiable attributes
+                if ((elementId == null || elementId.isEmpty()) && 
+                    (elementName == null || elementName.isEmpty()) &&
+                    (elementText == null || elementText.isEmpty()) &&
+                    (elementClass == null || elementClass.isEmpty())) {
+                    continue;
+                }
+                
+                // Determine best locator
+                PageElement.LocatorType locatorType;
+                String locatorValue;
+                
+                if (elementId != null && !elementId.isEmpty()) {
+                    locatorType = PageElement.LocatorType.ID;
+                    locatorValue = elementId;
+                } else if (elementName != null && !elementName.isEmpty()) {
+                    locatorType = PageElement.LocatorType.NAME;
+                    locatorValue = elementName;
+                } else {
+                    // Generate XPath
+                    locatorType = PageElement.LocatorType.XPATH;
+                    locatorValue = generateXPath(element);
+                }
+                
+                // Generate a user-friendly name for the element
+                String displayName = generateElementName(element, elementType);
+                
+                // Create PageElement using Lombok @Builder
+                PageElement pageElement = PageElement.builder()
+                        .name(displayName)
+                        .type(elementType)
+                        .locatorType(locatorType)
+                        .locatorValue(locatorValue)
+                        .description("Element on " + currentPageObject.getName())
+                        .isList(false)
+                        .build();
+                
+                // Add element to page object
+                currentPageObject.addElement(pageElement);
+                log.info("Added element to page object: {}", pageElement.getName());
+            }
+            
+            // Find links
+            List<WebElement> links = driver.findElements(By.tagName("a"));
+            
+            for (WebElement link : links) {
+                // Skip hidden links
+                if (!link.isDisplayed()) {
+                    continue;
+                }
+                
+                String linkText = link.getText();
+                String linkHref = link.getAttribute("href");
+                
+                // Skip links with no text or href
+                if ((linkText == null || linkText.isEmpty()) &&
+                    (linkHref == null || linkHref.isEmpty())) {
+                    continue;
+                }
+                
+                // Determine best locator
+                PageElement.LocatorType locatorType;
+                String locatorValue;
+                
+                if (linkText != null && !linkText.isEmpty()) {
+                    locatorType = PageElement.LocatorType.LINK_TEXT;
+                    locatorValue = linkText;
+                } else {
+                    // Generate XPath
+                    locatorType = PageElement.LocatorType.XPATH;
+                    locatorValue = generateXPath(link);
+                }
+                
+                // Create PageElement
+                PageElement pageElement = PageElement.builder()
+                        .name(linkText != null && !linkText.isEmpty() ? linkText + " Link" : "Link to " + linkHref)
+                        .type("link")
+                        .locatorType(locatorType)
+                        .locatorValue(locatorValue)
+                        .description("Link on " + currentPageObject.getName())
+                        .isList(false)
+                        .build();
+                
+                // Add element to page object
+                currentPageObject.addElement(pageElement);
+                log.info("Added link to page object: {}", pageElement.getName());
+            }
+            
+        } catch (Exception e) {
+            log.error("Error detecting important elements", e);
+        }
+    }
+    
+    /**
+     * Detect element for a specific action
+     * @param elementLocator Element locator
+     * @param action Action performed
+     * @param value Value (if applicable)
+     */
+    private void detectElement(String elementLocator, Action action, String value) {
+        WebDriver driver = getDriver();
+        if (driver == null || currentPageObject == null) {
+            return;
+        }
+        
+        try {
+            log.info("Detecting element for action: {}", action.getType());
+            
+            // Find element
+            WebElement element = findElement(driver, elementLocator);
+            if (element == null) {
+                log.warn("Element not found: {}", elementLocator);
+                return;
+            }
+            
+            // Extract element properties
+            String elementType = element.getTagName();
+            String elementId = element.getAttribute("id");
+            String elementName = element.getAttribute("name");
+            String elementText = element.getText();
+            
+            // Generate a user-friendly name for the element
+            String displayName = generateElementName(element, elementType);
+            
+            // Determine best locator
+            PageElement.LocatorType locatorType;
+            String locatorValue;
+            
+            // Use the provided locator if it's already in a valid format
+            if (elementLocator.startsWith("id=")) {
+                locatorType = PageElement.LocatorType.ID;
+                locatorValue = elementLocator.substring(3);
+            } else if (elementLocator.startsWith("name=")) {
+                locatorType = PageElement.LocatorType.NAME;
+                locatorValue = elementLocator.substring(5);
+            } else if (elementLocator.startsWith("css=")) {
+                locatorType = PageElement.LocatorType.CSS;
+                locatorValue = elementLocator.substring(4);
+            } else if (elementLocator.startsWith("xpath=")) {
+                locatorType = PageElement.LocatorType.XPATH;
+                locatorValue = elementLocator.substring(6);
+            } else if (elementLocator.startsWith("linkText=")) {
+                locatorType = PageElement.LocatorType.LINK_TEXT;
+                locatorValue = elementLocator.substring(9);
+            } else {
+                // Use element attributes to determine best locator
+                if (elementId != null && !elementId.isEmpty()) {
+                    locatorType = PageElement.LocatorType.ID;
+                    locatorValue = elementId;
+                } else if (elementName != null && !elementName.isEmpty()) {
+                    locatorType = PageElement.LocatorType.NAME;
+                    locatorValue = elementName;
+                } else {
+                    // Generate XPath
+                    locatorType = PageElement.LocatorType.XPATH;
+                    locatorValue = generateXPath(element);
+                }
+            }
+            
+            // Check if element already exists in page object
+            boolean elementExists = false;
+            if (currentPageObject.getElements() != null) {
+                for (PageElement pageElement : currentPageObject.getElements()) {
+                    if (pageElement.getLocatorType().equals(locatorType) && 
+                        pageElement.getLocatorValue().equals(locatorValue)) {
+                        elementExists = true;
+                        log.info("Element already exists in page object: {}", pageElement.getName());
+                        break;
+                    }
+                }
+            }
+            
+            // Add element if it doesn't exist
+            if (!elementExists) {
+                PageElement pageElement = PageElement.builder()
+                        .name(displayName)
+                        .type(elementType)
+                        .locatorType(locatorType)
+                        .locatorValue(locatorValue)
+                        .description("Element used in action: " + action.getType())
+                        .isList(false)
+                        .build();
+                
+                // Add element to page object
+                currentPageObject.addElement(pageElement);
+                log.info("Added element to page object: {}", pageElement.getName());
+                
+                // Also add an action for this element based on the action type
+                addActionForElement(pageElement, action, value);
+            }
+            
+        } catch (Exception e) {
+            log.warn("Error detecting element for action", e);
+        }
+    }
+    
+    /**
+     * Add an action for an element based on the action type
+     * @param element Page element
+     * @param action Action performed
+     * @param value Value (if applicable)
+     */
+    private void addActionForElement(PageElement element, Action action, String value) {
+        try {
+            // Determine action type
+            PageAction.ActionType actionType;
+            String actionName;
+            Map<String, String> parameters = null;
+            
+            switch (action.getType()) {
+                case CLICK:
+                    actionType = PageAction.ActionType.CLICK;
+                    actionName = "click" + capitalize(element.getName());
+                    break;
+                case TYPE:
+                    actionType = PageAction.ActionType.TYPE;
+                    actionName = "enter" + capitalize(element.getName());
+                    parameters = new HashMap<>();
+                    parameters.put("value", "Text to enter");
+                    break;
+                case SELECT:
+                    actionType = PageAction.ActionType.SELECT;
+                    actionName = "select" + capitalize(element.getName());
+                    parameters = new HashMap<>();
+                    parameters.put("option", "Option to select");
+                    break;
+                case HOVER:
+                    actionType = PageAction.ActionType.HOVER;
+                    actionName = "hoverOver" + capitalize(element.getName());
+                    break;
+                case WAIT:
+                    actionType = PageAction.ActionType.WAIT;
+                    actionName = "waitFor" + capitalize(element.getName());
+                    break;
+                default:
+                    actionType = PageAction.ActionType.CUSTOM;
+                    actionName = "interactWith" + capitalize(element.getName());
+                    break;
+            }
+            
+            // Create action using Lombok @Builder
+            PageAction pageAction = PageAction.builder()
+                    .name(actionName)
+                    .description("Perform " + action.getType() + " on " + element.getName())
+                    .type(actionType)
+                    .elementName(element.getName())
+                    .parameters(parameters)
+                    .returnsPage(true)
+                    .build();
+            
+            // Add action to page object
+            currentPageObject.addAction(pageAction);
+            log.info("Added action to page object: {}", pageAction.getName());
+            
+            // Add verification for the element
+            addVerificationForElement(element);
+            
+        } catch (Exception e) {
+            log.warn("Error adding action for element", e);
+        }
+    }
+    
+    /**
+     * Add verification for an element
+     * @param element Page element
+     */
+    private void addVerificationForElement(PageElement element) {
+        try {
+            String verificationName = "verify" + capitalize(element.getName()) + "IsPresent";
+            
+            // Check if verification already exists
+            if (currentPageObject.getVerifications() != null) {
+                for (PageVerification verification : currentPageObject.getVerifications()) {
+                    if (verification.getName().equals(verificationName)) {
+                        return; // Verification already exists
+                    }
+                }
+            }
+            
+            // Create verification using Lombok @Builder
+            PageVerification verification = PageVerification.builder()
+                    .name(verificationName)
+                    .description("Verify that " + element.getName() + " is present")
+                    .type(PageVerification.VerificationType.ELEMENT_PRESENT)
+                    .elementName(element.getName())
+                    .build();
+            
+            // Add verification to page object
+            currentPageObject.addVerification(verification);
+            log.info("Added verification to page object: {}", verification.getName());
+            
+        } catch (Exception e) {
+            log.warn("Error adding verification for element", e);
+        }
+    }
+    
+    /**
+     * Find element using locator
+     * @param driver WebDriver instance
+     * @param locator Element locator
+     * @return WebElement if found, null otherwise
+     */
+    private WebElement findElement(WebDriver driver, String locator) {
+        try {
+            if (locator.startsWith("id=")) {
+                return driver.findElement(By.id(locator.substring(3)));
+            } else if (locator.startsWith("name=")) {
+                return driver.findElement(By.name(locator.substring(5)));
+            } else if (locator.startsWith("css=")) {
+                return driver.findElement(By.cssSelector(locator.substring(4)));
+            } else if (locator.startsWith("xpath=")) {
+                return driver.findElement(By.xpath(locator.substring(6)));
+            } else if (locator.startsWith("linkText=")) {
+                return driver.findElement(By.linkText(locator.substring(9)));
+            } else {
+                // Try different locator strategies
+                try {
+                    return driver.findElement(By.id(locator));
+                } catch (Exception e) {
+                    try {
+                        return driver.findElement(By.name(locator));
+                    } catch (Exception e2) {
+                        try {
+                            return driver.findElement(By.cssSelector(locator));
+                        } catch (Exception e3) {
+                            try {
+                                return driver.findElement(By.xpath(locator));
+                            } catch (Exception e4) {
+                                return null;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Error finding element with locator: {}", locator, e);
+            return null;
+        }
+    }
+    
+    /**
+     * Generate XPath for an element
+     * @param element WebElement
+     * @return XPath locator
+     */
+    private String generateXPath(WebElement element) {
+        WebDriver driver = getDriver();
+        if (driver == null) {
+            return "";
+        }
+        
+        try {
+            // Use JavaScript to get XPath
+            JavascriptExecutor js = (JavascriptExecutor) driver;
+            return (String) js.executeScript(
+                "function getXPath(element) {" +
+                "    if (element.id !== '') return '//*[@id=\"' + element.id + '\"]';" +
+                "    if (element === document.body) return '/html/body';" +
+                "    var ix = 0;" +
+                "    var siblings = element.parentNode.childNodes;" +
+                "    for (var i = 0; i < siblings.length; i++) {" +
+                "        var sibling = siblings[i];" +
+                "        if (sibling === element) return getXPath(element.parentNode) + '/' + element.tagName.toLowerCase() + '[' + (ix + 1) + ']';" +
+                "        if (sibling.nodeType === 1 && sibling.tagName === element.tagName) ix++;" +
+                "    }" +
+                "}", element);
+        } catch (Exception e) {
+            log.warn("Error generating XPath", e);
+            
+            // Fallback to a simple XPath
+            String elementId = element.getAttribute("id");
+            String elementName = element.getAttribute("name");
+            String elementClass = element.getAttribute("class");
+            
+            if (elementId != null && !elementId.isEmpty()) {
+                return "//*[@id='" + elementId + "']";
+            } else if (elementName != null && !elementName.isEmpty()) {
+                return "//*[@name='" + elementName + "']";
+            } else if (elementClass != null && !elementClass.isEmpty()) {
+                return "//*[@class='" + elementClass + "']";
+            } else {
+                return "//unidentified-element";
+            }
+        }
+    }
+    
+    /**
+     * Generate a user-friendly name for an element
+     * @param element WebElement
+     * @param elementType Element type (tag name)
+     * @return User-friendly name
+     */
+    private String generateElementName(WebElement element, String elementType) {
+        String elementId = element.getAttribute("id");
+        String elementName = element.getAttribute("name");
+        String elementText = element.getText();
+        String elementPlaceholder = element.getAttribute("placeholder");
+        String elementValue = element.getAttribute("value");
+        String elementLabel = findLabelText(element);
+        
+        // Try to use the most informative attribute for the name
+        if (elementLabel != null && !elementLabel.isEmpty()) {
+            return elementLabel + " " + capitalize(elementType);
+        } else if (elementText != null && !elementText.isEmpty() && elementText.length() < 30) {
+            return elementText + " " + capitalize(elementType);
+        } else if (elementPlaceholder != null && !elementPlaceholder.isEmpty()) {
+            return elementPlaceholder + " " + capitalize(elementType);
+        } else if (elementValue != null && !elementValue.isEmpty() && !elementValue.matches("^\\s*$")) {
+            return elementValue + " " + capitalize(elementType);
+        } else if (elementName != null && !elementName.isEmpty()) {
+            // Clean up name (remove underscores, dashes, etc.)
+            String cleanName = elementName.replaceAll("[_\\-.]", " ");
+            return capitalize(cleanName) + " " + capitalize(elementType);
+        } else if (elementId != null && !elementId.isEmpty()) {
+            // Clean up ID (remove underscores, dashes, etc.)
+            String cleanId = elementId.replaceAll("[_\\-.]", " ");
+            return capitalize(cleanId) + " " + capitalize(elementType);
+        } else {
+            return "Unnamed " + capitalize(elementType);
+        }
+    }
+    
+    /**
+     * Find label text for an element
+     * @param element WebElement
+     * @return Label text if found, null otherwise
+     */
+    private String findLabelText(WebElement element) {
+        WebDriver driver = getDriver();
+        if (driver == null) {
+            return null;
+        }
+        
+        try {
+            String elementId = element.getAttribute("id");
+            if (elementId != null && !elementId.isEmpty()) {
+                List<WebElement> labels = driver.findElements(By.cssSelector("label[for='" + elementId + "']"));
+                if (!labels.isEmpty() && labels.get(0).getText() != null && !labels.get(0).getText().isEmpty()) {
+                    return labels.get(0).getText();
+                }
+            }
+            
+            // Check if element is wrapped in a label
+            WebElement parent = (WebElement) ((JavascriptExecutor) driver)
+                    .executeScript("return arguments[0].parentNode;", element);
+            
+            if (parent.getTagName().equalsIgnoreCase("label") && 
+                parent.getText() != null && !parent.getText().isEmpty()) {
+                return parent.getText();
+            }
+            
+            return null;
+        } catch (Exception e) {
+            log.warn("Error finding label text", e);
+            return null;
+        }
+    }
+    
+    /**
+     * Extract page name from URL
+     * @param url URL
+     * @return Page name
+     */
+    private String extractPageNameFromUrl(String url) {
+        if (url == null || url.isEmpty()) {
+            return "Unknown Page";
+        }
+        
+        try {
+            // Remove protocol and domain
+            String path = url.replaceFirst("^https?://[^/]+", "");
+            
+            // Remove query string and fragment
+            path = path.replaceFirst("\\?.*$", "").replaceFirst("#.*$", "");
+            
+            // Split path by slashes
+            String[] parts = path.split("/");
+            
+            // Use last non-empty part as page name
+            for (int i = parts.length - 1; i >= 0; i--) {
+                if (parts[i] != null && !parts[i].isEmpty()) {
+                    // Clean up and capitalize
+                    String pageName = parts[i].replaceAll("[_\\-.]", " ");
+                    return capitalize(pageName) + " Page";
+                }
+            }
+            
+            // If no suitable part found, use domain name
+            String domain = url.replaceFirst("^https?://", "").replaceFirst("/.*$", "");
+            return capitalize(domain) + " Home Page";
+        } catch (Exception e) {
+            log.warn("Error extracting page name from URL", e);
+            return "Unknown Page";
+        }
+    }
+    
+    /**
+     * Generate a key for identifying a page
+     * @param url URL
+     * @return Page key
+     */
+    private String generatePageKey(String url) {
+        if (url == null || url.isEmpty()) {
+            return "unknown-page";
+        }
+        
+        // Remove protocol
+        String key = url.replaceFirst("^https?://", "");
+        
+        // Remove query string and fragment
+        key = key.replaceFirst("\\?.*$", "").replaceFirst("#.*$", "");
+        
+        // Remove trailing slash
+        key = key.replaceFirst("/$", "");
+        
+        return key;
+    }
+    
+    /**
+     * Generate class name from page name
+     * @param pageName Page name
+     * @return Class name
+     */
+    private String generateClassName(String pageName) {
+        if (pageName == null || pageName.isEmpty()) {
+            return "UnknownPage";
+        }
+        
+        // Remove "Page" suffix if present - we'll add it back
+        if (pageName.endsWith(" Page")) {
+            pageName = pageName.substring(0, pageName.length() - 5);
+        }
+        
+        // Replace non-alphanumeric with spaces and split into words
+        String[] words = pageName.replaceAll("[^a-zA-Z0-9]", " ").trim().split("\\s+");
+        
+        StringBuilder className = new StringBuilder();
+        for (String word : words) {
+            if (!word.isEmpty()) {
+                className.append(Character.toUpperCase(word.charAt(0)))
+                       .append(word.substring(1).toLowerCase());
+            }
+        }
+        
+        // Add "Page" suffix if not already present
+        if (!className.toString().endsWith("Page")) {
+            className.append("Page");
+        }
+        
+        return className.toString();
+    }
+    
+    /**
+     * Capitalize a string
+     * @param str String to capitalize
+     * @return Capitalized string
+     */
+    private String capitalize(String str) {
+        if (str == null || str.isEmpty()) {
+            return str;
+        }
+        
+        // Split by non-alphanumeric characters and capitalize each word
+        String[] words = str.split("\\s+");
+        StringBuilder result = new StringBuilder();
+        
+        for (String word : words) {
+            if (word.length() > 0) {
+                result.append(Character.toUpperCase(word.charAt(0)));
+                if (word.length() > 1) {
+                    result.append(word.substring(1).toLowerCase());
+                }
+                result.append(" ");
+            }
+        }
+        
+        return result.toString().trim();
+    }
+    
+    /**
+     * Generate code for all page objects
+     */
+    private void generatePageObjectCode() {
+        log.info("Generating code for {} page objects", pageObjects.size());
+        
+        for (PageObjectModel pageObject : pageObjects.values()) {
+            try {
+                String code = pageObject.generateCode();
+                log.info("Generated code for page object: {}", pageObject.getName());
+                
+                // Store code in page object - no need for reflection since we can use Lombok's getters/setters
+                
+            } catch (Exception e) {
+                log.error("Error generating code for page object: {}", pageObject.getName(), e);
+            }
+        }
+    }
+    
+    /**
+     * Get all page objects detected during recording
+     * @return Map of page objects
+     */
+    public Map<String, PageObjectModel> getPageObjects() {
+        return Collections.unmodifiableMap(pageObjects);
+    }
+    
+    /**
+     * Get page object for current page
+     * @return Current page object
+     */
+    public PageObjectModel getCurrentPageObject() {
+        return currentPageObject;
+    }
+}
