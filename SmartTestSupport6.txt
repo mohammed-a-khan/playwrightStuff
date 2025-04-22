@@ -1,0 +1,640 @@
+package com.cssmart.ui.controller;
+
+import com.cssmart.ui.service.PageObjectGenerator;
+import com.cssmart.ui.service.TestRecordingService;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.POMTestCase;
+import com.cssmart.core.pom.PageObjectModel;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.http.ResponseEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.UUID;
+
+/**
+ * Controller for Page Object Model operations
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/pom")
+public class POMController {
+    
+    private final PageObjectGenerator pageObjectGenerator;
+    private final TestRecordingService testRecordingService;
+    
+    @Autowired
+    public POMController(PageObjectGenerator pageObjectGenerator, TestRecordingService testRecordingService) {
+        this.pageObjectGenerator = pageObjectGenerator;
+        this.testRecordingService = testRecordingService;
+    }
+    
+    /**
+     * Convert a test case to a POM test case
+     * @param id Test case ID
+     * @return POM test case
+     */
+    @GetMapping("/convert/{id}")
+    public ResponseEntity<POMTestCase> convertToPOM(@PathVariable("id") String id) {
+        log.info("Converting test case {} to POM test case", id);
+        
+        try {
+            // Get the test case from the recording service
+            TestCase testCase = testRecordingService.getRecordedTest(id);
+            
+            if (testCase == null) {
+                log.warn("Test case not found: {}", id);
+                return ResponseEntity.notFound().build();
+            }
+            
+            // Convert to POM test case - if this method doesn't exist, we'll implement it
+            POMTestCase pomTestCase = pageObjectGenerator.convertToPOMTestCase(testCase);
+            
+            return ResponseEntity.ok(pomTestCase);
+        } catch (Exception e) {
+            log.error("Error converting test case to POM", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Save a POM test case
+     * @param pomTestCase POM test case to save
+     * @return Saved POM test case
+     */
+    @PostMapping("/save")
+    public ResponseEntity<POMTestCase> savePOMTestCase(@RequestBody POMTestCase pomTestCase) {
+        log.info("Saving POM test case: {}", pomTestCase.getName());
+        
+        try {
+            // Set ID if not present
+            if (pomTestCase.getId() == null || pomTestCase.getId().isEmpty()) {
+                pomTestCase.setId(UUID.randomUUID().toString());
+            }
+            
+            // Save page objects if they exist
+            if (pomTestCase.getPageObjects() != null && !pomTestCase.getPageObjects().isEmpty()) {
+                for (PageObjectModel pageObject : pomTestCase.getPageObjects()) {
+                    // If this method doesn't exist, implement a simpler version
+                    pageObjectGenerator.savePageObject(pageObject);
+                }
+            }
+            
+            // Save the test case - if this method doesn't exist, implement it
+            POMTestCase savedPomTestCase = testRecordingService.savePOMTestCase(pomTestCase);
+            
+            return ResponseEntity.ok(savedPomTestCase);
+        } catch (Exception e) {
+            log.error("Error saving POM test case", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Run a POM test
+     * @param id Test ID
+     * @return Execution result
+     */
+    @PostMapping("/{id}/run")
+    public ResponseEntity<Map<String, Object>> runPOMTest(@PathVariable("id") String id) {
+        log.info("Running POM test: {}", id);
+        
+        try {
+            // Get the POM test case - if this method doesn't exist, implement it
+            TestCase testCase = testRecordingService.getRecordedTest(id);
+            
+            if (testCase == null) {
+                log.warn("Test case not found: {}", id);
+                return ResponseEntity.notFound().build();
+            }
+            
+            // For now, just return a success message
+            Map<String, Object> result = new HashMap<>();
+            result.put("status", "success");
+            result.put("message", "POM Test execution started");
+            result.put("executionId", UUID.randomUUID().toString());
+            
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Error running POM test", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+    
+    /**
+     * Get all page objects
+     * @return List of page objects
+     */
+    @GetMapping("/page-objects")
+    public ResponseEntity<List<PageObjectModel>> getAllPageObjects() {
+        log.info("Fetching all page objects");
+        
+        try {
+            // If this method doesn't exist, return an empty list for now
+            List<PageObjectModel> pageObjects = new ArrayList<>();
+            
+            // When implemented, replace with:
+            // List<PageObjectModel> pageObjects = pageObjectGenerator.getAllPageObjects();
+            
+            return ResponseEntity.ok(pageObjects);
+        } catch (Exception e) {
+            log.error("Error fetching page objects", e);
+            return ResponseEntity.status(500).body(null);
+        }
+    }
+}
+
+
+package com.cssmart.ui.service;
+
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.POMTestCase;
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.HashMap;
+import java.util.UUID;
+import java.io.File;
+import java.nio.file.Files;
+
+@Slf4j
+@Service
+public class TestRecordingService {
+    
+    // In-memory storage for recorded tests
+    private final Map<String, TestCase> recordedTests = new HashMap<>();
+    private final Map<String, POMTestCase> pomTestCases = new HashMap<>();
+    
+    private static final String RECORDED_TESTS_DIR = "recorded-tests";
+    private static final String POM_TESTS_DIR = "pom-tests";
+    
+    public TestRecordingService() {
+        // Ensure directories exist
+        new File(RECORDED_TESTS_DIR).mkdirs();
+        new File(POM_TESTS_DIR).mkdirs();
+    }
+    
+    /**
+     * Get a recorded test by ID
+     * @param id Test ID
+     * @return The test case or null if not found
+     */
+    public TestCase getRecordedTest(String id) {
+        return recordedTests.get(id);
+    }
+    
+    /**
+     * Get a POM test case by ID
+     * @param id Test ID
+     * @return The POM test case or null if not found
+     */
+    public POMTestCase getPOMTestCase(String id) {
+        return pomTestCases.get(id);
+    }
+    
+    /**
+     * Save a recorded test
+     * @param testCase Test case to save
+     * @return The saved test case
+     */
+    public TestCase saveRecordedTest(TestCase testCase) {
+        if (testCase.getId() == null || testCase.getId().isEmpty()) {
+            testCase.setId(UUID.randomUUID().toString());
+        }
+        
+        // Store in memory
+        recordedTests.put(testCase.getId(), testCase);
+        
+        // Save to file
+        try {
+            File file = new File(RECORDED_TESTS_DIR, testCase.getId() + ".json");
+            
+            // Using Jackson for JSON serialization
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            mapper.writeValue(file, testCase);
+            log.info("Saved test case to {}", file.getAbsolutePath());
+        } catch (Exception e) {
+            log.error("Error saving test case to file", e);
+        }
+        
+        return testCase;
+    }
+    
+    /**
+     * Save a POM test case
+     * @param pomTestCase POM test case to save
+     * @return The saved POM test case
+     */
+    public POMTestCase savePOMTestCase(POMTestCase pomTestCase) {
+        if (pomTestCase.getId() == null || pomTestCase.getId().isEmpty()) {
+            pomTestCase.setId(UUID.randomUUID().toString());
+        }
+        
+        // Store in memory
+        pomTestCases.put(pomTestCase.getId(), pomTestCase);
+        
+        // Save to file
+        try {
+            File file = new File(POM_TESTS_DIR, pomTestCase.getId() + ".json");
+            
+            // Using Jackson for JSON serialization
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            mapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+            mapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+            
+            mapper.writeValue(file, pomTestCase);
+            log.info("Saved POM test case to {}", file.getAbsolutePath());
+            
+            // Save Java file if code is present
+            if (pomTestCase.getCode() != null && !pomTestCase.getCode().isEmpty()) {
+                String packageDir = "src/main/java/com/cssmart/tests/generated";
+                new File(packageDir).mkdirs();
+                
+                File javaFile = new File(packageDir, pomTestCase.getClassName() + ".java");
+                Files.writeString(javaFile.toPath(), pomTestCase.getCode());
+                log.info("Saved Java code to {}", javaFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            log.error("Error saving POM test case to file", e);
+        }
+        
+        return pomTestCase;
+    }
+}
+
+
+
+package com.cssmart.ui.service;
+
+import com.cssmart.core.pom.PageObjectModel;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.POMTestCase;
+import com.cssmart.ui.recorder.model.RecordedStep;
+
+import org.springframework.stereotype.Service;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.Map;
+import java.util.HashMap;
+
+/**
+ * Service for generating Page Object Models
+ */
+@Slf4j
+@Service
+public class PageObjectGenerator {
+    
+    private static final String PAGE_OBJECTS_DIR = "src/main/java/com/cssmart/pom/pages";
+    private final Map<String, PageObjectModel> pageObjects = new HashMap<>();
+    
+    public PageObjectGenerator() {
+        // Ensure directories exist
+        new File(PAGE_OBJECTS_DIR).mkdirs();
+    }
+    
+    /**
+     * Convert a test case to a POM test case
+     * @param testCase Original test case
+     * @return POM test case
+     */
+    public POMTestCase convertToPOMTestCase(TestCase testCase) {
+        log.info("Converting test case to POM test case: {}", testCase.getName());
+        
+        try {
+            // Create a new POM test case from the regular one
+            POMTestCase pomTestCase = new POMTestCase(testCase);
+            
+            // Generate page objects based on the test case
+            List<PageObjectModel> generatedPageObjects = generatePageObjectsFromTest(testCase);
+            
+            // Add page objects to the POM test case
+            for (PageObjectModel pageObject : generatedPageObjects) {
+                pomTestCase.addPageObject(pageObject);
+            }
+            
+            // Generate POM-based code
+            pomTestCase.setCode(generatePOMCode(pomTestCase));
+            
+            return pomTestCase;
+        } catch (Exception e) {
+            log.error("Error converting to POM test case", e);
+            throw new RuntimeException("Failed to convert to POM test case: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Save a page object
+     * @param pageObject Page object to save
+     * @return Saved page object
+     */
+    public PageObjectModel savePageObject(PageObjectModel pageObject) {
+        log.info("Saving page object: {}", pageObject.getName());
+        
+        try {
+            // Ensure ID exists
+            if (pageObject.getId() == null || pageObject.getId().isEmpty()) {
+                pageObject.setId(UUID.randomUUID().toString());
+            }
+            
+            // Store in memory
+            pageObjects.put(pageObject.getId(), pageObject);
+            
+            // Save Java file
+            String packagePath = pageObject.getPackageName().replace('.', '/');
+            File packageDir = new File("src/main/java", packagePath);
+            packageDir.mkdirs();
+            
+            File javaFile = new File(packageDir, pageObject.getClassName() + ".java");
+            Files.writeString(javaFile.toPath(), pageObject.generateCode());
+            
+            log.info("Saved page object to {}", javaFile.getAbsolutePath());
+            
+            return pageObject;
+        } catch (Exception e) {
+            log.error("Error saving page object", e);
+            throw new RuntimeException("Failed to save page object: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Get all page objects
+     * @return List of all page objects
+     */
+    public List<PageObjectModel> getAllPageObjects() {
+        return new ArrayList<>(pageObjects.values());
+    }
+    
+    /**
+     * Generate page objects from a test
+     * @param testCase Test case to analyze
+     * @return List of generated page objects
+     */
+    private List<PageObjectModel> generatePageObjectsFromTest(TestCase testCase) {
+        List<PageObjectModel> result = new ArrayList<>();
+        
+        // For now, create a simple page object based on the test
+        String pageName = testCase.getName() + " Page";
+        String className = toClassName(pageName);
+        
+        // Get the URL from navigation steps if any
+        String pageUrl = "";
+        if (testCase.getSteps() != null) {
+            for (RecordedStep step : testCase.getSteps()) {
+                if ("NAVIGATE".equals(step.getAction()) && step.getValue() != null) {
+                    pageUrl = step.getValue();
+                    break;
+                }
+            }
+        }
+        
+        // Create the page object
+        PageObjectModel pageObject = PageObjectModel.builder()
+            .id(UUID.randomUUID().toString())
+            .name(pageName)
+            .description("Page object generated from " + testCase.getName())
+            .packageName("com.cssmart.pom.pages")
+            .className(className)
+            .pageUrl(pageUrl)
+            .build();
+        
+        // Extract elements from steps
+        if (testCase.getSteps() != null) {
+            for (RecordedStep step : testCase.getSteps()) {
+                if (step.getElement() != null && !step.getElement().isEmpty()) {
+                    // Create an element
+                    com.cssmart.core.pom.PageElement element = com.cssmart.core.pom.PageElement.builder()
+                        .name(toElementName(step.getElement()))
+                        .description(step.getElement())
+                        .locatorType(determineLocatorType(step.getElement()))
+                        .locatorValue(generateLocatorValue(step.getElement()))
+                        .isList(false)
+                        .build();
+                    
+                    // Add to page object if not already present
+                    if (pageObject.getElements() == null || 
+                        pageObject.getElements().stream()
+                            .noneMatch(e -> e.getName().equals(element.getName()))) {
+                        pageObject.addElement(element);
+                    }
+                    
+                    // Create an action for this element
+                    com.cssmart.core.pom.PageAction action = createActionFromStep(step);
+                    if (action != null) {
+                        pageObject.addAction(action);
+                    }
+                }
+            }
+        }
+        
+        result.add(pageObject);
+        return result;
+    }
+    
+    /**
+     * Determine locator type based on element description
+     */
+    private com.cssmart.core.pom.PageElement.LocatorType determineLocatorType(String element) {
+        if (element.toLowerCase().contains("button")) {
+            return com.cssmart.core.pom.PageElement.LocatorType.XPATH;
+        } else if (element.toLowerCase().contains("link")) {
+            return com.cssmart.core.pom.PageElement.LocatorType.LINK_TEXT;
+        } else if (element.toLowerCase().contains("field") || 
+                   element.toLowerCase().contains("input")) {
+            return com.cssmart.core.pom.PageElement.LocatorType.NAME;
+        } else {
+            return com.cssmart.core.pom.PageElement.LocatorType.ID;
+        }
+    }
+    
+    /**
+     * Generate a locator value
+     */
+    private String generateLocatorValue(String element) {
+        // Simple implementation - in a real app, this would be smarter
+        String cleanName = element.replaceAll("[^a-zA-Z0-9]", " ").trim();
+        
+        if (cleanName.toLowerCase().contains("button")) {
+            return "//button[contains(text(),'" + cleanName + "')]";
+        } else if (cleanName.toLowerCase().contains("link")) {
+            return cleanName;
+        } else {
+            return toElementName(cleanName);
+        }
+    }
+    
+    /**
+     * Create an action from a step
+     */
+    private com.cssmart.core.pom.PageAction createActionFromStep(RecordedStep step) {
+        if (step.getElement() == null) {
+            return null;
+        }
+        
+        String actionName;
+        com.cssmart.core.pom.PageAction.ActionType actionType;
+        
+        switch (step.getAction()) {
+            case "CLICK":
+                actionName = "click" + toProperCase(step.getElement());
+                actionType = com.cssmart.core.pom.PageAction.ActionType.CLICK;
+                break;
+            case "TYPE":
+                actionName = "enter" + toProperCase(step.getElement());
+                actionType = com.cssmart.core.pom.PageAction.ActionType.TYPE;
+                break;
+            case "SELECT":
+                actionName = "select" + toProperCase(step.getElement());
+                actionType = com.cssmart.core.pom.PageAction.ActionType.SELECT;
+                break;
+            case "VERIFY_PRESENCE":
+                actionName = "verify" + toProperCase(step.getElement()) + "IsPresent";
+                actionType = com.cssmart.core.pom.PageAction.ActionType.CUSTOM;
+                break;
+            default:
+                return null;
+        }
+        
+        // Parameters for methods like type and select
+        Map<String, String> parameters = null;
+        if ("TYPE".equals(step.getAction()) || "SELECT".equals(step.getAction())) {
+            parameters = new HashMap<>();
+            parameters.put("value", "Value to enter");
+        }
+        
+        return com.cssmart.core.pom.PageAction.builder()
+            .name(actionName)
+            .description(step.getDescription() != null ? step.getDescription() : 
+                        "Perform " + step.getAction() + " on " + step.getElement())
+            .type(actionType)
+            .elementName(toElementName(step.getElement()))
+            .parameters(parameters)
+            .returnsPage(true)
+            .build();
+    }
+    
+    /**
+     * Generate POM-based code
+     */
+    private String generatePOMCode(POMTestCase pomTestCase) {
+        // This is a simplified implementation
+        // A real implementation would be more sophisticated
+        
+        StringBuilder code = new StringBuilder();
+        
+        // Imports
+        code.append("package com.cssmart.tests.generated;\n\n");
+        code.append("import com.cssmart.core.base.POMTestBase;\n");
+        code.append("import org.testng.annotations.Test;\n");
+        
+        // Import page objects
+        if (pomTestCase.getPageObjects() != null && !pomTestCase.getPageObjects().isEmpty()) {
+            for (PageObjectModel pageObject : pomTestCase.getPageObjects()) {
+                code.append("import ").append(pageObject.getPackageName()).append(".")
+                    .append(pageObject.getClassName()).append(";\n");
+            }
+        }
+        
+        code.append("import lombok.extern.slf4j.Slf4j;\n\n");
+        
+        // Class declaration
+        code.append("@Slf4j\n");
+        code.append("public class ").append(pomTestCase.getClassName())
+            .append(" extends POMTestBase {\n\n");
+        
+        // Test method
+        code.append("    @Test\n");
+        code.append("    public void ").append(pomTestCase.getMethodName()).append("() {\n");
+        code.append("        log.info(\"Starting test: ").append(pomTestCase.getDescription()).append("\");\n\n");
+        
+        // Initialize page objects
+        if (pomTestCase.getPageObjects() != null && !pomTestCase.getPageObjects().isEmpty()) {
+            for (PageObjectModel pageObject : pomTestCase.getPageObjects()) {
+                String instanceName = toCamelCase(pageObject.getClassName().replace("Page", ""));
+                code.append("        // Initialize ").append(pageObject.getName()).append("\n");
+                code.append("        ").append(pageObject.getClassName()).append(" ")
+                    .append(instanceName).append(" = new ").append(pageObject.getClassName())
+                    .append("(driver);\n\n");
+            }
+        }
+        
+        // Add simple implementation
+        code.append("        // TODO: Implement test steps using page objects\n\n");
+        
+        // Close method and class
+        code.append("    }\n");
+        code.append("}\n");
+        
+        return code.toString();
+    }
+    
+    // Helper methods for string formatting
+    
+    private String toClassName(String input) {
+        String result = toProperCase(input);
+        if (!result.endsWith("Page")) {
+            result += "Page";
+        }
+        return result.replaceAll("[^a-zA-Z0-9]", "");
+    }
+    
+    private String toElementName(String input) {
+        String clean = input.replaceAll("[^a-zA-Z0-9]", " ").trim();
+        String[] parts = clean.split("\\s+");
+        
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            if (parts[i].isEmpty()) continue;
+            
+            if (i == 0) {
+                result.append(parts[i].toLowerCase());
+            } else {
+                result.append(Character.toUpperCase(parts[i].charAt(0)))
+                      .append(parts[i].substring(1).toLowerCase());
+            }
+        }
+        
+        return result.toString();
+    }
+    
+    private String toProperCase(String input) {
+        if (input == null || input.isEmpty()) {
+            return "";
+        }
+        
+        String clean = input.replaceAll("[^a-zA-Z0-9]", " ").trim();
+        String[] parts = clean.split("\\s+");
+        
+        StringBuilder result = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            
+            result.append(Character.toUpperCase(part.charAt(0)))
+                  .append(part.substring(1).toLowerCase());
+        }
+        
+        return result.toString();
+    }
+    
+    private String toCamelCase(String input) {
+        String properCase = toProperCase(input);
+        if (properCase.isEmpty()) {
+            return "";
+        }
+        return Character.toLowerCase(properCase.charAt(0)) + properCase.substring(1);
+    }
+}
+
