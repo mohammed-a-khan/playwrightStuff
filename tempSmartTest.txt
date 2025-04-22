@@ -143,6 +143,25 @@ public class TestRecorder {
         if (driver instanceof JavascriptExecutor) {
             JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
             
+            // Create a script that periodically checks if recorder is active
+            String pageMonitorScript = 
+                "var csRecorderCheckInterval = setInterval(function() {\n" +
+                "    var isActive = typeof window._csRecorderData !== 'undefined' && window._csRecorderData.active === true;\n" +
+                "    if (!isActive) {\n" +
+                "        console.log('CS Smart Recorder not found or inactive, signaling for reinjection');\n" +
+                "        // Create a custom event to signal Java code\n" +
+                "        var event = new CustomEvent('csRecorderInactive');\n" +
+                "        document.dispatchEvent(event);\n" +
+                "    }\n" +
+                "}, 2000);\n";  // Check every 2 seconds
+            
+            try {
+                jsExecutor.executeScript(pageMonitorScript);
+                log.debug("Recorder monitor script injected");
+            } catch (Exception e) {
+                log.debug("Could not inject recorder monitor: {}", e.getMessage());
+            }
+            
             // Set up a MutationObserver to detect URL changes for SPAs
             String urlChangeDetectionScript = 
                 "var csLastUrl = location.href;\n" +
@@ -189,8 +208,55 @@ public class TestRecorder {
                 "    }, 100);\n" +
                 "});\n";
             
-            jsExecutor.executeScript(urlChangeDetectionScript);
-            log.info("URL change detection script injected");
+            try {
+                jsExecutor.executeScript(urlChangeDetectionScript);
+                log.info("URL change detection script injected");
+            } catch (Exception e) {
+                log.warn("Could not inject URL change detector: {}", e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * Check for domain change or if the recorder needs to be reinjected
+     */
+    public void checkForDomainChange() {
+        if (driver == null) return;
+        
+        try {
+            // First check if recorder is still active
+            Boolean isRecorderActive = false;
+            
+            if (driver instanceof JavascriptExecutor) {
+                try {
+                    JavascriptExecutor jsExecutor = (JavascriptExecutor) driver;
+                    isRecorderActive = (Boolean) jsExecutor.executeScript(
+                        "return typeof window._csRecorderData !== 'undefined' && window._csRecorderData.active === true;"
+                    );
+                } catch (Exception e) {
+                    log.debug("Could not check recorder status: {}", e.getMessage());
+                }
+            }
+            
+            // If recorder is not active, reinject regardless of domain
+            if (Boolean.FALSE.equals(isRecorderActive)) {
+                log.info("Recorder not active on current page, reinjecting");
+                setupScriptInjection();
+                return;
+            }
+            
+            // Otherwise check for domain change
+            String url = driver.getCurrentUrl();
+            URL parsedUrl = new URL(url);
+            String newDomain = parsedUrl.getHost();
+            
+            if (!newDomain.equals(currentDomain)) {
+                log.info("Domain changed from {} to {}, reinjecting recorder", currentDomain, newDomain);
+                currentDomain = newDomain;
+                setupScriptInjection();
+            }
+        } catch (Exception e) {
+            log.warn("Could not check for domain change: {}", e.getMessage());
         }
     }
     
@@ -270,6 +336,12 @@ public class TestRecorder {
                 "        recordEvent('SUBMIT', selector, '');\n" +
                 "    }, true);\n" +
                 "    \n" +
+                "    // Special handling for JSP page loads\n" +
+                "    document.addEventListener('DOMContentLoaded', function() {\n" +
+                "        console.log('DOM content loaded, recording navigation');\n" +
+                "        recordEvent('NAVIGATE', 'page', window.location.href);\n" +
+                "    });\n" +
+                "    \n" +
                 "    // Record page load\n" +
                 "    recordEvent('NAVIGATE', 'page', window.location.href);\n" +
                 "}\n" +
@@ -319,7 +391,13 @@ public class TestRecorder {
                 
                 // Also add to page load and beforeunload events
                 "window.addEventListener('load', function() {\n" +
-                "    setTimeout(initCSRecorder, 500);\n" +
+                "    setTimeout(function() {\n" +
+                "        // Check if recorder is active after page load\n" +
+                "        if (!window._csRecorderData || !window._csRecorderData.active) {\n" +
+                "            console.log('Recorder not active after page load, reinitializing');\n" +
+                "            initCSRecorder();\n" +
+                "        }\n" +
+                "    }, 500);\n" +
                 "});\n" +
                 
                 // Before page unload, record navigation intent
@@ -363,33 +441,55 @@ public class TestRecorder {
                 "        console.log('Form submission detected to: ' + action);\n" +
                 "        recordEvent('FORM_SUBMIT', selector, action);\n" +
                 "        \n" +
-                "        return this.originalSubmit();\n" +
+                "        // Add a short delay to allow event to be sent before navigation\n" +
+                "        setTimeout(function() {\n" +
+                "            form.originalSubmit();\n" +
+                "        }, 100);\n" +
+                "        return false; // Prevent immediate submission\n" +
                 "    };\n" +
                 "}\n"
             );
             
-            log.info("Recorder script injected successfully");
-        }
-    }
-    
-    /**
-     * Check for domain change and reinject recorder if needed
-     */
-    public void checkForDomainChange() {
-        if (driver == null) return;
-        
-        try {
-            String url = driver.getCurrentUrl();
-            URL parsedUrl = new URL(url);
-            String newDomain = parsedUrl.getHost();
+            // Add special handler for JSP pages that use full page reload
+            jsExecutor.executeScript(
+                "// Detect JSP page navigation via forms\n" +
+                "document.addEventListener('submit', function(e) {\n" +
+                "    var form = e.target;\n" +
+                "    var action = form.action || window.location.href;\n" +
+                "    \n" +
+                "    // Check if it's likely a JSP form (action contains .jsp or no extension)\n" +
+                "    if (action.indexOf('.jsp') > -1 || action.indexOf('.do') > -1 || \n" +
+                "        action.indexOf('.action') > -1 || !action.match(/\\.[a-zA-Z0-9]+$/)) {\n" +
+                "        console.log('JSP form submission detected to: ' + action);\n" +
+                "        // Store in sessionStorage to detect after page reload\n" +
+                "        sessionStorage.setItem('csRecorderLastNavigation', JSON.stringify({\n" +
+                "            type: 'JSP_FORM_SUBMIT',\n" +
+                "            timestamp: Date.now(),\n" +
+                "            url: action\n" +
+                "        }));\n" +
+                "    }\n" +
+                "});\n" +
+                
+                "// Check on page load if we came from a JSP navigation\n" +
+                "document.addEventListener('DOMContentLoaded', function() {\n" +
+                "    var lastNav = sessionStorage.getItem('csRecorderLastNavigation');\n" +
+                "    if (lastNav) {\n" +
+                "        try {\n" +
+                "            var navData = JSON.parse(lastNav);\n" +
+                "            // Only use if it's recent (within last 5 seconds)\n" +
+                "            if (Date.now() - navData.timestamp < 5000) {\n" +
+                "                console.log('Detected post-JSP navigation reload');\n" +
+                "                // Clear it so we don't reuse it\n" +
+                "                sessionStorage.removeItem('csRecorderLastNavigation');\n" +
+                "            }\n" +
+                "        } catch (e) {\n" +
+                "            console.error('Error parsing last navigation data', e);\n" +
+                "        }\n" +
+                "    }\n" +
+                "});\n"
+            );
             
-            if (!newDomain.equals(currentDomain)) {
-                log.info("Domain changed from {} to {}, reinjecting recorder", currentDomain, newDomain);
-                currentDomain = newDomain;
-                setupScriptInjection();
-            }
-        } catch (Exception e) {
-            log.warn("Could not check for domain change: {}", e.getMessage());
+            log.info("Recorder script injected successfully");
         }
     }
     
@@ -435,16 +535,21 @@ public class TestRecorder {
             return;
         }
         
-        // Check if this is a navigation action and we should check for domain change
-        if ("NAVIGATE".equals(actionType) || "XHR_NAVIGATE".equals(actionType) || 
-            "FORM_SUBMIT".equals(actionType) || "NAVIGATE_INTENT".equals(actionType)) {
-            // Schedule a domain check after a short delay to allow navigation to complete
+        // Check if this is a navigation-related action
+        if ("NAVIGATE".equals(actionType) || 
+            "XHR_NAVIGATE".equals(actionType) || 
+            "FORM_SUBMIT".equals(actionType) || 
+            "NAVIGATE_INTENT".equals(actionType) ||
+            "SUBMIT".equals(actionType) ||
+            "JSP_FORM_SUBMIT".equals(actionType)) {  // Added JSP form submit
+            
+            // Schedule a check after a short delay to allow navigation to complete
             new Thread(() -> {
                 try {
-                    Thread.sleep(1000);
-                    checkForDomainChange();
+                    Thread.sleep(1000);  // Wait for navigation to complete
+                    checkForDomainChange();  // This now checks recorder status too
                 } catch (Exception e) {
-                    log.warn("Error in domain change check: {}", e.getMessage());
+                    log.warn("Error in navigation check: {}", e.getMessage());
                 }
             }).start();
         }
@@ -495,6 +600,8 @@ public class TestRecorder {
                 return "AJAX navigation to " + value;
             case "FORM_SUBMIT":
                 return "Submit form " + element + " to " + value;
+            case "JSP_FORM_SUBMIT":
+                return "Submit JSP form " + element + " to " + value;
             case "SUBMIT":
                 return "Submit form " + element;
             default:
@@ -584,7 +691,9 @@ public class TestRecorder {
                     .append(step.getElement()).append("\");\n");
                 code.append("        Assert.assertTrue(element.isDisplayed(), \"")
                     .append(step.getElement()).append(" should be present\");\n");
-            } else if ("SUBMIT".equals(step.getAction()) || "FORM_SUBMIT".equals(step.getAction())) {
+            } else if ("SUBMIT".equals(step.getAction()) || 
+                      "FORM_SUBMIT".equals(step.getAction()) ||
+                      "JSP_FORM_SUBMIT".equals(step.getAction())) {
                 code.append("        WebElement element = elementFinder.findElement(\"")
                     .append(step.getElement()).append("\");\n");
                 code.append("        element.submit();\n");
