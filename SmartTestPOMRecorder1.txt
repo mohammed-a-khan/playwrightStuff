@@ -1,0 +1,705 @@
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ai.engine.AIEngine;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+import com.cssmart.ui.recorder.model.RecorderMessage;
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.service.TestRecordingService;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * WebSocket handler for the test recorder
+ * Updated to use TestRecorder for browser initialization
+ */
+@Slf4j
+@Component
+public class TestRecorderHandler extends TextWebSocketHandler {
+    
+    private final ObjectMapper objectMapper;
+    private final Map<String, TestRecorder> recorders;
+    private final AIEngine aiEngine;
+    private final TestRecordingService testRecordingService;
+    
+    @Autowired
+    public TestRecorderHandler(ObjectMapper objectMapper, AIEngine aiEngine, TestRecordingService testRecordingService) {
+        this.objectMapper = objectMapper;
+        this.recorders = new ConcurrentHashMap<>();
+        this.aiEngine = aiEngine;
+        this.testRecordingService = testRecordingService;
+    }
+    
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        log.info("WebSocket connection established: {}", session.getId());
+    }
+    
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        String sessionId = session.getId();
+        RecorderMessage msg = objectMapper.readValue(message.getPayload(), RecorderMessage.class);
+        
+        log.debug("Received recorder message: {}", msg.getType());
+        
+        switch (msg.getType()) {
+            case "START_RECORDING":
+                startRecording(session, sessionId, msg.getData());
+                break;
+            case "STOP_RECORDING":
+                stopRecording(session, sessionId);
+                break;
+            case "ACTION":
+                recordAction(session, sessionId, msg.getData());
+                break;
+            default:
+                log.warn("Unknown message type: {}", msg.getType());
+                sendError(session, "Unknown message type: " + msg.getType());
+                break;
+        }
+    }
+    
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        String sessionId = session.getId();
+        TestRecorder recorder = recorders.remove(sessionId);
+        
+        // Clean up browser if session closes unexpectedly
+        if (recorder != null && recorder.isRecording()) {
+            try {
+                log.info("Stopping recording due to WebSocket connection close");
+                recorder.stopRecording();
+            } catch (Exception e) {
+                log.error("Error stopping recording: {}", e.getMessage());
+            }
+        }
+        
+        log.info("WebSocket connection closed: {}", sessionId);
+    }
+    
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) {
+        log.error("WebSocket transport error for session {}: {}", 
+                session.getId(), exception.getMessage(), exception);
+    }
+    
+    /**
+     * Start a new recording session using TestRecorder for browser control
+     */
+    @SuppressWarnings("unchecked")
+    private void startRecording(WebSocketSession session, String sessionId, Object configData) throws Exception {
+        log.info("Starting recording session for: {}", sessionId);
+        
+        // Get recording configuration
+        String browserType = "chrome"; // Default
+        String url = "https://example.com"; // Default
+        boolean headless = false; // Default
+        boolean pomEnabled = false; // Default
+        
+        if (configData != null) {
+            try {
+                Map<String, Object> config = (Map<String, Object>) configData;
+                log.info("Received configuration: {}", config);
+                
+                if (config.containsKey("browser")) {
+                    browserType = (String) config.get("browser");
+                }
+                if (config.containsKey("url")) {
+                    url = (String) config.get("url");
+                }
+                if (config.containsKey("headless")) {
+                    // Handle different types that might come from the frontend
+                    Object headlessValue = config.get("headless");
+                    if (headlessValue instanceof Boolean) {
+                        headless = (Boolean) headlessValue;
+                    } else if (headlessValue instanceof String) {
+                        headless = Boolean.parseBoolean((String) headlessValue);
+                    }
+                }
+                if (config.containsKey("pomEnabled")) {
+                    // Handle different types that might come from the frontend
+                    Object pomEnabledValue = config.get("pomEnabled");
+                    if (pomEnabledValue instanceof Boolean) {
+                        pomEnabled = (Boolean) pomEnabledValue;
+                    } else if (pomEnabledValue instanceof String) {
+                        pomEnabled = Boolean.parseBoolean((String) pomEnabledValue);
+                    }
+                }
+                
+                log.info("Recording configuration - browser: {}, url: {}, headless: {}, pomEnabled: {}", 
+                        browserType, url, headless, pomEnabled);
+            } catch (Exception e) {
+                log.error("Error parsing recording configuration: {}", e.getMessage(), e);
+                sendError(session, "Error parsing configuration: " + e.getMessage());
+                return;
+            }
+        } else {
+            log.warn("No configuration received, using defaults");
+        }
+        
+        // Create the appropriate type of recorder based on configuration
+        TestRecorder recorder;
+        if (pomEnabled) {
+            log.info("Creating POMTestRecorder");
+            recorder = new POMTestRecorder();
+        } else {
+            log.info("Creating standard TestRecorder");
+            recorder = new TestRecorder();
+        }
+        
+        try {
+            // Start recording with browser initialization
+            log.info("Initializing browser {} and navigating to {}", browserType, url);
+            recorder.startRecording(browserType, url);
+            
+            // Store recorder for this session
+            recorders.put(sessionId, recorder);
+            
+            // Send confirmation to client
+            sendMessage(session, new RecorderMessage("RECORDING_STARTED", null));
+            
+            // If there's a navigation step recorded by the TestRecorder, send it to client
+            RecordedStep firstStep = recorder.getLastRecordedStep();
+            if (firstStep != null) {
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", firstStep));
+            }
+            
+            log.info("Recording started successfully with browser initialized");
+        } catch (Exception e) {
+            log.error("Failed to start recording with browser: {}", e.getMessage(), e);
+            sendError(session, "Failed to start recording: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Stop recording and close browser
+     */
+    private void stopRecording(WebSocketSession session, String sessionId) throws Exception {
+        log.info("Stopping recording session for: {}", sessionId);
+        
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            try {
+                // Stop recording which will close the browser
+                TestCase testCase = recorder.stopRecording();
+                
+                // Apply enhancements if needed
+                testCase = aiEngine.enhanceTestCase(testCase);
+                
+                // Store in recording service
+                testRecordingService.saveRecordedTest(testCase);
+                
+                // Send test case to client
+                sendMessage(session, new RecorderMessage("TEST_CASE", testCase));
+                
+                // If using POM recorder, send page objects too
+                if (recorder instanceof POMTestRecorder) {
+                    POMTestRecorder pomRecorder = (POMTestRecorder) recorder;
+                    List<PageObjectModel> pageObjects = pomRecorder.getPageObjects();
+                    
+                    if (pageObjects != null && !pageObjects.isEmpty()) {
+                        for (PageObjectModel pageObject : pageObjects) {
+                            sendMessage(session, new RecorderMessage("PAGE_OBJECT_DETECTED", pageObject));
+                        }
+                    }
+                }
+                
+                log.info("Recording stopped successfully, browser closed");
+            } catch (Exception e) {
+                log.error("Error stopping recording: {}", e.getMessage(), e);
+                sendError(session, "Error stopping recording: " + e.getMessage());
+            } finally {
+                // Clean up
+                recorders.remove(sessionId);
+            }
+        } else {
+            log.warn("No active recorder found for session: {}", sessionId);
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Record an action in the current session
+     */
+    @SuppressWarnings("unchecked")
+    private void recordAction(WebSocketSession session, String sessionId, Object actionData) throws Exception {
+        TestRecorder recorder = recorders.get(sessionId);
+        if (recorder != null) {
+            try {
+                Map<String, String> data = (Map<String, String>) actionData;
+                
+                String actionType = data.get("action");
+                String element = data.get("element");
+                String value = data.get("value");
+                
+                log.debug("Recording action: {}, element: {}, value: {}", actionType, element, value);
+                
+                // Convert to Action object
+                Action action = new Action(ActionType.valueOf(actionType));
+                action.setValue(value);
+                
+                // Record in the TestRecorder
+                recorder.recordAction(action, element, value);
+                
+                // Get the step that was recorded and send it back to client
+                RecordedStep step = recorder.getLastRecordedStep();
+                sendMessage(session, new RecorderMessage("STEP_RECORDED", step));
+                
+            } catch (Exception e) {
+                log.error("Error recording action", e);
+                sendError(session, "Failed to record action: " + e.getMessage());
+            }
+        } else {
+            log.warn("No active recorder found for session: {}", sessionId);
+            sendError(session, "No active recording session found");
+        }
+    }
+    
+    /**
+     * Send a message to the WebSocket client
+     */
+    private void sendMessage(WebSocketSession session, RecorderMessage msg) {
+        try {
+            String json = objectMapper.writeValueAsString(msg);
+            session.sendMessage(new TextMessage(json));
+        } catch (IOException e) {
+            log.error("Error sending message to WebSocket client", e);
+        }
+    }
+    
+    /**
+     * Send an error message to the WebSocket client
+     */
+    private void sendError(WebSocketSession session, String errorMessage) {
+        log.warn("Sending error to client: {}", errorMessage);
+        sendMessage(session, new RecorderMessage("ERROR", errorMessage));
+    }
+}
+
+package com.cssmart.ui.recorder;
+
+import com.cssmart.ui.recorder.model.RecordedStep;
+import com.cssmart.ui.recorder.model.TestCase;
+import com.cssmart.ui.recorder.model.PageObjectModel;
+import com.cssmart.ui.recorder.model.PageElement;
+import com.cssmart.ai.engine.model.Action;
+import com.cssmart.ai.engine.model.ActionType;
+
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebElement;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.time.LocalDateTime;
+
+/**
+ * Enhanced test recorder with Page Object Model support
+ */
+@Slf4j
+public class POMTestRecorder extends TestRecorder {
+    
+    private List<PageObjectModel> pageObjects;
+    private Map<String, String> currentPage;
+    
+    public POMTestRecorder() {
+        super(); // Initialize parent TestRecorder
+        this.pageObjects = new ArrayList<>();
+        this.currentPage = new HashMap<>();
+    }
+    
+    @Override
+    public void startRecording(String browserType, String url) {
+        log.info(">>> POMTestRecorder.startRecording called with browser: {}, url: {}", browserType, url);
+        
+        // Call the parent method to initialize browser and basic recording
+        super.startRecording(browserType, url);
+        
+        // Initialize POM-specific components
+        this.pageObjects = new ArrayList<>();
+        this.currentPage.put("url", url);
+        this.currentPage.put("title", "HomePage");
+        
+        log.info("POM recording started with session ID: {}", getSessionId());
+        log.info("<<< POMTestRecorder.startRecording completed");
+    }
+    
+    @Override
+    public TestCase stopRecording() {
+        log.info(">>> POMTestRecorder.stopRecording called");
+        
+        // First, extract page objects from recorded steps
+        extractPageObjects();
+        
+        // Then, call parent to stop recording and get test case
+        TestCase testCase = super.stopRecording();
+        
+        log.info("POM recording stopped, extracted {} page objects", pageObjects.size());
+        log.info("<<< POMTestRecorder.stopRecording completed");
+        
+        return testCase;
+    }
+    
+    @Override
+    public void recordAction(Action action, String element, String value) {
+        log.info(">>> POMTestRecorder.recordAction called with action: {}, element: {}", action.getType(), element);
+        
+        // Call parent to record the action
+        super.recordAction(action, element, value);
+        
+        // Analyze the page after each action to detect new page objects
+        if (getDriver() != null) {
+            analyzeCurrentPage();
+        }
+        
+        log.info("<<< POMTestRecorder.recordAction completed");
+    }
+    
+    /**
+     * Get the list of detected page objects
+     */
+    public List<PageObjectModel> getPageObjects() {
+        return this.pageObjects;
+    }
+    
+    /**
+     * Extract page objects from recorded steps
+     */
+    private void extractPageObjects() {
+        log.info("Extracting page objects from recorded steps");
+        
+        try {
+            // Get current steps
+            List<RecordedStep> steps = getSteps();
+            if (steps.isEmpty()) {
+                log.info("No steps to analyze for page objects");
+                return;
+            }
+            
+            // Analyze steps to identify pages
+            Map<String, List<RecordedStep>> stepsByPage = groupStepsByPage(steps);
+            
+            // For each page, create a page object
+            for (Map.Entry<String, List<RecordedStep>> entry : stepsByPage.entrySet()) {
+                String pageName = entry.getKey();
+                List<RecordedStep> pageSteps = entry.getValue();
+                
+                PageObjectModel pageObject = createPageObject(pageName, pageSteps);
+                if (pageObject != null && !pageObject.getElements().isEmpty()) {
+                    log.info("Created page object {} with {} elements", 
+                            pageObject.getName(), pageObject.getElements().size());
+                    pageObjects.add(pageObject);
+                }
+            }
+            
+            log.info("Extracted {} page objects", pageObjects.size());
+        } catch (Exception e) {
+            log.error("Error extracting page objects: {}", e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Group recorded steps by page
+     */
+    private Map<String, List<RecordedStep>> groupStepsByPage(List<RecordedStep> steps) {
+        Map<String, List<RecordedStep>> stepsByPage = new HashMap<>();
+        String currentPage = "HomePage";
+        
+        for (RecordedStep step : steps) {
+            // If this is a navigation action, it might indicate a new page
+            if ("NAVIGATE".equals(step.getAction())) {
+                currentPage = "HomePage"; // Default for first navigation
+                
+                // Extract page name from URL
+                String url = step.getValue();
+                if (url != null && !url.isEmpty()) {
+                    // Try to derive a page name from the URL path
+                    try {
+                        java.net.URL parsedUrl = new java.net.URL(url);
+                        String path = parsedUrl.getPath();
+                        if (path != null && !path.isEmpty() && !"/".equals(path)) {
+                            // Use last part of path as page name
+                            String[] pathParts = path.split("/");
+                            String lastPart = pathParts[pathParts.length - 1];
+                            if (!lastPart.isEmpty()) {
+                                // Convert to PascalCase for page name
+                                currentPage = toPascalCase(lastPart) + "Page";
+                            }
+                        }
+                    } catch (Exception e) {
+                        log.warn("Error parsing URL for page name: {}", e.getMessage());
+                    }
+                }
+            }
+            
+            // Add step to current page
+            stepsByPage.computeIfAbsent(currentPage, k -> new ArrayList<>()).add(step);
+        }
+        
+        return stepsByPage;
+    }
+    
+    /**
+     * Create a page object model from steps
+     */
+    private PageObjectModel createPageObject(String pageName, List<RecordedStep> steps) {
+        PageObjectModel pageObject = new PageObjectModel();
+        pageObject.setName(pageName);
+        pageObject.setClassName(pageName);
+        pageObject.setElements(new ArrayList<>());
+        
+        // Extract unique elements from steps
+        Map<String, PageElement> elementMap = new HashMap<>();
+        
+        for (RecordedStep step : steps) {
+            String elementName = step.getElement();
+            
+            // Skip steps without element information
+            if (elementName == null || elementName.isEmpty() || "NAVIGATE".equals(step.getAction())) {
+                continue;
+            }
+            
+            // Create or update element
+            if (!elementMap.containsKey(elementName)) {
+                PageElement element = new PageElement();
+                element.setName(elementName);
+                element.setLocator("cssSelector");  // Default locator type
+                element.setValue(elementName);      // Use element name as selector by default
+                elementMap.put(elementName, element);
+            }
+            
+            // Note: In a real implementation, we would use Selenium to find 
+            // better locators for elements, but that requires page analysis
+        }
+        
+        // Add all elements to page object
+        pageObject.getElements().addAll(elementMap.values());
+        
+        return pageObject;
+    }
+    
+    /**
+     * Analyze current page to identify elements
+     */
+    private void analyzeCurrentPage() {
+        try {
+            if (getDriver() == null) {
+                log.warn("WebDriver is null, cannot analyze page");
+                return;
+            }
+            
+            // Get current URL and title
+            String url = getDriver().getCurrentUrl();
+            String title = getDriver().getTitle();
+            
+            // Check if we've navigated to a new page
+            if (!url.equals(currentPage.get("url"))) {
+                // Page has changed, analyze it
+                log.info("New page detected: {} ({})", title, url);
+                
+                // Update current page info
+                currentPage.put("url", url);
+                currentPage.put("title", title);
+                
+                // Extract page name from title or URL
+                String pageName = extractPageName(title, url);
+                
+                // Create a new page object for this page
+                PageObjectModel pageObject = new PageObjectModel();
+                pageObject.setName(pageName);
+                pageObject.setClassName(pageName);
+                pageObject.setElements(new ArrayList<>());
+                
+                // Find key elements on the page
+                List<PageElement> elements = findPageElements();
+                pageObject.setElements(elements);
+                
+                // Add page object if it has elements
+                if (!elements.isEmpty()) {
+                    log.info("Created page object {} with {} elements", pageName, elements.size());
+                    pageObjects.add(pageObject);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Error analyzing current page: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Extract a sensible page name from title or URL
+     */
+    private String extractPageName(String title, String url) {
+        // First try to use the page title
+        if (title != null && !title.isEmpty() && !"about:blank".equals(title)) {
+            // Clean up title and convert to PascalCase
+            String cleanTitle = title.replaceAll("[-_|].*$", "").trim();
+            return toPascalCase(cleanTitle) + "Page";
+        }
+        
+        // Fall back to URL
+        try {
+            java.net.URL parsedUrl = new java.net.URL(url);
+            String path = parsedUrl.getPath();
+            if (path != null && !path.isEmpty() && !"/".equals(path)) {
+                // Use last part of path as page name
+                String[] pathParts = path.split("/");
+                String lastPart = pathParts[pathParts.length - 1];
+                if (!lastPart.isEmpty()) {
+                    return toPascalCase(lastPart) + "Page";
+                }
+            }
+            
+            // If no path, use hostname
+            String host = parsedUrl.getHost();
+            if (host != null && !host.isEmpty()) {
+                // Remove www. and .com/.org/etc.
+                host = host.replaceAll("^www\\.", "").replaceAll("\\.(com|org|net|io)$", "");
+                return toPascalCase(host) + "Page";
+            }
+        } catch (Exception e) {
+            log.warn("Error parsing URL for page name: {}", e.getMessage());
+        }
+        
+        // Default page name if all else fails
+        return "UnknownPage";
+    }
+    
+    /**
+     * Find elements on current page that could be useful in page objects
+     */
+    private List<PageElement> findPageElements() {
+        List<PageElement> elements = new ArrayList<>();
+        try {
+            if (getDriver() == null) return elements;
+            
+            // Find all form elements
+            List<WebElement> formElements = getDriver().findElements(By.cssSelector("input, select, button, textarea"));
+            for (WebElement webElement : formElements) {
+                try {
+                    String id = webElement.getAttribute("id");
+                    String name = webElement.getAttribute("name");
+                    String type = webElement.getAttribute("type");
+                    
+                    // Create page element with best available identifier
+                    PageElement element = new PageElement();
+                    
+                    // Choose element name
+                    if (id != null && !id.isEmpty()) {
+                        element.setName(toCamelCase(id));
+                        element.setLocator("id");
+                        element.setValue(id);
+                    } else if (name != null && !name.isEmpty()) {
+                        element.setName(toCamelCase(name));
+                        element.setLocator("name");
+                        element.setValue(name);
+                    } else {
+                        // Skip elements without good identifiers
+                        continue;
+                    }
+                    
+                    elements.add(element);
+                } catch (Exception e) {
+                    // Skip problematic elements
+                    log.debug("Error processing element: {}", e.getMessage());
+                }
+            }
+            
+            // Find links and buttons with text
+            List<WebElement> clickables = getDriver().findElements(By.cssSelector("a, button"));
+            for (WebElement webElement : clickables) {
+                try {
+                    String text = webElement.getText().trim();
+                    String id = webElement.getAttribute("id");
+                    
+                    // Skip empty or duplicate elements
+                    if ((text.isEmpty() && (id == null || id.isEmpty())) || 
+                        elements.stream().anyMatch(e -> 
+                            (e.getLocator().equals("id") && e.getValue().equals(id)) ||
+                            (e.getName().equals(toCamelCase(text)))
+                        )) {
+                        continue;
+                    }
+                    
+                    PageElement element = new PageElement();
+                    
+                    if (id != null && !id.isEmpty()) {
+                        element.setName(toCamelCase(id));
+                        element.setLocator("id");
+                        element.setValue(id);
+                    } else if (!text.isEmpty()) {
+                        element.setName(toCamelCase(text) + "Link");
+                        element.setLocator("linkText");
+                        element.setValue(text);
+                    } else {
+                        continue;
+                    }
+                    
+                    elements.add(element);
+                } catch (Exception e) {
+                    // Skip problematic elements
+                    log.debug("Error processing clickable: {}", e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Error finding page elements: {}", e.getMessage());
+        }
+        return elements;
+    }
+    
+    /**
+     * Convert string to PascalCase
+     */
+    private String toPascalCase(String input) {
+        if (input == null || input.isEmpty()) return "Unknown";
+        
+        // Replace non-alphanumeric with spaces
+        String cleaned = input.replaceAll("[^a-zA-Z0-9]", " ");
+        
+        // Split by whitespace
+        String[] words = cleaned.split("\\s+");
+        StringBuilder result = new StringBuilder();
+        
+        for (String word : words) {
+            if (word.isEmpty()) continue;
+            // Capitalize first letter, lowercase rest
+            result.append(Character.toUpperCase(word.charAt(0)))
+                  .append(word.substring(1).toLowerCase());
+        }
+        
+        return result.toString();
+    }
+    
+    /**
+     * Convert string to camelCase
+     */
+    private String toCamelCase(String input) {
+        if (input == null || input.isEmpty()) return "unknown";
+        
+        String pascalCase = toPascalCase(input);
+        return Character.toLowerCase(pascalCase.charAt(0)) + pascalCase.substring(1);
+    }
+    
+    /**
+     * Get session ID
+     */
+    public String getSessionId() {
+        return super.sessionId;
+    }
+}
